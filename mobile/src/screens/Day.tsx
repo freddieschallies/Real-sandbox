@@ -64,8 +64,11 @@ export function Day() {
           ) : (
             <Body>Not scanned into a vehicle. Tap to scan the barcode.</Body>
           )}
-          {t?.vehicle?.mode === 'driving' ? (
-            <Button label="Report a fault on this vehicle" kind="quiet" onPress={() => nav.push({ name: 'fault' })} style={{ minHeight: 44 }} />
+          {t?.vehicle ? (
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {t.vehicle.mode === 'driving' ? <Button label="Report a fault" kind="quiet" onPress={() => nav.push({ name: 'fault' })} style={{ minHeight: 44, flex: 1 }} /> : null}
+              <Button label="Release vehicle" kind="quiet" onPress={() => nav.push({ name: 'release' })} style={{ minHeight: 44, flex: 1 }} />
+            </View>
           ) : null}
           {t?.vehicle?.handover_status === 'awaiting_approval' ? (
             <Text style={[st.small, { color: C.warn }]}>Handover awaiting your supervisor's approval</Text>

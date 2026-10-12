@@ -13,7 +13,7 @@ const STEPS: [string, string[]][] = [
     'Sign off with the store manager signing on the screen.',
     'My stock: scan a supplier invoice (any photo) and confirm the lines it reads; return the contactor that must go back.',
     'Vehicle: tap the licence disc, choose Driving and do the handover inspection; tick a problem to see it reach the mechanic.',
-    'Then "Report a fault on this vehicle" on My day.',
+    'On the vehicle card: Report a fault, or Release vehicle (km and where you left it).',
   ]],
   ['As stock controller (Lindiwe)', [
     'To issue: open Thabo\'s request, tick each item as you pick it, then issue it.',
@@ -37,7 +37,7 @@ export function TesterWelcome() {
     <Screen title="Real Sandbox" sub="Test drive · ZSP job cards and stock">
       <View style={{ gap: 6 }}>
         <Text style={{ color: C.accent, fontSize: 28, fontWeight: '800' }}>Try it as either person</Text>
-        <Body quiet>Everything here is made up and stays in this browser. Switch between them with Sign out; what one does, the others see.</Body>
+        <Body quiet>Everything here is made up and stays in this browser. Once in, the bar at the top switches between the three apps; what one does, the others see. (The real app only shows each person their own.)</Body>
       </View>
       <Button label="Open as technician" onPress={() => go('demo')} busy={busy === 'demo'} />
       <Button label="Open as stock controller" kind="secondary" onPress={() => go('stock')} busy={busy === 'stock'} />

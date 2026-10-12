@@ -23,6 +23,8 @@ import { StockroomApp } from './src/stockroom/StockroomApp.tsx';
 import { TesterWelcome } from './src/screens/TesterWelcome.tsx';
 import { FleetApp } from './src/fleet/FleetApp.tsx';
 import { VehicleFault } from './src/screens/VehicleFault.tsx';
+import { Release } from './src/screens/Release.tsx';
+import { TesterBar } from './src/screens/TesterBar.tsx';
 import { C } from './src/theme.ts';
 
 function Current() {
@@ -42,6 +44,7 @@ function Current() {
     case 'bookout': return <BookOut jobId={route.jobId} />;
     case 'return': return <Return />;
     case 'fault': return <VehicleFault />;
+    case 'release': return <Release />;
   }
 }
 
@@ -55,6 +58,12 @@ function Root() {
   // Mechanics get the fleet app.
   if (s.session.user.level === 'mechanic') return <NavProvider key={s.session.user.id}><FleetApp /></NavProvider>;
   return <NavProvider key={s.session.user.id}><Current /></NavProvider>;
+}
+
+/** Test build only: the bar to switch between the three apps, shown once someone is in. */
+function TesterBarSlot() {
+  const s = useStore();
+  return s.session && !s.needsPolicy ? <TesterBar /> : null;
 }
 
 /** The shared test build: demo only, with a short guide instead of the sign-in screen. */
@@ -78,6 +87,7 @@ export default function App() {
     <SafeAreaProvider>
       <StoreProvider>
         <View style={{ flex: 1, backgroundColor: C.bg }}>
+          {TESTER ? <TesterBarSlot /> : null}
           <Frame><Root /></Frame>
         </View>
         <StatusBar style="light" />

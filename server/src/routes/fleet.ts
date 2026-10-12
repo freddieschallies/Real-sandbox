@@ -17,7 +17,7 @@ export async function latestKm(c: Q, vehicleId: string): Promise<number | null> 
 }
 
 /** Records a km reading; refuses one lower than what is already on record. */
-export async function recordKm(c: Q, vehicleId: string, km: number, at: string, source: 'handover' | 'fleet_job' | 'mechanic', sourceId: string | null, by: string) {
+export async function recordKm(c: Q, vehicleId: string, km: number, at: string, source: 'handover' | 'fleet_job' | 'mechanic' | 'release', sourceId: string | null, by: string) {
   const last = await latestKm(c, vehicleId);
   if (last != null && km < last) throw new Refused(409, [`odometer cannot be lower than the last reading (${last} km)`]);
   await c.query('INSERT INTO odometer_readings (vehicle_id, km, read_at, source, source_id, recorded_by) VALUES ($1, $2, $3, $4, $5, $6)',

@@ -279,10 +279,26 @@ export class DemoTransport implements Transport {
           fresh.map(k => `${H.CHECKS.find(c => c[0] === k)![1]}${b.inspection.checks[k]?.note ? `: ${b.inspection.checks[k].note}` : ''}`), 'Thabo Mkhize');
         this.state.van = { lastDriverMe: true, odometerKm: b.inspection.odometerKm, problems: H.problemsOf(b.inspection) };
       }
-      if (b.mode === 'driving') this.state.van = { ...this.van(), lastDriverMe: true };
+      if (b.mode === 'driving') { this.state.van = { ...this.van(), lastDriverMe: true }; this.fleet().s.drivers['veh-1'] = 'Thabo Mkhize'; }
       this.state.vehicle = { id: 'veh-1', registration: 'ND 412-778', mode: b.mode, dropped_off_at: null, handover_status: handoverStatus ?? this.state.vehicle?.handover_status ?? null };
       this.persist(this.state);
       return ok({ scanId: id('scan'), vehicle: { id: 'veh-1', registration: 'ND 412-778' }, mode: b.mode, awaitingIgnition: true, handoverStatus });
+    }
+    if (p === '/vehicles/release') {
+      const v = this.state.vehicle;
+      if (!v) return refuse(409, 'no vehicle is on your name');
+      if (v.mode === 'driving') {
+        const missing = [b.km === undefined ? 'odometer reading (km)' : null, !b.place ? 'where you left the vehicle' : null].filter(Boolean) as string[];
+        if (missing.length) return refuse(409, ...missing);
+        if (b.place === 'home') return refuse(409, 'you are not approved to take a vehicle home: leave it at the office yard');
+        const last = this.fleet().latestKm('veh-1');
+        if (last != null && b.km < last) return refuse(409, `odometer cannot be lower than the last reading (${last} km)`);
+        this.fleet().s.km.unshift({ vehicle_id: 'veh-1', km: b.km, read_at: new Date().toISOString(), source: 'release', by: 'Thabo Mkhize' });
+        delete this.fleet().s.drivers['veh-1'];
+      }
+      this.state.vehicle = null;
+      this.persist(this.state);
+      return ok({ released: v.registration });
     }
     if (p === '/photos') { this.state.photos++; this.persist(this.state); return ok({ id: req.upload?.fields.id ?? id('photo') }, 201); }
     if (p === '/fuel') {

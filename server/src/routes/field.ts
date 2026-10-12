@@ -383,6 +383,38 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
     });
   });
 
+  // Taking a vehicle off his name: the driver records the km and where he left it.
+  app.post('/vehicles/release', async req => {
+    const b = parse(z.object({
+      at: Iso, km: z.number().int().min(0).max(5_000_000).optional(),
+      place: z.enum(['office_yard', 'home', 'workshop', 'other']).optional(), note: z.string().trim().max(500).optional(),
+    }), req.body);
+    const me = req.actor.id;
+    return tx(req.db, async c => {
+      const s = (await c.query(
+        `SELECT s.id, s.vehicle_id, s.mode, v.registration FROM vehicle_scans s JOIN vehicles v ON v.id = s.vehicle_id
+          WHERE s.user_id = $1 AND s.released_at IS NULL ORDER BY s.scanned_at DESC LIMIT 1 FOR UPDATE OF s`, [me])).rows[0];
+      if (!s) throw new Refused(409, ['no vehicle is on your name']);
+      if (s.mode === 'driving') {
+        const missing: string[] = [];
+        if (b.km === undefined) missing.push('odometer reading (km)');
+        if (!b.place) missing.push('where you left the vehicle');
+        if (b.place === 'other' && !(b.note && b.note.length >= 5)) missing.push('say where the vehicle is');
+        if (missing.length) throw new Refused(409, missing);
+        if (b.place === 'home') {
+          const ok = (await c.query('SELECT may_take_vehicle_home FROM technician_settings WHERE user_id = $1', [me])).rows[0]?.may_take_vehicle_home;
+          if (!ok) throw new Refused(409, ['you are not approved to take a vehicle home: leave it at the office yard']);
+        }
+        await recordKm(c, s.vehicle_id, b.km!, b.at, 'release', s.id, me);
+        await c.query('INSERT INTO tracker_driver_outbox (vehicle_id, driver_id) VALUES ($1, NULL)', [s.vehicle_id]);
+      }
+      await c.query('UPDATE vehicle_scans SET released_at = $2, release_km = $3, release_place = $4, release_note = $5 WHERE id = $1',
+        [s.id, b.at, b.km ?? null, b.place ?? null, b.note ?? null]);
+      await audit(c, me, 'vehicle_released', 'vehicle', s.vehicle_id, { km: b.km, place: b.place });
+      return { released: s.registration };
+    });
+  });
+
   app.post('/vehicles/dropped-off', async req => {
     const b = parse(z.object({ at: Iso, position: Point.optional() }), req.body);
     const { rows } = await req.db.query(

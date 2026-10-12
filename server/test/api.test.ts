@@ -646,6 +646,24 @@ test('fleet: the mechanic sees every vehicle, faults from handovers, job cards l
   assert.equal((await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V1', mode: 'driving', at: '2026-10-16T12:30:00+02:00' })).status, 200, 'back on the road');
 });
 
+test('a technician releases the vehicle from his name, with the km and where he left it', async () => {
+  // tech is driving ND 412-778 (end of the fleet test).
+  const no = await call('tech', 'POST', '/vehicles/release', { at: '2026-10-16T17:00:00+02:00' });
+  assert.equal(no.status, 409);
+  assert.deepEqual(no.body.reasons, ['odometer reading (km)', 'where you left the vehicle']);
+  assert.match((await call('tech', 'POST', '/vehicles/release', { at: '2026-10-16T17:00:00+02:00', km: 88300, place: 'home' })).body.reasons[0], /not approved to take a vehicle home/);
+  assert.match((await call('tech', 'POST', '/vehicles/release', { at: '2026-10-16T17:00:00+02:00', km: 1000, place: 'office_yard' })).body.reasons[0], /cannot be lower/);
+  const ok = await call('tech', 'POST', '/vehicles/release', { at: '2026-10-16T17:00:00+02:00', km: 88300, place: 'office_yard' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.released, 'ND 412-778');
+  assert.equal((await call('tech', 'GET', '/me/today?date=2026-10-16')).body.vehicle, null);
+  assert.equal((await call('tech', 'POST', '/vehicles/release', { at: '2026-10-16T17:01:00+02:00' })).status, 409, 'nothing left on his name');
+  assert.equal((await db.query("SELECT km FROM odometer_readings WHERE source = 'release'")).rows[0].km, 88300);
+  const out = await db.query('SELECT driver_id FROM tracker_driver_outbox WHERE vehicle_id = $1 ORDER BY created_at DESC LIMIT 1', [ids.v1]);
+  assert.equal(out.rows[0].driver_id, null, 'the tracker is told nobody is driving it');
+  assert.equal((await call('tech2', 'GET', '/vehicles/lookup?barcode=RS-V1')).body.needsInspection, true, 'the next driver still inspects it');
+});
+
 test('the CEO assigns each person a position; it takes effect at once and is logged', async () => {
   assert.equal((await call('manager', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'mechanic' })).status, 403, 'only whoever manages access');
   const list = (await call('director', 'GET', '/access/positions')).body;
@@ -664,6 +682,10 @@ test('the CEO assigns each person a position; it takes effect at once and is log
 });
 
 test('fuel: slip required, logged against the vehicle, impossible litres flagged', async () => {
+  // He released ND 412-778 in the test before; he drove it last, so he scans back in without an inspection.
+  assert.equal((await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V1', mode: 'driving', at: '2026-10-16T17:30:00+02:00' })).status, 200);
+  // He released ND 412-778 in the test before; he drove it last, so he scans back in without an inspection.
+  assert.equal((await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V1', mode: 'driving', at: '2026-10-16T17:30:00+02:00' })).status, 200);
   const noSlip = await call('tech', 'POST', '/fuel', { litres: 50, amountCents: 115000, slipPhotoId: '00000000-0000-4000-8000-000000000002', at: '2026-10-15T08:00:00+02:00' });
   assert.equal(noSlip.status, 409);
   const slip = await upload('tech', '/photos', { kind: 'fuel_slip', takenAt: '2026-10-15T08:00:00+02:00' });
