@@ -3,16 +3,19 @@
 import React, { useEffect, useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
 import { useStore } from '../state.tsx';
-import { Body, Button, Card, Heading, Label, Notice, Pill, Select, st } from '../ui.tsx';
+import { Body, Button, Card, Heading, Label, Notice, Pill, Select, Toggle, st } from '../ui.tsx';
 import { C } from '../theme.ts';
 
 export interface DeptData {
   canManage: boolean;
-  departments: { id: string; name: string; manager_id: string | null; manager: string | null; technicians: number; van_lines: number }[];
+  departments: { id: string; name: string; active?: boolean; manager_id: string | null; manager: string | null; technicians: number; staff?: number; van_lines: number }[];
+  /** The usual departments not set up yet (Refrigeration, for one), to add with a tap. */
+  missing?: string[];
   managers: { id: string; full_name: string; login_level: string }[];
   members?: { id: string; full_name: string; login_level: string; trade: string | null; department_id: string | null }[];
 }
 const TRADE: Record<string, string> = { foodservice: 'Foodservice tech', plumber: 'Plumber', electrician: 'Electrician', assistant: 'Assistant' };
+const POSITION: Record<string, string> = { management: 'Department manager', admin: 'Admin', hr: 'HR', stockroom: 'Stock controller', mechanic: 'Mechanic' };
 const reasons = (r: { status: number; body: unknown } | null | undefined) => (r?.body as { reasons?: string[] })?.reasons ?? ['no signal: try again'];
 
 export function useDepartments() {
@@ -30,8 +33,20 @@ export function DepartmentsBoard({ openPerson }: { openPerson?: (id: string) => 
   const [name, setName] = useState('');
   if (!d) return <Body quiet>Loading…</Body>;
   const members = d.members ?? [];
+  // Switched-off departments only show in the list of departments the business has.
+  const on = d.departments.filter(x => x.active !== false);
+  const add = async (n: string) => {
+    const r = await s.ask({ method: 'POST', path: '/departments', json: { name: n } });
+    if (r && r.status < 300) { setMsg({ tone: 'good', lines: [`${n} department switched on. Give it a manager and technicians.`] }); load(); return true; }
+    setMsg({ tone: 'bad', lines: reasons(r) }); return false;
+  };
+  const toggle = async (x: DeptData['departments'][number], v: boolean) => {
+    const r = await s.ask({ method: 'PUT', path: `/departments/${x.id}`, json: { active: v } });
+    if (r && r.status < 300) { setMsg({ tone: 'good', lines: [v ? `${x.name} switched on.` : `${x.name} switched off. Its van stock list is kept if you switch it on again.`] }); load(); }
+    else setMsg({ tone: 'bad', lines: reasons(r) });
+  };
   const managers = members.filter(m => m.login_level === 'management');
-  const deptOptions = [...d.departments.map(x => ({ value: x.id, label: x.name })), { value: '', label: 'Not in a department' }];
+  const deptOptions = [...on.map(x => ({ value: x.id, label: x.name })), { value: '', label: 'Not in a department' }];
   const move = async (id: string, departmentId: string, who: string) => {
     const r = await s.ask({ method: 'PUT', path: `/access/users/${id}/department`, json: { departmentId: departmentId || null } });
     const dep = d.departments.find(x => x.id === departmentId)?.name;
@@ -45,7 +60,7 @@ export function DepartmentsBoard({ openPerson }: { openPerson?: (id: string) => 
     <View key={m.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, borderTopWidth: 1, borderTopColor: C.line, paddingVertical: 6 }}>
       <View style={{ flex: 1 }}>
         <Text style={[st.body, { fontWeight: '700' }]} onPress={openPerson ? () => openPerson(m.id) : undefined}>{m.full_name}</Text>
-        <Text style={st.small}>{m.login_level === 'management' ? 'Department manager' : m.trade ? TRADE[m.trade] : 'Technician'}</Text>
+        <Text style={st.small}>{POSITION[m.login_level] ?? (m.trade ? TRADE[m.trade] : 'Technician')}</Text>
       </View>
       {d.canManage ? (
         <View style={{ width: 220 }}>
@@ -54,13 +69,15 @@ export function DepartmentsBoard({ openPerson }: { openPerson?: (id: string) => 
       ) : null}
     </View>
   );
-  const nobody = members.filter(m => !m.department_id || !d.departments.some(x => x.id === m.department_id));
+  const nobody = members.filter(m => !m.department_id || !on.some(x => x.id === m.department_id));
   return (
     <>
-      <Text style={st.small}>Each technician works in one department, under its manager. Each department manager runs one department.</Text>
+      <Text style={st.small}>Each technician works in one department, under its manager. Each department manager runs one department. The office staff go in Admin.</Text>
       {msg ? <Notice tone={msg.tone} title={msg.tone === 'good' ? 'Saved' : 'Not saved'} lines={msg.lines} /> : null}
-      {d.departments.map(x => {
+      {on.map(x => {
         const techs = members.filter(m => m.department_id === x.id && m.login_level === 'technician');
+        // The office staff in it (Admin, usually): admins, HR, the stock controller, the mechanic.
+        const office = members.filter(m => m.department_id === x.id && !['technician', 'management'].includes(m.login_level));
         return (
           <Card key={x.id} accessibilityLabel={`Department ${x.name}`}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -80,6 +97,7 @@ export function DepartmentsBoard({ openPerson }: { openPerson?: (id: string) => 
             <Label>Technicians ({techs.length})</Label>
             {techs.map(person)}
             {!techs.length ? <Body quiet>No technicians in {x.name} yet.</Body> : null}
+            {office.length ? <><Label>Staff ({office.length})</Label>{office.map(person)}</> : null}
           </Card>
         );
       })}
@@ -90,13 +108,25 @@ export function DepartmentsBoard({ openPerson }: { openPerson?: (id: string) => 
         </Card>
       ) : null}
       {d.canManage ? (
-        <Card>
-          <Label>New department</Label>
-          <TextInput value={name} onChangeText={setName} placeholder="e.g. Electrical" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="New department name" />
-          <Button label="Add department" kind="secondary" disabled={name.trim().length < 2} onPress={async () => {
-            const r = await s.ask({ method: 'POST', path: '/departments', json: { name: name.trim() } });
-            if (r && r.status < 300) { setMsg({ tone: 'good', lines: [`${name.trim()} department added. Give it a manager and technicians.`] }); setName(''); load(); } else setMsg({ tone: 'bad', lines: reasons(r) });
-          }} />
+        <Card accessibilityLabel="Departments this business has">
+          <Heading>Departments this business has</Heading>
+          <Body quiet>Switch off a department the business doesn't do; move its people out first. Its van stock list is kept for if you switch it on again.</Body>
+          {d.departments.map(x => (
+            <View key={x.id} style={{ borderTopWidth: 1, borderTopColor: C.line, paddingTop: 4 }}>
+              <Toggle label={`${x.name}${x.active !== false ? ` · ${x.staff ?? x.technicians} ${(x.staff ?? x.technicians) === 1 ? 'person' : 'people'}` : ' · off'}`} value={x.active !== false} onChange={v => toggle(x, v)} />
+            </View>
+          ))}
+          {(d.missing ?? []).length ? (
+            <>
+              <Label>Also usual</Label>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {(d.missing ?? []).map(n => <Button key={n} label={`Add ${n}`} kind="secondary" onPress={() => add(n)} />)}
+              </View>
+            </>
+          ) : null}
+          <Label>Your own department</Label>
+          <TextInput value={name} onChangeText={setName} placeholder="e.g. Gas installations" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="New department name" />
+          <Button label="Add department" kind="secondary" disabled={name.trim().length < 2} onPress={async () => { if (await add(name.trim())) setName(''); }} />
         </Card>
       ) : null}
     </>

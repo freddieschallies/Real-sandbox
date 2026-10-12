@@ -43,7 +43,7 @@ const STEPS: [string, string[]][] = [
     'Techs: Thabo\'s phone is broken, so put him in a vehicle yourself (or take it off his name). Switch to Tech to see it on his My day.',
   ]],
   ['As department manager (Pieter)', [
-    'He runs the Refrigeration department: Thabo, Sipho and Nomvula work under him. He assigns jobs, checks job cards and answers flags for his technicians; quotes, invoices and the stockroom only if the CEO adds them.',
+    'He runs the Foodservice department: Thabo, Sipho and Nomvula work under him. He assigns jobs, checks job cards and answers flags for his technicians; quotes, invoices and the stockroom only if the CEO adds them.',
     'Team map: where Thabo, Sipho and Nomvula are right now (on site, driving, parked), with the vehicle, the job and who they are with. Tap a name for "Open in Maps" or the profile. Ayanda is in Plumbing, so he is not on Pieter\'s map; the CEO sees everyone.',
     'Van stock: his department\'s list of spares every technician must carry. Thabo and Nomvula are short (flagged); Sipho is complete. Add an item or raise a quantity and see who goes short; every change is kept.',
     'Timesheets: his own technicians\' daily timesheets, for a day, a week or a month.',
@@ -52,7 +52,8 @@ const STEPS: [string, string[]][] = [
   ['As HR (Precious)', [
     'Timesheets: daily, weekly or monthly, for one person, a department or everyone, with every job and flag on each sheet, and normal time, overtime (1.5×) and double time (Sundays and public holidays). She sets the normal day (8 hours to start). Ayanda has not submitted his last days. Print or save as PDF (one page per sheet, on the letterhead), or download for Excel. In this test drive the browser may block the print window and the download; the real app saves them.',
     'People: set anyone\'s position (technician, admin, department manager, stock controller) and a technician\'s trade. Mechanic, HR, director and CEO stay with the CEO.',
-    'Departments: every department with its manager and the technicians under him. Move a technician to another department, or give Plumbing a manager. Each person is in one department; a manager runs one department, so moving Pieter takes him off Refrigeration.',
+    'Departments: every department with its manager and the technicians under him. Move a technician to another department, or give Plumbing a manager. Each person is in one department; a manager runs one department, so moving Pieter takes him off Foodservice.',
+    'Departments this business has: every company starts with Electrical, Plumbing, Service and Foodservice. Switch off one the business doesn\'t do, switch on Refrigeration, or add your own.',
     'Staff records: open anyone under People to add an issue or a warning, or delete one (a line keeps who deleted it and when).',
     'She does not see jobs, quotes or the stockroom, and does not see ID numbers or home addresses (those stay with the CEO).',
   ]],

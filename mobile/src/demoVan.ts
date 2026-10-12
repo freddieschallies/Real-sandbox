@@ -1,11 +1,12 @@
 // Demo departments and van stock: each department's manager, the technicians under him, the van
 // stock list he sets, and each technician's van against it (a van short of it is flagged).
 import { REAL, mayHaveIncidents } from './demoReal.ts';
+import { STANDARD_DEPARTMENTS } from '../../server/src/core/departments.ts';
 import type { Flag } from './types.ts';
 import type { DemoOfficeState } from './demoOffice.ts';
 import type { DemoStockState } from './demoStock.ts';
 
-export interface DemoDepartment { id: string; name: string; managerId: string | null }
+export interface DemoDepartment { id: string; name: string; managerId: string | null; active?: boolean }
 export interface DemoVanState {
   departments: DemoDepartment[];
   /** Department of each person (technicians mostly). */
@@ -15,13 +16,17 @@ export interface DemoVanState {
 }
 
 export function seedVan(): DemoVanState {
-  // Real-data demo: the Example Tech is in Refrigeration too, so his van (not a real person's) carries the van-short flag.
+  // Real-data demo: the Example Tech is in Foodservice too, so his van (not a real person's) carries the van-short flag.
   return {
     departments: [
-      { id: 'dep-ref', name: 'Refrigeration', managerId: 'mgr-1' },
+      // The usual five (Admin is the office staff's); Refrigeration is offered to switch on.
+      { id: 'dep-admin', name: 'Admin', managerId: null },
+      { id: 'dep-elec', name: 'Electrical', managerId: null },
+      { id: 'dep-ref', name: 'Foodservice', managerId: 'mgr-1' },
       { id: 'dep-plumb', name: 'Plumbing', managerId: null },
+      { id: 'dep-svc', name: 'Service', managerId: null },
     ],
-    memberOf: { me: 'dep-ref', 'tech-2': 'dep-ref', 'tech-4': 'dep-ref', 'tech-3': REAL ? 'dep-ref' : 'dep-plumb', 'mgr-1': 'dep-ref' },
+    memberOf: { 'admin-1': 'dep-admin', 'hr-1': 'dep-admin', me: 'dep-ref', 'tech-2': 'dep-ref', 'tech-4': 'dep-ref', 'tech-3': REAL ? 'dep-ref' : 'dep-plumb', 'mgr-1': 'dep-ref' },
     lists: { 'dep-ref': { 'st-1': 2, 'st-2': 2, 'st-3': 4, 'st-4': 8, 'st-5': 1, 'st-6': 2 } },
     changes: [],
   };
@@ -96,9 +101,10 @@ export class DemoVan {
   departments(canManage: boolean) {
     return {
       canManage,
-      departments: this.v.departments.map(d => ({ id: d.id, name: d.name, manager_id: d.managerId, manager: this.name(d.managerId), technicians: this.techsIn(d.id).length, van_lines: Object.keys(this.v.lists[d.id] ?? {}).length })),
+      missing: STANDARD_DEPARTMENTS.filter(x => !this.v.departments.some(d => d.name.toLowerCase() === x.name.toLowerCase())).map(x => x.name),
+      departments: [...this.v.departments].sort((a, b) => a.name.localeCompare(b.name)).map(d => ({ id: d.id, name: d.name, active: d.active !== false, manager_id: d.managerId, manager: this.name(d.managerId), technicians: this.techsIn(d.id).length, staff: Object.entries(this.v.memberOf).filter(([u, dep]) => dep === d.id && this.person(u)).length, van_lines: Object.keys(this.v.lists[d.id] ?? {}).length })),
       managers: this.o.people.filter(p => ['management', 'director', 'creator'].includes(p.login_level)).map(p => ({ id: p.id, full_name: p.full_name, login_level: p.login_level })),
-      members: this.o.people.filter(p => ['technician', 'management'].includes(p.login_level)).sort((a, b) => a.full_name.localeCompare(b.full_name))
+      members: this.o.people.filter(p => !['director', 'creator'].includes(p.login_level)).sort((a, b) => a.full_name.localeCompare(b.full_name))
         .map(p => ({ id: p.id, full_name: p.full_name, login_level: p.login_level, trade: p.trade ?? null, department_id: this.v.memberOf[p.id] ?? null })),
     };
   }
@@ -122,16 +128,25 @@ export class DemoVan {
   createDept(b: { name?: string; managerId?: string | null }): Res {
     const name = (b.name ?? '').trim();
     if (name.length < 2) return bad(400, 'the department name');
-    if (this.v.departments.some(d => d.name.toLowerCase() === name.toLowerCase())) return bad(409, `there is already a ${name} department`);
+    const same = this.v.departments.find(d => d.name.toLowerCase() === name.toLowerCase());
+    if (same && same.active !== false) return bad(409, `there is already a ${name} department`);
     const m = this.okManager(b.managerId); if (m) return m;
+    // Switched off before: switch it back on (with its van stock list).
+    if (same) { same.active = true; if (b.managerId) this.makeManager(b.managerId, same.id); return good({ id: same.id }); }
     const id = `dep-${Date.now()}`;
     this.v.departments.push({ id, name, managerId: null });
     if (b.managerId) this.makeManager(b.managerId, id);
     return good({ id });
   }
-  updateDept(id: string, b: { name?: string; managerId?: string | null }): Res {
+  updateDept(id: string, b: { name?: string; managerId?: string | null; active?: boolean }): Res {
     const d = this.dept(id);
     if (!d) return bad(404, 'no such department');
+    if (b.active === false && d.active !== false) {
+      const n = Object.entries(this.v.memberOf).filter(([u, dep]) => dep === id && this.person(u)).length;
+      if (n || d.managerId) return bad(409, `move everyone in ${d.name} (${Math.max(n, 1)} ${Math.max(n, 1) === 1 ? 'person' : 'people'}) to another department first`);
+    }
+    if (b.active === undefined && d.active === false && b.managerId) return bad(409, `switch ${d.name} on first`);
+    if (b.active !== undefined) d.active = b.active;
     const m = this.okManager(b.managerId); if (m) return m;
     if (b.name !== undefined) {
       const name = b.name.trim();
@@ -147,6 +162,7 @@ export class DemoVan {
   setDepartment(userId: string, departmentId: string | null, by: string): Res {
     if (!this.person(userId)) return bad(404, 'no such person');
     if (departmentId && !this.dept(departmentId)) return bad(404, 'no such department');
+    if (departmentId && this.dept(departmentId)!.active === false) return bad(409, `${this.dept(departmentId)!.name} is switched off: switch it on under Departments first`);
     if (this.person(userId)!.login_level === 'management') {
       let replaced: string | null = null;
       if (departmentId) replaced = this.makeManager(userId, departmentId);
@@ -163,7 +179,7 @@ export class DemoVan {
 
   // ---- Van stock lists ----------------------------------------------------------------------------
   lists(scope: 'all' | string[], editable: (deptId: string) => boolean) {
-    const depts = this.v.departments.filter(d => scope === 'all' || scope.includes(d.id))
+    const depts = this.v.departments.filter(d => d.active !== false && (scope === 'all' || scope.includes(d.id)))
       .sort((a, b) => Number(editable(b.id)) - Number(editable(a.id)) || a.name.localeCompare(b.name));
     return {
       departments: depts.map(d => ({

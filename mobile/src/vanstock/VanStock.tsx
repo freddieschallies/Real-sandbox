@@ -187,7 +187,7 @@ export function DepartmentCard({ userId, departmentId, level, name, canManage, t
   userId: string; departmentId: string | null; level: string; name: string; canManage: boolean; team: { id: string; full_name: string; department: string }[]; reload: () => void;
 }) {
   const s = useStore();
-  const [d, setD] = useState<{ departments: { id: string; name: string; manager_id: string | null; manager: string | null; technicians: number }[]; managers: { id: string; full_name: string }[] } | null>(null);
+  const [d, setD] = useState<{ departments: { id: string; name: string; manager_id: string | null; manager: string | null; technicians: number; active?: boolean }[]; managers: { id: string; full_name: string }[] } | null>(null);
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; lines: string[] } | null>(null);
   const load = async () => { const x = await s.ask({ method: 'GET', path: '/departments' }); if (x?.status === 200) setD(x.body); };
   useEffect(() => { load(); }, [userId]);
@@ -204,7 +204,7 @@ export function DepartmentCard({ userId, departmentId, level, name, canManage, t
       {level === 'technician' ? (
         canManage ? (
           <Select label="Department and manager" value={departmentId ?? undefined} placeholder="Not in a department yet"
-            options={d.departments.map(x => ({ value: x.id, label: `${x.name}${x.manager ? ` · ${x.manager}` : ' · no manager yet'}` }))}
+            options={d.departments.filter(x => x.active !== false).map(x => ({ value: x.id, label: `${x.name}${x.manager ? ` · ${x.manager}` : ' · no manager yet'}` }))}
             onChange={async v => after(await s.ask({ method: 'PUT', path: `/access/users/${userId}/department`, json: { departmentId: v } }), `${first} now works in ${d.departments.find(x => x.id === v)?.name}`)} />
         ) : (() => { const cur = d.departments.find(x => x.id === departmentId); return <Text style={st.body}>{cur ? `${cur.name}${cur.manager ? `, under ${cur.manager}` : ''}` : 'Not in a department yet'}</Text>; })()
       ) : null}
@@ -214,7 +214,7 @@ export function DepartmentCard({ userId, departmentId, level, name, canManage, t
           {team.length ? <Text style={st.small}>Technicians under {first}: {team.map(t => t.full_name).join(', ')}</Text> : null}
           {canManage && level === 'management' ? (
             <Select label="Runs department" value={managed[0]?.id ?? ''} placeholder="None yet"
-              options={[...d.departments.map(x => ({ value: x.id, label: `${x.name}${x.manager && x.manager_id !== userId ? ` (now ${x.manager})` : ''}` })), { value: '', label: 'None' }]}
+              options={[...d.departments.filter(x => x.active !== false).map(x => ({ value: x.id, label: `${x.name}${x.manager && x.manager_id !== userId ? ` (now ${x.manager})` : ''}` })), { value: '', label: 'None' }]}
               onChange={async v => {
                 const x = await s.ask({ method: 'PUT', path: `/access/users/${userId}/department`, json: { departmentId: v || null } });
                 const rep = (x?.body as { replaced?: string | null })?.replaced;

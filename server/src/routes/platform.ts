@@ -7,6 +7,7 @@ import { z } from 'zod';
 import type { Db } from '../db.ts';
 import { Refused, Uuid, parse } from '../http.ts';
 import { hashPassword } from '../auth.ts';
+import { STANDARD_DEPARTMENTS } from '../core/departments.ts';
 
 export async function createCompany(db: Db, name: string, creator: { name: string; email: string; password: string }) {
   const email = creator.email.toLowerCase();
@@ -22,6 +23,8 @@ export async function createCompany(db: Db, name: string, creator: { name: strin
       [creator.name, email, await hashPassword(creator.password)],
     )).rows[0].id;
     await c.query('INSERT INTO logins (email, user_id, company_id) VALUES ($1, $2, $3)', [email, userId, companyId]);
+    // The usual departments to start with; HR or the CEO switches off what the business doesn't do.
+    for (const d of STANDARD_DEPARTMENTS.filter(x => x.startsOn)) await c.query('INSERT INTO departments (name) VALUES ($1)', [d.name]);
     await c.query("INSERT INTO audit_log (action, entity, entity_id, details) VALUES ('company_created', 'company', $1, $2)", [companyId, JSON.stringify({ name })]);
     await c.query('COMMIT');
     return { companyId, creatorUserId: userId };

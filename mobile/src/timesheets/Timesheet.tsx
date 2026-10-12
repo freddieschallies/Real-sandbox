@@ -14,9 +14,10 @@ import { currentLogo } from '../brand.tsx';
 import type { Day, Pay } from '../../../server/src/core/timesheet.ts';
 
 export interface SheetFlag { id: string; flag_type: string; question: string | null; explanation: string | null; status: string; resolution_note: string | null }
-export interface Sheet { date: string; label: string; weekday?: boolean; submitted: { at: string; note: string | null } | null; day: Day; pay?: Pay; flags: SheetFlag[]; status?: string }
+export interface Sheet { date: string; label: string; weekday?: boolean; submitted: { at: string; note: string | null; filledBy?: string | null } | null; day: Day; pay?: Pay; flags: SheetFlag[]; status?: string }
 interface Export {
   from: string; to: string; generatedAt: string; rules?: { weekdayNormalMin: number; saturdayNormalMin: number };
+  /** Only the CEO fills in a timesheet a technician did not submit. */ canFill?: boolean;
   technicians: { id: string; full_name: string; department: string | null; days: Sheet[];
     totals: { travelMin: number; workMin: number; pausedMin: number; unaccountedMin: number; paidMin?: number; normalMin?: number; overtimeMin?: number; doubleMin?: number; jobs: number; flags: number; submitted: number; notSubmitted: number } }[];
 }
@@ -51,7 +52,7 @@ export function SheetView({ s, name }: { s: Sheet; name?: string }) {
     <View style={{ gap: 10 }} accessibilityLabel={`Timesheet ${name ?? ''} ${s.date}`}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <Text style={{ color: C.text, fontSize: 18, fontWeight: '800', flex: 1 }}>{name ? `${name} · ` : ''}{s.label}</Text>
-        {s.submitted ? <Pill text="Submitted" tone="good" /> : s.status === 'none' ? <Pill text="No work recorded" tone="quiet" /> : <Pill text="Not submitted" tone="warn" />}
+        {s.submitted ? <Pill text={s.submitted.filledBy ? 'Filled in by the CEO' : 'Submitted'} tone={s.submitted.filledBy ? 'info' : 'good'} /> : s.status === 'none' ? <Pill text="No work recorded" tone="quiet" /> : <Pill text="Not submitted" tone="warn" />}
       </View>
       <Text style={st.small}>{d.start ? `Started ${time(d.start)} · last job finished ${time(d.end)} · ${hm(d.spanMin)} day` : 'Nothing recorded on this day.'}{d.vehicles.length ? ` · Vehicle ${d.vehicles.join(', ')}` : ''}{dayKind(s.pay)}</Text>
       <Totals d={d} pay={s.pay} />
@@ -76,8 +77,8 @@ export function SheetView({ s, name }: { s: Sheet; name?: string }) {
           {s.flags.map(f => <Text key={f.id} style={st.small}>• {FLAG_TITLE[f.flag_type] ?? f.flag_type.replace(/_/g, ' ')}: {f.question ?? ''} ({flagStatus(f)})</Text>)}
         </View>
       ) : <Text style={st.small}>No flags this day.</Text>}
-      {s.submitted?.note ? <Text style={st.small}>Technician's note: {s.submitted.note}</Text> : null}
-      {s.submitted ? <Text style={st.small}>Submitted {new Date(s.submitted.at).toLocaleString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text> : null}
+      {s.submitted?.note ? <Text style={st.small}>{s.submitted.filledBy ? 'Note' : 'Technician\'s note'}: {s.submitted.note}</Text> : null}
+      {s.submitted ? <Text style={st.small}>{s.submitted.filledBy ? `Filled in by ${s.submitted.filledBy} (not submitted by the technician)` : 'Submitted'} {new Date(s.submitted.at).toLocaleString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text> : null}
     </View>
   );
 }
@@ -165,8 +166,8 @@ export function TimesheetsExport() {
   useEffect(() => {
     s.ask({ method: 'GET', path: '/departments' }).then(x => {
       if (x?.status !== 200) return;
-      const b = x.body as { departments: { id: string; name: string }[]; members?: { id: string; full_name: string; login_level: string }[] };
-      setPeople([{ value: 'all', label: 'Everyone' }, ...b.departments.map(dp => ({ value: `dept:${dp.id}`, label: `${dp.name} department` })),
+      const b = x.body as { departments: { id: string; name: string; active?: boolean }[]; members?: { id: string; full_name: string; login_level: string }[] };
+      setPeople([{ value: 'all', label: 'Everyone' }, ...b.departments.filter(dp => dp.active !== false).map(dp => ({ value: `dept:${dp.id}`, label: `${dp.name} department` })),
         ...(b.members ?? []).filter(m => m.login_level === 'technician').map(m => ({ value: `user:${m.id}`, label: m.full_name }))]);
     });
   }, []);
@@ -195,7 +196,7 @@ export function TimesheetsExport() {
             {Platform.OS === 'web' ? <Button label="Print / save as PDF" onPress={() => setMsg(printSheets(d, `${whoLabel} · ${r.label}`, s.session?.company.name ?? '') ? null : 'The browser blocked the print window: allow pop-ups for this site.')} style={{ flexGrow: 1 }} /> : null}
             {Platform.OS === 'web' ? <Button label="Download for Excel (CSV)" kind="secondary" onPress={() => setMsg(downloadCsv(d, `timesheets-${r.from}-to-${r.to}.csv`) ? null : 'This browser could not save the file.')} style={{ flexGrow: 1 }} /> : null}
           </View>
-          {msg ? <Notice tone="warn" title="Not exported" lines={[msg]} /> : null}
+          {msg ? <Notice tone="warn" title="Not done" lines={[msg]} /> : null}
           <Card>
             <Label>{whoLabel} · {r.label}</Label>
             <View style={{ flexDirection: 'row', paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: C.line }}>
@@ -225,9 +226,18 @@ export function TimesheetsExport() {
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     <Text style={[st.body, { fontWeight: '700', flex: 1 }]}>{t.full_name} · {day.label}</Text>
                     <Text style={st.small}>W {hm(day.day.workMin)} · T {hm(day.day.travelMin)}{day.pay?.overtimeMin ? ` · OT ${hm(day.pay.overtimeMin)}` : ''}{day.pay?.doubleMin ? ` · DT ${hm(day.pay.doubleMin)}` : ''}{day.day.unaccountedMin ? ` · NA ${hm(day.day.unaccountedMin)}` : ''}{day.flags.length ? ` · ${day.flags.length} flag${day.flags.length > 1 ? 's' : ''}` : ''}</Text>
-                    {day.submitted ? <Pill text="Submitted" tone="good" /> : day.status === 'none' ? <Pill text="No work" tone="quiet" /> : <Pill text="Missing" tone="warn" />}
+                    {day.submitted ? <Pill text={day.submitted.filledBy ? 'Filled in' : 'Submitted'} tone={day.submitted.filledBy ? 'info' : 'good'} /> : day.status === 'none' ? <Pill text="No work" tone="quiet" /> : <Pill text="Missing" tone="warn" />}
                   </View>
                 )}
+                {open === k && d.canFill && !day.submitted && day.status === 'not_submitted' ? (
+                  <View style={{ gap: 6 }}>
+                    <Text style={st.small}>{t.full_name} did not submit this day. As the CEO you can fill it in as the app made it; it shows as filled in by you, and he is told.</Text>
+                    <Button label="Fill in and submit for him" kind="secondary" onPress={async () => {
+                      const x = await s.ask({ method: 'POST', path: `/timesheets/${t.id}/${day.date}/fill`, json: {} });
+                      if (x && x.status < 300) { setMsg(null); setTick(n => n + 1); } else setMsg(reasons(x).join('; '));
+                    }} />
+                  </View>
+                ) : null}
                 {open === k ? <Button label="Close" kind="quiet" onPress={() => setOpen(null)} /> : null}
               </Card>
             );
@@ -286,7 +296,7 @@ function printSheets(d: Export, title: string, company: string): boolean {
     const flags = s.flags.map(f => `<li><b>${esc(FLAG_TITLE[f.flag_type] ?? f.flag_type)}</b>: ${esc(f.question)} <i>(${esc(flagStatus(f))})</i></li>`).join('');
     return `<section><div class=bar></div><div class=head>${currentLogo() ? `<img src="${currentLogo()}" style="height:48px;background:#fff;padding:3px;border-radius:4px;margin-right:12px">` : ''}<div style="flex:1"><h1>${esc(company)}</h1><div>Daily timesheet</div></div><div class=t>${esc(s.label)}</div></div>
 <div class=body><div class=two><div><b>Technician</b> ${esc(t.full_name)}<br><b>Department</b> ${esc(t.department ?? '–')}</div>
-<div><b>Started</b> ${time(x.start)} · <b>Last job finished</b> ${time(x.end)}<br><b>Vehicle</b> ${esc(x.vehicles.join(', ') || '–')}<br><b>Status</b> ${s.submitted ? `Submitted ${esc(new Date(s.submitted.at).toLocaleString('en-ZA'))}` : s.status === 'none' ? 'No work recorded' : 'NOT SUBMITTED'}</div></div>
+<div><b>Started</b> ${time(x.start)} · <b>Last job finished</b> ${time(x.end)}<br><b>Vehicle</b> ${esc(x.vehicles.join(', ') || '–')}<br><b>Status</b> ${s.submitted ? `${s.submitted.filledBy ? `Filled in by ${esc(s.submitted.filledBy)}` : 'Submitted'} ${esc(new Date(s.submitted.at).toLocaleString('en-ZA'))}` : s.status === 'none' ? 'No work recorded' : 'NOT SUBMITTED'}</div></div>
 <table class=tot><tr><th>Travelled</th><th>Worked</th><th>Paused</th><th>Not accounted for</th><th>Normal time</th><th>Overtime 1.5×</th><th>Double time 2×</th></tr><tr><td>${hm(x.travelMin)}</td><td>${hm(x.workMin)}</td><td>${hm(x.pausedMin)}</td><td${x.unaccountedMin >= 30 ? ' class=bad' : ''}>${hm(x.unaccountedMin)}</td><td>${hm(s.pay?.normalMin ?? 0)}</td><td>${hm(s.pay?.overtimeMin ?? 0)}</td><td>${hm(s.pay?.doubleMin ?? 0)}</td></tr></table>${s.pay?.holiday ? `<p><b>${esc(s.pay.holiday)}</b>: public holiday, double time.</p>` : s.pay?.dayType === 'sunday' ? '<p><b>Sunday</b>: double time.</p>' : ''}
 <table><tr><th>Job</th><th>Store and fault</th><th>Go</th><th>Arrived</th><th>Left</th><th class=r>Travel</th><th class=r>Work</th><th class=r>Paused</th><th>Result</th></tr>${jobs || '<tr><td colspan=9>No jobs recorded.</td></tr>'}</table>
 <h3>Flags this day</h3>${flags ? `<ul>${flags}</ul>` : '<p>None.</p>'}${s.submitted?.note ? `<p><b>Technician's note:</b> ${esc(s.submitted.note)}</p>` : ''}
@@ -308,7 +318,7 @@ function downloadCsv(d: Export, filename: string): boolean {
   const rows = [['Date', 'Technician', 'Department', 'Status', 'Started', 'Last job finished', 'Vehicle', 'Travel (h:mm)', 'Work (h:mm)', 'Paused (h:mm)', 'Not accounted for (h:mm)', 'Normal time (h:mm)', 'Overtime 1.5x (h:mm)', 'Double time 2x (h:mm)', 'Day', 'Jobs', 'Flags', 'Technician note']];
   for (const t of d.technicians) for (const s of t.days) {
     const x = s.day;
-    rows.push([s.date, t.full_name, t.department ?? '', s.submitted ? 'Submitted' : s.status === 'none' ? 'No work' : 'Not submitted', time(x.start), time(x.end), x.vehicles.join(' '),
+    rows.push([s.date, t.full_name, t.department ?? '', s.submitted ? (s.submitted.filledBy ? `Filled in by ${s.submitted.filledBy}` : 'Submitted') : s.status === 'none' ? 'No work' : 'Not submitted', time(x.start), time(x.end), x.vehicles.join(' '),
       hm(x.travelMin), hm(x.workMin), hm(x.pausedMin), hm(x.unaccountedMin), hm(s.pay?.normalMin ?? 0), hm(s.pay?.overtimeMin ?? 0), hm(s.pay?.doubleMin ?? 0), s.pay?.holiday ?? s.pay?.dayType ?? '',
       x.jobs.map(j => `Job ${j.jobNumber} ${j.store}: travel ${hm(j.travelMin)}, work ${hm(j.workMin)}, ${j.result}`).join(' | '),
       s.flags.map(f => `${FLAG_TITLE[f.flag_type] ?? f.flag_type} (${flagStatus(f)})`).join(' | '), s.submitted?.note ?? '']);

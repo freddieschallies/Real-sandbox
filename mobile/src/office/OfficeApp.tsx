@@ -62,7 +62,8 @@ export function OfficeApp() {
   const [sel, setSel] = useState<Sel>(null);
   const ov = o.d.overview;
   const canPeople = !!o.d.people;
-  const go = (t: Tab, x: Sel = null) => { setTab(t); setSel(x); };
+  const picked = React.useRef(false);
+  const go = (t: Tab, x: Sel = null) => { picked.current = true; setTab(t); setSel(x); };
   // Each person sees only the work the CEO switched on for them.
   const work = s.session?.user.work ?? {};
   const does = (a: string) => s.session?.user.level === 'creator' || !!work[a];
@@ -91,9 +92,13 @@ export function OfficeApp() {
   const mine = officeTabKeys(level, work, { people: canPeople, settings: menu.canEdit });
   const tabs = allTabs.filter(t => mine.includes(t.key));
   const arrange = () => { setMenuStart(level); go('settings'); };
-  // A tab this person no longer has (work switched off): open their first one instead.
+  // Until the person picks a tab, show their first one (their work may load after the screen does);
+  // after that, only move them if the tab they are on is no longer theirs.
   const tabKeys = tabs.map(t => t.key).join();
-  useEffect(() => { if (tabs.length && !tabs.some(t => t.key === tab) && tab !== 'people') setTab(tabs[0].key); }, [tabKeys]);
+  useEffect(() => {
+    if (!tabs.length) return;
+    if (!picked.current ? tab !== tabs[0].key : !tabs.some(t => t.key === tab) && tab !== 'people') setTab(tabs[0].key);
+  }, [tabKeys]);
 
   const list = (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 40 }}>
@@ -105,9 +110,9 @@ export function OfficeApp() {
       {tab === 'accounts' ? <Accounts b={books} canPrices={does('prices')} /> : null}
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
       {tab === 'handovers' ? <HandoverList o={o} open={id => setSel({ kind: 'handover', id })} /> : null}
-      {tab === 'map' ? <TeamMap openPerson={canPeople ? id => { setTab('people'); setSel({ kind: 'person', id }); } : undefined} /> : null}
+      {tab === 'map' ? <TeamMap openPerson={canPeople ? id => go('people', { kind: 'person', id }) : undefined} /> : null}
       {tab === 'timesheets' ? <TimesheetsExport /> : null}
-      {tab === 'departments' ? <DepartmentsBoard openPerson={canPeople ? id => { setTab('people'); setSel({ kind: 'person', id }); } : undefined} /> : null}
+      {tab === 'departments' ? <DepartmentsBoard openPerson={canPeople ? id => go('people', { kind: 'person', id }) : undefined} /> : null}
       {tab === 'vans' ? <VanLists openTech={id => setSel({ kind: 'van', id })} /> : null}
       {tab === 'people' ? <PeopleList o={o} open={id => setSel({ kind: 'person', id })} /> : null}
       {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
@@ -159,10 +164,11 @@ export function OfficeApp() {
       <View style={{ flex: 1, backgroundColor: C.bg }}>
         {header}
         <View style={{ flex: 1, flexDirection: 'row' }}>
-          <ScrollView style={{ width: 200, flexGrow: 0, borderRightWidth: 1, borderRightColor: C.line }} contentContainerStyle={{ padding: 12, gap: 6 }}>
+          {/* Compact so every tab fits on a normal screen; on a short window it scrolls, with a scrollbar. */}
+          <ScrollView style={{ width: 200, flexGrow: 0, borderRightWidth: 1, borderRightColor: C.line }} contentContainerStyle={{ paddingHorizontal: 10, paddingVertical: 8, gap: 2 }} showsVerticalScrollIndicator persistentScrollbar>
             {tabs.map(t => (
               <Pressable key={t.key} onPress={() => go(t.key)} accessibilityRole="tab" accessibilityState={{ selected: tab === t.key }}
-                style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, minHeight: 48, borderRadius: 8, backgroundColor: tab === t.key ? C.panel2 : 'transparent', borderLeftWidth: 3, borderLeftColor: tab === t.key ? K.stripe : 'transparent' }}>
+                style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, minHeight: 38, borderRadius: 8, backgroundColor: tab === t.key ? C.panel2 : 'transparent', borderLeftWidth: 3, borderLeftColor: tab === t.key ? K.stripe : 'transparent' }}>
                 <Text style={{ color: tab === t.key ? C.text : C.quiet, fontWeight: '700', flex: 1 }}>{t.label}</Text>
                 {t.count ? <Pill text={String(t.count)} tone="warn" /> : null}
               </Pressable>

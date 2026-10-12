@@ -8,6 +8,7 @@ import { audit, raiseFlag, tx, type Q } from '../db.ts';
 import { can, departmentsFor } from '../core/permissions.ts';
 import * as T from '../core/timesheet.ts';
 import { DateOnly, Iso, Refused, Uuid, parse } from '../http.ts';
+import { notify } from './field.ts';
 
 const sast = (d: Date = new Date()) => d.toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
 const sastHour = (d: Date = new Date()) => Number(d.toLocaleString('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', hour12: false }));
@@ -49,10 +50,26 @@ async function rulesOf(c: Q): Promise<T.PayRules> {
 
 /** One technician's sheet for one day: what he submitted, or what the app has for the day so far, with the pay split. */
 async function sheetFor(c: Q, techId: string, date: string, rules?: T.PayRules) {
-  const ts = (await c.query('SELECT submitted_at, sheet, note FROM timesheets WHERE technician_id = $1 AND work_date = $2', [techId, date])).rows[0];
+  const ts = (await c.query('SELECT t.submitted_at, t.sheet, t.note, f.full_name AS filled_by FROM timesheets t LEFT JOIN users f ON f.id = t.filled_by WHERE t.technician_id = $1 AND t.work_date = $2', [techId, date])).rows[0];
   const day: T.Day = ts?.sheet ?? await dayOf(c, techId, date);
-  return { date, label: dayLabel(date), weekday: T.isWeekday(date), submitted: ts ? { at: ts.submitted_at, note: ts.note } : null, day,
+  return { date, label: dayLabel(date), weekday: T.isWeekday(date), submitted: ts ? { at: ts.submitted_at, note: ts.note, filledBy: ts.filled_by ?? null } : null, day,
     pay: T.payOf(day, date, rules ?? await rulesOf(c)), flags: await flagsOn(c, techId, date) };
+}
+
+const CEO = ['director', 'creator'];
+
+/** Keeps a day's sheet as it is now (it cannot change after), with the minutes per job; closes its missing flag. */
+async function saveSheet(c: Q, techId: string, date: string, day: T.Day, at: string, note: string | null, filledBy: string | null) {
+  if ((await c.query('SELECT 1 FROM timesheets WHERE technician_id = $1 AND work_date = $2', [techId, date])).rowCount) throw new Refused(409, ['this day is already submitted; corrections go through the manager']);
+  const ts = (await c.query('INSERT INTO timesheets (technician_id, work_date, submitted_at, sheet, note, unaccounted_min, filled_by) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
+    [techId, date, at, JSON.stringify(day), note, day.unaccountedMin, filledBy])).rows[0].id as string;
+  const perJob = new Map<string, number>();
+  for (const j of day.jobs) perJob.set(j.jobId, (perJob.get(j.jobId) ?? 0) + j.workMin);
+  for (const [jobId, m] of perJob) await c.query('INSERT INTO timesheet_lines (timesheet_id, job_id, minutes) VALUES ($1, $2, $3)', [ts, jobId, m]);
+  await c.query(`UPDATE flags SET status = 'resolved', resolved_by = $1, resolved_at = now(), resolution_note = $3
+                  WHERE technician_id = $2 AND flag_type = 'timesheet_missing' AND details->>'workDate' = $4 AND status <> 'resolved'`,
+    [filledBy ?? techId, techId, filledBy ? 'Filled in by the CEO' : 'Timesheet submitted', date]);
+  return ts;
 }
 
 /** The finished days he still owes a timesheet for: the last week, weekdays and any day he worked. */
@@ -83,8 +100,8 @@ export function registerTimesheetRoutes(app: FastifyInstance) {
       }
       const rules = await rulesOf(c);
       const recent = (await c.query(
-        `SELECT work_date::text AS date, submitted_at, note, sheet FROM timesheets WHERE technician_id = $1 ORDER BY work_date DESC LIMIT 14`, [req.actor.id])).rows
-        .filter(r => r.sheet).map(r => ({ date: r.date, label: dayLabel(r.date), submitted: { at: r.submitted_at, note: r.note }, day: r.sheet, pay: T.payOf(r.sheet, r.date, rules), flags: [] }));
+        `SELECT t.work_date::text AS date, t.submitted_at, t.note, t.sheet, f.full_name AS filled_by FROM timesheets t LEFT JOIN users f ON f.id = t.filled_by WHERE t.technician_id = $1 ORDER BY t.work_date DESC LIMIT 14`, [req.actor.id])).rows
+        .filter(r => r.sheet).map(r => ({ date: r.date, label: dayLabel(r.date), submitted: { at: r.submitted_at, note: r.note, filledBy: r.filled_by ?? null }, day: r.sheet, pay: T.payOf(r.sheet, r.date, rules), flags: [] }));
       return { due, recent, explainFromMin: T.EXPLAIN_FROM_MIN };
     });
   });
@@ -100,18 +117,30 @@ export function registerTimesheetRoutes(app: FastifyInstance) {
     if (req.actor.level !== 'technician') throw new Refused(403, ['timesheets are for technicians']);
     if (date >= sast(new Date(b.at))) throw new Refused(400, ['only a finished day can be submitted']);
     return tx(req.db, async c => {
-      if ((await c.query('SELECT 1 FROM timesheets WHERE technician_id = $1 AND work_date = $2', [req.actor.id, date])).rowCount) throw new Refused(409, ['this day is already submitted; corrections go through your manager']);
       const day = await dayOf(c, req.actor.id, date);
       if (day.unaccountedMin >= T.EXPLAIN_FROM_MIN && (!b.note || b.note.length < 5)) throw new Refused(400, [`say what the ${T.hm(day.unaccountedMin)} not accounted for was`]);
-      const ts = (await c.query('INSERT INTO timesheets (technician_id, work_date, submitted_at, sheet, note, unaccounted_min) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-        [req.actor.id, date, b.at, JSON.stringify(day), b.note || null, day.unaccountedMin])).rows[0].id;
-      const perJob = new Map<string, number>();
-      for (const j of day.jobs) perJob.set(j.jobId, (perJob.get(j.jobId) ?? 0) + j.workMin);
-      for (const [jobId, m] of perJob) await c.query('INSERT INTO timesheet_lines (timesheet_id, job_id, minutes) VALUES ($1, $2, $3)', [ts, jobId, m]);
-      await c.query(`UPDATE flags SET status = 'resolved', resolved_by = $1, resolved_at = now(), resolution_note = 'Timesheet submitted'
-                      WHERE technician_id = $1 AND flag_type = 'timesheet_missing' AND details->>'workDate' = $2 AND status <> 'resolved'`, [req.actor.id, date]);
+      const ts = await saveSheet(c, req.actor.id, date, day, b.at, b.note || null, null);
       await audit(c, req.actor.id, 'timesheet_submitted', 'timesheet', ts, { workDate: date, unaccountedMin: day.unaccountedMin });
       return { id: ts, date, day };
+    });
+  });
+
+  // The CEO alone can fill in a timesheet the technician did not submit: as the app made it, marked
+  // as filled in by the CEO. The technician is told; time not accounted for stays on it as it was.
+  app.post('/timesheets/:userId/:date/fill', async (req: FastifyRequest<{ Params: { userId: string; date: string } }>) => {
+    const userId = parse(Uuid, req.params.userId);
+    const date = parse(DateOnly, req.params.date);
+    const b = parse(z.object({ note: z.string().trim().max(1000).optional() }), req.body ?? {});
+    if (!CEO.includes(req.actor.level)) throw new Refused(403, ['only the CEO fills in a technician\'s timesheet']);
+    if (date >= sast()) throw new Refused(400, ['only a finished day can be filled in']);
+    return tx(req.db, async c => {
+      const t = (await c.query("SELECT full_name FROM users WHERE id = $1 AND login_level = 'technician'", [userId])).rows[0];
+      if (!t) throw new Refused(404, ['no such technician']);
+      const day = await dayOf(c, userId, date);
+      const ts = await saveSheet(c, userId, date, day, new Date().toISOString(), b.note || null, req.actor.id);
+      await audit(c, req.actor.id, 'timesheet_filled', 'timesheet', ts, { technicianId: userId, workDate: date, unaccountedMin: day.unaccountedMin });
+      await notify(c, userId, 'timesheet', `Your timesheet for ${dayLabel(date)} was filled in by the CEO, as the app made it.`);
+      return { id: ts, date, day, filledBy: req.actor.id };
     });
   });
 
@@ -170,7 +199,7 @@ export function registerTimesheetRoutes(app: FastifyInstance) {
         });
       }
       await audit(c, req.actor.id, 'timesheets_viewed', 'timesheets', null, q);
-      return { from: q.from, to: q.to, generatedAt: new Date().toISOString(), rules, technicians };
+      return { from: q.from, to: q.to, generatedAt: new Date().toISOString(), rules, technicians, canFill: CEO.includes(req.actor.level) };
     });
   });
 }

@@ -1202,8 +1202,9 @@ test('department managers: techs under them, the van stock list they set, vans s
 
   // The manager sees his department and sets its list; the admin cannot.
   const mine = (await call('manager', 'GET', '/van-stock')).body.departments;
-  assert.equal(mine.length, 1);
+  assert.equal(mine[0].id, ids.dept, 'his own department first');
   assert.equal(mine[0].canEdit, true);
+  assert.equal(mine.filter((x: { canEdit: boolean }) => x.canEdit).length, 1, 'only his own to change');
   assert.equal((await call('admin', 'PUT', `/van-stock/departments/${ids.dept}/items/${fuse}`, { qty: 5 })).status, 403);
   assert.equal((await call('manager', 'PUT', `/van-stock/departments/${ids.dept}/items/${boots}`, { qty: 1 })).status, 409, 'PPE is not van stock');
   const set = await call('manager', 'PUT', `/van-stock/departments/${ids.dept}/items/${fuse}`, { qty: 5 });
@@ -1235,9 +1236,9 @@ test('department managers: techs under them, the van stock list they set, vans s
   assert.equal((await call('manager', 'GET', `/van-stock/departments/${ids.dept}/changes`)).body.length, 3, 'every change is kept');
 
   // Departments: the CEO sets them up and puts technicians under a manager.
-  assert.equal((await call('admin', 'POST', '/departments', { name: 'Plumbing' })).status, 403);
-  assert.equal((await call('director', 'POST', '/departments', { name: 'Plumbing', managerId: ids.tech })).status, 409, 'a technician cannot manage a department');
-  const plumbing = await call('director', 'POST', '/departments', { name: 'Plumbing' });
+  assert.equal((await call('admin', 'POST', '/departments', { name: 'Gas' })).status, 403);
+  assert.equal((await call('director', 'POST', '/departments', { name: 'Gas', managerId: ids.tech })).status, 409, 'a technician cannot manage a department');
+  const plumbing = await call('director', 'POST', '/departments', { name: 'Gas' });
   assert.equal(plumbing.status, 200);
   assert.equal((await call('manager', 'PUT', `/van-stock/departments/${plumbing.body.id}/items/${fuse}`, { qty: 1 })).status, 403, 'not his department');
   const hr = await call('director', 'POST', '/departments', { name: 'HVAC', managerId: ids.manager });
@@ -1287,8 +1288,8 @@ test('HR: puts technicians and department managers in one department each, keeps
   assert.equal((await call('manager', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'admin' })).status, 403, 'not a manager');
 
   const mgr2 = (await db.query("INSERT INTO users (full_name, email, login_level, password_hash) VALUES ('mgr2', 'mgr2@zsp.test', 'management', 'x') RETURNING id")).rows[0].id;
-  const elec = await call('hr', 'POST', '/departments', { name: 'Electrical' });
-  assert.equal(elec.status, 200);
+  // Every company starts with Electrical, Plumbing, Service and Foodservice.
+  const elec = { body: { id: (await call('hr', 'GET', '/departments')).body.departments.find((x: { name: string }) => x.name === 'Electrical').id as string } };
   assert.equal((await call('admin', 'PUT', `/access/users/${mgr2}/department`, { departmentId: elec.body.id })).status, 403, 'not the admin');
   const a = await call('hr', 'PUT', `/access/users/${mgr2}/department`, { departmentId: elec.body.id });
   assert.equal(a.status, 200);
@@ -1442,6 +1443,51 @@ test('company logo: the CEO sets it and everyone in the company sees it; other p
   assert.equal(await pic('tech', logo.body.id), 200);
   const sig = await upload('director', '/photos', { kind: 'fuel_slip', takenAt: '2026-10-12T08:00:00+02:00' });
   assert.equal(await pic('tech', sig.body.id), 403, 'other photos stay private');
+});
+
+test('departments: switched off and on; people moved out first; nobody put in one that is off', async () => {
+  const d = (await call('hr', 'GET', '/departments')).body;
+  for (const n of ['Admin', 'Electrical', 'Plumbing', 'Service', 'Foodservice']) assert.ok(d.departments.some((x: { name: string; active: boolean }) => x.name === n && x.active), `${n} from the start`);
+  assert.deepEqual(d.missing, [], 'Refrigeration is set up in this test company too');
+  // Admin is a department too: the office staff are put in it.
+  const adminDept = d.departments.find((x: { name: string }) => x.name === 'Admin').id;
+  assert.ok(d.members.some((m: { id: string }) => m.id === ids.admin), 'office staff can be placed in a department');
+  assert.equal((await call('hr', 'PUT' as 'POST', `/access/users/${ids.admin}/department`, { departmentId: adminDept })).status, 200);
+  assert.equal((await call('hr', 'GET', '/departments')).body.departments.find((x: { id: string }) => x.id === adminDept).staff, 1);
+  const svc = { body: { id: d.departments.find((x: { name: string }) => x.name === 'Service').id as string } };
+  assert.equal((await call('director', 'PUT' as 'POST', `/access/users/${ids.tech2}/department`, { departmentId: svc.body.id })).status, 200);
+  const off = await call('hr', 'PUT' as 'POST', `/departments/${svc.body.id}`, { active: false });
+  assert.equal(off.status, 409, 'not while someone works in it');
+  assert.match(off.body.reasons[0], /move everyone in Service/);
+  await call('director', 'PUT' as 'POST', `/access/users/${ids.tech2}/department`, { departmentId: ids.dept });
+  assert.equal((await call('admin', 'PUT' as 'POST', `/departments/${svc.body.id}`, { active: false })).status, 403, 'not the admin');
+  assert.equal((await call('hr', 'PUT' as 'POST', `/departments/${svc.body.id}`, { active: false })).status, 200);
+  const after = (await call('hr', 'GET', '/departments')).body;
+  assert.equal(after.departments.find((x: { id: string }) => x.id === svc.body.id).active, false);
+  assert.ok(!after.missing.includes('Service'), 'set up, just off');
+  assert.equal((await call('director', 'PUT' as 'POST', `/access/users/${ids.tech2}/department`, { departmentId: svc.body.id })).status, 409, 'nobody into a department that is off');
+  assert.ok(!(await call('director', 'GET', '/van-stock')).body.departments.some((x: { id: string }) => x.id === svc.body.id), 'no van list for a department that is off');
+  const on = await call('hr', 'POST', '/departments', { name: 'service' });
+  assert.equal(on.status, 200); assert.equal(on.body.id, svc.body.id, 'adding it again switches the same one back on');
+  assert.equal((await call('hr', 'POST', '/departments', { name: 'Service' })).status, 409, 'already there');
+});
+
+test('timesheets: only the CEO fills in one the technician did not submit, marked as filled in by the CEO', async () => {
+  const date = '2026-10-08';
+  assert.equal((await call('hr', 'POST', `/timesheets/${ids.tech2}/${date}/fill`, {})).status, 403, 'not HR');
+  assert.equal((await call('manager', 'POST', `/timesheets/${ids.tech2}/${date}/fill`, {})).status, 403, 'not the manager');
+  assert.equal((await call('admin', 'POST', `/timesheets/${ids.tech2}/${date}/fill`, {})).status, 403, 'not the admin');
+  assert.equal((await call('director', 'POST', `/timesheets/${ids.admin}/${date}/fill`, {})).status, 404, 'technicians only');
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+  assert.equal((await call('director', 'POST', `/timesheets/${ids.tech2}/${today}/fill`, {})).status, 400, 'a finished day only');
+  const f = await call('director', 'POST', `/timesheets/${ids.tech2}/${date}/fill`, {});
+  assert.equal(f.status, 200);
+  assert.equal((await call('director', 'POST', `/timesheets/${ids.tech2}/${date}/fill`, {})).status, 409, 'once');
+  const sheet = (await call('hr', 'GET', `/timesheets?from=${date}&to=${date}&userId=${ids.tech2}`)).body;
+  assert.equal(sheet.canFill, false, 'HR does not get the button');
+  assert.ok(sheet.technicians[0].days[0].submitted.filledBy, 'shows who filled it in');
+  assert.equal((await call('director', 'GET', `/timesheets?from=${date}&to=${date}`)).body.canFill, true);
+  assert.equal((await db.query("SELECT count(*)::int AS n FROM notifications WHERE recipient_id = $1 AND kind = 'timesheet'", [ids.tech2])).rows[0].n, 1, 'the technician is told');
 });
 
 test('phone menus: the CEO or an admin pins tabs per position; everyone gets their own position\'s choice', async () => {

@@ -6,7 +6,7 @@ import type { Flag } from './types.ts';
 import type { DemoOfficeState } from './demoOffice.ts';
 import { mayHaveIncidents } from './demoReal.ts';
 
-export interface DemoTimesState { submitted: Record<string, { at: string; note: string | null; day: T.Day }>; seeded?: boolean; rules?: T.PayRules }
+export interface DemoTimesState { submitted: Record<string, { at: string; note: string | null; day: T.Day; filledBy?: string | null }>; seeded?: boolean; rules?: T.PayRules }
 export interface RealVisit { jobId: string; jobNumber: number; store: string; fault: string; techIds: string[]; visits: { goAt?: string; arrivedAt?: string; startedAt?: string; endedAt?: string; state: string; pauses: { reason: string; at: string; resumedAt?: string }[] }[] }
 
 type Res = { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] };
@@ -122,7 +122,7 @@ export class DemoTimes {
   sheet(techId: string, date: string) {
     const sub = this.submitted(techId, date);
     const day = sub?.day ?? this.dayOf(techId, date);
-    return { date, label: dayLabel(date), weekday: T.isWeekday(date), submitted: sub ? { at: sub.at, note: sub.note } : null, day, pay: T.payOf(day, date, this.rules()), flags: this.flagsOn(techId, date) };
+    return { date, label: dayLabel(date), weekday: T.isWeekday(date), submitted: sub ? { at: sub.at, note: sub.note, filledBy: (sub as { filledBy?: string | null }).filledBy ?? null } : null, day, pay: T.payOf(day, date, this.rules()), flags: this.flagsOn(techId, date) };
   }
 
   mine(techId: string) {
@@ -156,17 +156,27 @@ export class DemoTimes {
     return good({ date, day });
   }
 
-  exportFor(from: string, to: string, techs: { id: string; department: string | null }[]): Res {
+  /** The CEO fills in a day the technician did not submit, as the app made it. */
+  fill(techId: string, date: string, by: string): Res {
+    if (date >= sast()) return bad(400, 'only a finished day can be filled in');
+    if (!this.o.people.some(p => p.id === techId && p.login_level === 'technician')) return bad(404, 'no such technician');
+    if (this.submitted(techId, date)) return bad(409, 'this day is already submitted; corrections go through the manager');
+    this.t.submitted[`${techId}|${date}`] = { at: new Date().toISOString(), note: null, day: this.dayOf(techId, date), filledBy: by };
+    for (const f of this.flags) if (f.flag_type === 'timesheet_missing' && (f.tech ?? 'me') === techId && f.details?.workDate === date && f.status !== 'resolved') Object.assign(f, { status: 'resolved', resolution_note: 'Filled in by the CEO' });
+    return good({ date });
+  }
+
+  exportFor(from: string, to: string, techs: { id: string; department: string | null }[], canFill = false): Res {
     if (to < from) return bad(400, 'the end date is before the start date');
     const dates = T.daysBetween(from, to);
     if (dates.length > 31) return bad(400, 'at most 31 days at a time');
     const today = sast();
     return good({
-      from, to, generatedAt: new Date().toISOString(), rules: this.rules(),
+      from, to, generatedAt: new Date().toISOString(), rules: this.rules(), canFill,
       technicians: techs.map(t => {
         const days = dates.filter(d => d <= today).map(d => this.sheet(t.id, d))
           .filter(s => s.submitted || s.day.activity || s.weekday || s.flags.length)
-          .map(s => ({ ...s, status: s.submitted ? 'submitted' : s.day.activity || s.weekday ? 'not_submitted' : 'none' }));
+          .map(s => ({ ...s, status: s.submitted ? 'submitted' : s.date === today ? 'today' : s.day.activity || s.weekday ? 'not_submitted' : 'none' }));
         const sum = (k: 'travelMin' | 'workMin' | 'pausedMin' | 'unaccountedMin') => days.reduce((n, d) => n + d.day[k], 0);
         const pay = (k: 'paidMin' | 'normalMin' | 'overtimeMin' | 'doubleMin') => days.reduce((n, d) => n + d.pay[k], 0);
         return { id: t.id, full_name: this.name(t.id), department: t.department, days,

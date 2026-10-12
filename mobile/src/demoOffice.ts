@@ -109,11 +109,11 @@ export function seedOffice(): DemoOfficeState {
     people: [
       { id: 'office', full_name: 'Lilanie Schallies', login_level: 'creator', department: 'Office' },
       { id: 'admin-1', full_name: 'Zanele Khoza', login_level: 'admin', department: 'Office' },
-      { id: 'mgr-1', full_name: 'Pieter van Wyk', login_level: 'management', department: 'Refrigeration' },
+      { id: 'mgr-1', full_name: 'Pieter van Wyk', login_level: 'management', department: 'Foodservice' },
       { id: 'hr-1', full_name: 'Precious Ngcobo', login_level: 'hr', department: 'Office' },
       { id: 'stock', full_name: 'Lindiwe Zulu', login_level: 'stockroom', department: 'Stores' },
       { id: 'mech', full_name: 'Bongani Khumalo', login_level: 'mechanic', department: 'Workshop' },
-      ...DEMO_TECHS.map(t => ({ id: t.id, full_name: t.full_name, login_level: 'technician', department: 'Refrigeration',
+      ...DEMO_TECHS.map(t => ({ id: t.id, full_name: t.full_name, login_level: 'technician', department: 'Foodservice',
         trade: ({ me: 'foodservice', 'tech-2': 'electrician', 'tech-3': 'plumber', 'tech-4': 'assistant' } as const)[t.id as 'me'] ?? null })),
       // Real-data demo: the rest of the staff, as technicians without a department yet.
       ...(REAL?.others ?? []).map(o => ({ id: o.id, full_name: o.name, login_level: 'technician', department: '', trade: null })),
@@ -211,7 +211,7 @@ export class DemoOffice {
 
   flags(status: string) {
     const want = status === 'unresolved' ? ['open', 'explained', 'escalated'] : [status];
-    return this.src.flags.filter(f => want.includes(f.status)).map(f => ({ ...f, technician: this.name(f.tech ?? 'me'), job_number: null, department: 'Refrigeration' }))
+    return this.src.flags.filter(f => want.includes(f.status)).map(f => ({ ...f, technician: this.name(f.tech ?? 'me'), job_number: null, department: 'Foodservice' }))
       .sort((a, b) => b.raised_at.localeCompare(a.raised_at));
   }
 

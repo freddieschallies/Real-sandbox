@@ -9,6 +9,7 @@ import { can, departmentsFor, seesPeople, type Actor } from '../core/permissions
 import { Refused, Uuid, parse } from '../http.ts';
 import { checkVan, listOf, vanReport } from '../vanRepo.ts';
 import { notify } from './field.ts';
+import { STANDARD_DEPARTMENTS } from '../core/departments.ts';
 
 const MANAGER_LEVELS = ['management', 'director', 'creator'];
 
@@ -46,20 +47,24 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
   app.get('/departments', async req => {
     if (!seesPeople(req.actor) && !can(req.actor, 'assign_stock')) throw new Refused(403, ['departments are not part of your work']);
     const departments = (await req.db.query(
-      `SELECT d.id, d.name, d.manager_id, m.full_name AS manager,
+      `SELECT d.id, d.name, d.active, d.manager_id, m.full_name AS manager,
               (SELECT count(*) FROM users u WHERE u.department_id = d.id AND u.login_level = 'technician' AND u.status <> 'left')::int AS technicians,
+              (SELECT count(*) FROM users u WHERE u.department_id = d.id AND u.status <> 'left')::int AS staff,
               (SELECT count(*) FROM van_stock_lists l WHERE l.department_id = d.id)::int AS van_lines
-         FROM departments d LEFT JOIN users m ON m.id = d.manager_id ORDER BY d.name`)).rows;
+         FROM departments d LEFT JOIN users m ON m.id = d.manager_id ORDER BY d.name`)).rows as { name: string; active: boolean }[];
     const managers = (await req.db.query(
       `SELECT id, full_name, login_level FROM users WHERE login_level = ANY($1) AND status <> 'left' ORDER BY (login_level = 'management') DESC, full_name`, [MANAGER_LEVELS])).rows;
-    // Who works where: technicians and department managers, each in one department (or none yet).
+    // Who works where: everyone below the CEO, each in one department (or none yet). Technicians work
+    // under its manager; the office staff are usually in Admin.
     const members = (await req.db.query(
       `SELECT id, full_name, login_level, trade, department_id FROM users
-        WHERE login_level IN ('technician', 'management') AND status <> 'left' ORDER BY full_name`)).rows;
-    return { canManage: assigns(req.actor), departments, managers, members };
+        WHERE login_level NOT IN ('director', 'creator') AND status <> 'left' ORDER BY full_name`)).rows;
+    // The usual departments not set up yet, to switch on with one tap.
+    const missing = STANDARD_DEPARTMENTS.filter(x => !departments.some(d => d.name.toLowerCase() === x.name.toLowerCase())).map(x => x.name);
+    return { canManage: assigns(req.actor), departments, managers, members, missing };
   });
 
-  const Dept = z.object({ name: z.string().trim().min(2, 'the department name').max(60), managerId: Uuid.nullish() });
+  const Dept = z.object({ name: z.string().trim().min(2, 'the department name').max(60), managerId: Uuid.nullish(), active: z.boolean().optional() });
   async function checkManager(c: Q, managerId: string | null | undefined) {
     if (!managerId) return;
     const m = (await c.query("SELECT login_level FROM users WHERE id = $1 AND status <> 'left'", [managerId])).rows[0];
@@ -72,8 +77,11 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
     const b = parse(Dept, req.body);
     return tx(req.db, async c => {
       await checkManager(c, b.managerId);
-      if ((await c.query('SELECT 1 FROM departments WHERE lower(name) = lower($1)', [b.name])).rowCount) throw new Refused(409, [`there is already a ${b.name} department`]);
-      const d = (await c.query('INSERT INTO departments (name) VALUES ($1) RETURNING id', [b.name])).rows[0];
+      const same = (await c.query('SELECT id, active FROM departments WHERE lower(name) = lower($1)', [b.name])).rows[0];
+      if (same?.active) throw new Refused(409, [`there is already a ${b.name} department`]);
+      // Switched off before: switch it back on (with its van stock list).
+      const d = same ? (await c.query('UPDATE departments SET active = true WHERE id = $1 RETURNING id', [same.id])).rows[0]
+        : (await c.query('INSERT INTO departments (name) VALUES ($1) RETURNING id', [b.name])).rows[0];
       if (b.managerId) await makeManager(c, b.managerId, d.id);
       await audit(c, req.actor.id, 'department_created', 'department', d.id, b);
       if (b.managerId) await notify(c, b.managerId, 'department', `You manage the ${b.name} department.`);
@@ -86,11 +94,19 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
     const id = parse(Uuid, req.params.id);
     const b = parse(Dept.partial(), req.body);
     return tx(req.db, async c => {
-      const d = (await c.query('SELECT name, manager_id FROM departments WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      const d = (await c.query('SELECT name, manager_id, active FROM departments WHERE id = $1 FOR UPDATE', [id])).rows[0];
       if (!d) throw new Refused(404, ['no such department']);
+      if (b.active === false && d.active) {
+        // Off only once nobody works in it: they are moved first, so nobody is left without a department by surprise.
+        const n = (await c.query("SELECT count(*)::int AS n FROM users WHERE department_id = $1 AND status <> 'left'", [id])).rows[0].n;
+        if (n || d.manager_id) throw new Refused(409, [`move everyone in ${d.name} (${Math.max(n, 1)} ${Math.max(n, 1) === 1 ? 'person' : 'people'}) to another department first`]);
+        if (b.managerId) throw new Refused(409, ['a switched-off department has no manager']);
+      }
+      if (b.active === undefined && !d.active && b.managerId) throw new Refused(409, [`switch ${d.name} on first`]);
       await checkManager(c, b.managerId);
       if (b.name && (await c.query('SELECT 1 FROM departments WHERE lower(name) = lower($1) AND id <> $2', [b.name, id])).rowCount) throw new Refused(409, [`there is already a ${b.name} department`]);
       if (b.name) await c.query('UPDATE departments SET name = $2 WHERE id = $1', [id, b.name]);
+      if (b.active !== undefined) await c.query('UPDATE departments SET active = $2 WHERE id = $1', [id, b.active]);
       let replaced: string | null = null;
       if (b.managerId) replaced = await makeManager(c, b.managerId, id);
       else if (b.managerId === null && d.manager_id) {
@@ -112,8 +128,9 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
     return tx(req.db, async c => {
       const u = (await c.query("SELECT u.full_name, u.login_level, d.name AS dept FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.id = $1 AND u.status <> 'left'", [id])).rows[0];
       if (!u) throw new Refused(404, ['no such person']);
-      const d = b.departmentId ? (await c.query('SELECT d.name, m.full_name AS manager FROM departments d LEFT JOIN users m ON m.id = d.manager_id WHERE d.id = $1', [b.departmentId])).rows[0] : null;
+      const d = b.departmentId ? (await c.query('SELECT d.name, d.active, m.full_name AS manager FROM departments d LEFT JOIN users m ON m.id = d.manager_id WHERE d.id = $1', [b.departmentId])).rows[0] : null;
       if (b.departmentId && !d) throw new Refused(404, ['no such department']);
+      if (d && !d.active) throw new Refused(409, [`${d.name} is switched off: switch it on under Departments first`]);
       let replaced: string | null = null;
       if (u.login_level === 'management') {
         if (b.departmentId) replaced = await makeManager(c, id, b.departmentId);
@@ -137,7 +154,7 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
     return tx(req.db, async c => {
       const depts = (await c.query(
         `SELECT d.id, d.name, m.full_name AS manager FROM departments d LEFT JOIN users m ON m.id = d.manager_id
-          WHERE $1::boolean OR d.id = ANY($2) ORDER BY (d.id = ANY($2)) DESC, d.name`, [all, scope === 'all' ? [] : scope ?? []])).rows;
+          WHERE d.active AND ($1::boolean OR d.id = ANY($2)) ORDER BY (d.id = ANY($2)) DESC, d.name`, [all, scope === 'all' ? [] : scope ?? []])).rows;
       const out = [];
       for (const d of depts) {
         const lines = await listOf(c, d.id);

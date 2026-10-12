@@ -127,7 +127,7 @@ export class DemoStock {
     // Older saved demos: add the tools and PPE.
     if (!s.items.some(i => i.category === 'ppe')) { s.items.push(...KIT_ITEMS.filter(k => !s.items.some(i => i.id === k.id))); Object.assign(s.stockroom, KIT_STOCK); }
     s.kit ??= seedKit();
-    // Sipho's van is complete against the Refrigeration van stock list.
+    // Sipho's van is complete against the Foodservice van stock list.
     if (!s.vanSeeded) {
       s.holdings.push(...[['st-1', 2], ['st-2', 2], ['st-5', 1], ['st-6', 2]].map(([id, qty]) => ({ stockItemId: id as string, holdingJobId: null, qty: qty as number, tech: 'Sipho Ndlovu' })));
       s.vanSeeded = true;

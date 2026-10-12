@@ -39,7 +39,8 @@ export function TesterBar() {
   };
   return (
     <View>
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#0B0C0E', borderBottomWidth: 1, borderBottomColor: C.line, flexWrap: 'nowrap' }}>
+    {/* On a small phone the buttons wrap onto a second line, so every one stays on screen and taps land where they look. */}
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#0B0C0E', borderBottomWidth: 1, borderBottomColor: C.line, flexWrap: narrow ? 'wrap' : 'nowrap', overflow: 'hidden' }}>
       {!narrow ? <Text style={{ color: C.quiet, fontSize: 12, fontWeight: '700', marginRight: 4 }}>VIEW AS</Text> : null}
       {ROLES.map(r => {
         const on = current === r.level;
@@ -50,7 +51,7 @@ export function TesterBar() {
           </Pressable>
         );
       })}
-      <View style={{ flex: 1 }} />
+      {!narrow ? <View style={{ flex: 1 }} /> : null}
       <Pressable onPress={() => s.signOut()} accessibilityRole="button" accessibilityLabel="Back to the test guide" style={{ paddingHorizontal: 8, paddingVertical: 6 }}>
         <Text style={{ color: C.quiet, fontSize: 13, textDecorationLine: 'underline' }}>Guide</Text>
       </Pressable>

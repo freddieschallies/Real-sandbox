@@ -220,12 +220,14 @@ export class DemoTransport implements Transport {
   /** Daily timesheets: the technician's own, and HR's export. */
   private timesRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
-    if (!(p === '/me/timesheets' || p.startsWith('/me/timesheets/') || p === '/timesheets' || p === '/timesheets/settings')) return null;
+    if (!(p === '/me/timesheets' || p.startsWith('/me/timesheets/') || p === '/timesheets' || p === '/timesheets/settings' || /^\/timesheets\/[^/]+\/\d{4}-\d{2}-\d{2}\/fill$/.test(p))) return null;
     const t = this.times();
     const save = (r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }) => { this.persist(this.state); return r.ok ? ok(r.body) : refuse(r.status, ...r.reasons); };
     if (p === '/me/timesheets') { if (this.who.level !== 'technician') return ok({ due: [], recent: [], explainFromMin: 30 }); const r = t.mine(this.who.id); this.persist(this.state); return ok(r); }
     if ((m = p.match(/^\/me\/timesheets\/(\d{4}-\d{2}-\d{2})\/submit$/))) return this.who.level === 'technician' ? save(t.submit(this.who.id, m[1], b)) : refuse(403, 'timesheets are for technicians');
     if ((m = p.match(/^\/me\/timesheets\/(\d{4}-\d{2}-\d{2})$/))) return ok(t.sheet(this.who.id, m[1]));
+    const ceo = ['director', 'creator'].includes(this.office().levelOf(this.who.id) ?? this.who.level);
+    if ((m = p.match(/^\/timesheets\/([^/]+)\/(\d{4}-\d{2}-\d{2})\/fill$/))) return ceo ? save(t.fill(m[1], m[2], this.who.name)) : refuse(403, "only the CEO fills in a technician's timesheet");
     // HR (everyone) or a department manager (his own technicians).
     const all = this.does('hr') || ['director', 'creator'].includes(this.who.level);
     if (p === '/timesheets/settings') {
@@ -245,7 +247,7 @@ export class DemoTransport implements Transport {
       .sort((a, c) => (v.deptOf(a.id)?.name ?? '~').localeCompare(v.deptOf(c.id)?.name ?? '~') || a.full_name.localeCompare(c.full_name))
       .map(x => ({ id: x.id, department: v.deptOf(x.id)?.name ?? null }));
     if (q.get('userId') && !techs.length) return refuse(403, 'not one of your technicians');
-    return save(t.exportFor(from, to, techs));
+    return save(t.exportFor(from, to, techs, ceo));
   }
 
   /** Departments and van stock lists. */
