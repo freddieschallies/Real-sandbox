@@ -2,7 +2,7 @@
 // when their phone is off or broken.
 import React, { useMemo, useState } from 'react';
 import { Linking, Pressable, ScrollView, Text, View } from 'react-native';
-import Svg, { Circle, Line, Rect, Text as SvgText } from 'react-native-svg';
+import { AreaMap, nearest as nearestPlace, type MapPin } from '../map/AreaMap.tsx';
 import { useStore } from '../state.tsx';
 import { nowIso } from '../device.ts';
 import * as F from '../../../server/src/core/fleet.ts';
@@ -183,63 +183,12 @@ export function BookingScreen({ id, f, open, done }: { id: string; f: FleetHook;
 
 // ---- Map -------------------------------------------------------------------------------------
 
-/** Places to find your way on the map. */
-const LANDMARKS: { name: string; lat: number; lng: number }[] = [
-  { name: 'Office yard (Alton)', lat: -28.7499, lng: 32.0507 },
-  { name: 'Richards Bay CBD', lat: -28.7606, lng: 32.0420 },
-  { name: 'Meerensee', lat: -28.7743, lng: 32.0789 },
-  { name: 'Harbour', lat: -28.7990, lng: 32.0720 },
-  { name: 'Empangeni', lat: -28.7621, lng: 31.8932 },
-  { name: 'Esikhawini', lat: -28.8710, lng: 31.9150 },
-];
-/** The main road from Empangeni to Richards Bay, roughly. */
-const ROAD: [number, number][] = [[-28.7621, 31.8932], [-28.7560, 31.9500], [-28.7520, 32.0000], [-28.7499, 32.0507], [-28.7606, 32.0420], [-28.7743, 32.0789]];
-
-/** Richards Bay itself; vehicles outside it are listed under the map. */
-const TOWN = { s: -28.812, n: -28.738, w: 32.018, e: 32.098 };
-const inTown = (lat: number, lng: number) => lat >= TOWN.s && lat <= TOWN.n && lng >= TOWN.w && lng <= TOWN.e;
-
 const pinColour = (p: Position) => (p.minutesAgo == null || p.minutesAgo > 60 ? C.quiet : p.status === 'off_road' ? C.bad : p.status === 'workshop' ? C.warn : C.good);
 
 export function FleetMap({ f, open }: { f: FleetHook; open: Open }) {
-  const [w, setW] = useState(0);
   const [picked, setPicked] = useState<string>();
-  const [zoom, setZoom] = useState<'town' | 'all'>('town');
   const pts = f.d.positions;
-  const h = Math.max(260, Math.min(460, w * 0.85));
-  const fixed = pts.filter(p => p.lat != null && p.lng != null);
-  const shown = zoom === 'all' ? fixed : fixed.filter(p => inTown(p.lat!, p.lng!));
-  const outside = fixed.filter(p => !shown.includes(p));
-  const marks = zoom === 'all' ? LANDMARKS : LANDMARKS.filter(l => inTown(l.lat, l.lng));
-
-  // Fit what is shown, keeping the shape right (a degree of longitude is shorter here).
-  const proj = useMemo(() => {
-    const lats = zoom === 'all' ? [...fixed.map(p => p.lat!), ...LANDMARKS.map(l => l.lat)] : [TOWN.s, TOWN.n];
-    const lngs = zoom === 'all' ? [...fixed.map(p => p.lng!), ...LANDMARKS.map(l => l.lng)] : [TOWN.w, TOWN.e];
-    const pad = zoom === 'all' ? 0.012 : 0.002;
-    let [s0, n0, w0, e0] = [Math.min(...lats) - pad, Math.max(...lats) + pad, Math.min(...lngs) - pad, Math.max(...lngs) + pad];
-    const k = Math.cos((s0 + n0) / 2 * Math.PI / 180);
-    const spanX = (e0 - w0) * k, spanY = n0 - s0;
-    const ratio = w / h;
-    if (spanX / spanY > ratio) { const extra = (spanX / ratio - spanY) / 2; s0 -= extra; n0 += extra; }
-    else { const extra = (spanY * ratio - spanX) / 2 / k; w0 -= extra; e0 += extra; }
-    return (lat: number, lng: number) => ({ x: (lng - w0) / (e0 - w0) * w, y: (n0 - lat) / (n0 - s0) * h });
-  }, [fixed.map(p => `${p.lat},${p.lng}`).join('|'), w, h, zoom]);
-
-  // Labels step down when vehicles stand close together, and flip left at the right edge.
-  const pins = useMemo(() => {
-    const placed: { x: number; y: number }[] = [];
-    return shown.map(p => proj(p.lat!, p.lng!)).map((xy, i) => {
-      // Try right, left, below, above the pin; only stack down if all four are taken.
-      const spots = [[xy.x + 12, xy.y - 9], [xy.x - 92, xy.y - 9], [xy.x - 40, xy.y + 12], [xy.x - 40, xy.y - 30]].filter(([x]) => x >= 0 && x + 86 <= w);
-      const free = (x: number, y: number) => !placed.some(q => Math.abs(q.x - x) < 86 && Math.abs(q.y - y) < 18);
-      let [lx, ly] = spots.find(([x, y]) => free(x, y)) ?? spots[0] ?? [xy.x + 12, xy.y - 9];
-      while (!free(lx, ly)) ly += 18;
-      placed.push({ x: lx, y: ly });
-      return { p: shown[i], ...xy, lx, ly };
-    });
-  }, [proj, shown.map(p => p.id).join()]);
-
+  const pins: MapPin[] = pts.filter(p => p.lat != null && p.lng != null).map(p => ({ id: p.id, lat: p.lat!, lng: p.lng!, label: p.registration, colour: pinColour(p), accessibilityLabel: `Map pin ${p.registration}` }));
   const sel = pts.find(p => p.id === picked);
   const moving = pts.filter(p => p.ignition).length;
   const stale = pts.filter(p => p.minutesAgo == null || p.minutesAgo > 60).length;
@@ -251,51 +200,7 @@ export function FleetMap({ f, open }: { f: FleetHook; open: Open }) {
         <Card style={{ flex: 1 }}><Label>Parked</Label><Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>{pts.length - moving - stale}</Text></Card>
         <Card style={{ flex: 1, borderColor: stale ? C.warn : C.line }}><Label>No signal</Label><Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>{stale}</Text></Card>
       </View>
-      <Choice options={['town', 'all'] as const} value={zoom} onChange={setZoom} labels={{ town: 'Richards Bay', all: 'Whole area' }} />
-      <View onLayout={e => setW(e.nativeEvent.layout.width)} style={{ height: h, borderRadius: S.radius, overflow: 'hidden', backgroundColor: '#1D2B3A', borderWidth: 1, borderColor: C.line }}
-        accessibilityLabel="Map of the vehicles">
-        {w > 0 ? (
-          <>
-            <Svg width={w} height={h} pointerEvents="none">
-              <Rect x={0} y={0} width={w} height={h} fill="#1D2B3A" />
-              {ROAD.slice(1).map((pt, i) => {
-                const a = proj(ROAD[i][0], ROAD[i][1]), b = proj(pt[0], pt[1]);
-                return <Line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#4A5A6E" strokeWidth={4} strokeLinecap="round" />;
-              })}
-              {marks.map(l => {
-                const p = proj(l.lat, l.lng);
-                return (
-                  <React.Fragment key={l.name}>
-                    <Rect x={p.x - 3} y={p.y - 3} width={6} height={6} fill="#8FA3B8" />
-                    <SvgText x={p.x + 6} y={p.y + 16} fill="#8FA3B8" fontSize={11}>{l.name}</SvgText>
-                  </React.Fragment>
-                );
-              })}
-              {sel && sel.lat != null && shown.includes(sel) ? (() => { const p = proj(sel.lat, sel.lng!); return <Circle cx={p.x} cy={p.y} r={18} fill="none" stroke="#FFFFFF" strokeWidth={2} />; })() : null}
-            </Svg>
-            {pins.map(({ p, x, y, lx, ly }) => (
-              <React.Fragment key={p.id}>
-                <Pressable onPress={() => setPicked(p.id)} accessibilityRole="button" accessibilityLabel={`Map pin ${p.registration}`} hitSlop={10}
-                  style={{ position: 'absolute', left: x - 10, top: y - 10, width: 20, height: 20, borderRadius: 10, backgroundColor: pinColour(p), borderWidth: 2, borderColor: picked === p.id ? '#FFFFFF' : '#0E141B' }} />
-                <Pressable onPress={() => setPicked(p.id)} accessibilityElementsHidden importantForAccessibility="no"
-                  style={{ position: 'absolute', left: lx, top: ly, backgroundColor: picked === p.id ? '#FFFFFF' : 'rgba(14,20,27,0.85)', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
-                  <Text style={{ color: picked === p.id ? '#0E141B' : '#FFFFFF', fontSize: 11, fontWeight: '800' }}>{p.registration}</Text>
-                </Pressable>
-              </React.Fragment>
-            ))}
-          </>
-        ) : null}
-      </View>
-      {outside.length ? (
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-          <Text style={st.small}>Out of town:</Text>
-          {outside.map(p => (
-            <Pressable key={p.id} onPress={() => setPicked(p.id)} accessibilityRole="button" style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, backgroundColor: C.panel2 }}>
-              <Text style={{ color: C.text, fontWeight: '700' }}>{p.registration} · {nearest(p)}</Text>
-            </Pressable>
-          ))}
-        </View>
-      ) : null}
+      <AreaMap pins={pins} picked={picked} onPick={setPicked} label="Map of the vehicles" />
       <Text style={st.small}>Green: in service · amber: workshop · red: off the road · grey: no tracker signal for an hour. Tap a vehicle.</Text>
 
       {sel ? <PinCard p={sel} open={open} /> : null}
@@ -315,12 +220,7 @@ export function FleetMap({ f, open }: { f: FleetHook; open: Open }) {
   );
 }
 
-function nearest(p: Position) {
-  if (p.lat == null || p.lng == null) return 'unknown';
-  let best = LANDMARKS[0], dist = Infinity;
-  for (const l of LANDMARKS) { const d = (l.lat - p.lat) ** 2 + ((l.lng - p.lng) * 0.88) ** 2; if (d < dist) { dist = d; best = l; } }
-  return best.name;
-}
+const nearest = (p: Position) => nearestPlace(p.lat, p.lng);
 
 function PinCard({ p, open }: { p: Position; open: Open }) {
   return (

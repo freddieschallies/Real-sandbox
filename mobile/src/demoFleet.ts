@@ -104,7 +104,7 @@ function seedSpots(): NonNullable<DemoFleetState['spots']> {
   const at = new Date(Date.now() - 3 * 60_000).toISOString();
   return {
     'veh-1': { lat: -28.7499, lng: 32.0507, moving: false, at },       // office yard, Alton
-    'veh-2': { lat: -28.7735, lng: 32.0795, moving: true, at },        // near Meerensee
+    'veh-2': { lat: -28.8702, lng: 31.9122, moving: false, at },       // parked at Boxer Esikhawini (Sipho's job)
     'veh-3': { lat: -28.7470, lng: 32.0455, moving: false, at },       // workshop
     'veh-4': { lat: -28.7535, lng: 32.0395, moving: false, at: new Date(Date.now() - 9 * 86_400_000).toISOString() },
     'veh-5': { lat: -28.7640, lng: 31.9050, moving: true, at },        // on the road to Empangeni

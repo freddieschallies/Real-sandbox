@@ -42,6 +42,7 @@ const STEPS: [string, string[]][] = [
   ]],
   ['As department manager (Pieter)', [
     'He runs the Refrigeration department: Thabo, Sipho and Nomvula work under him. He assigns jobs, checks job cards and answers flags for his technicians; quotes, invoices and the stockroom only if the CEO adds them.',
+    'Team map: where Thabo, Sipho and Nomvula are right now (on site, driving, parked), with the vehicle, the job and who they are with. Tap a name for "Open in Maps" or the profile. Ayanda is in Plumbing, so he is not on Pieter\'s map; the CEO sees everyone.',
     'Van stock: his department\'s list of spares every technician must carry. Thabo and Nomvula are short (flagged); Sipho is complete. Add an item or raise a quantity and see who goes short; every change is kept.',
     'Flags: a van that is short of the list stays flagged until the stockroom tops it up, then closes by itself.',
   ]],

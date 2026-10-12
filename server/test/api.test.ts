@@ -1253,6 +1253,18 @@ test('department managers: techs under them, the van stock list they set, vans s
   assert.equal((await call('director', 'GET', `/people/${ids.tech}`)).body.manager, 'manager');
   await call('manager', 'PUT', `/van-stock/departments/${ids.dept}/items/${fuse}`, { qty: 0 });
   assert.equal((await openFlag(ids.tech)).length, 0, 'off the list: complete');
+
+  // His team on a map: only the technicians under him.
+  await call('director', 'PUT', `/access/users/${ids.tech2}/department`, { departmentId: plumbing.body.id });
+  const map = (await call('manager', 'GET', '/team/map')).body;
+  assert.equal(map.all, false);
+  assert.ok(map.technicians.some((t: { id: string }) => t.id === ids.tech), 'his technician');
+  assert.ok(!map.technicians.some((t: { id: string }) => t.id === ids.tech2), 'not another department\'s');
+  assert.ok('location' in map.technicians[0].now && 'vehicle' in map.technicians[0].now);
+  assert.ok((await call('director', 'GET', '/team/map')).body.technicians.some((t: { id: string }) => t.id === ids.tech2), 'the CEO sees everyone');
+  assert.equal((await call('stock', 'GET', '/team/map')).status, 403);
+  assert.equal((await call('tech', 'GET', '/team/map')).status, 403);
+  await call('director', 'PUT', `/access/users/${ids.tech2}/department`, { departmentId: ids.dept });
 });
 
 test('fuel: slip required, logged against the vehicle, impossible litres flagged', async () => {

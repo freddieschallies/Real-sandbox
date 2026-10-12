@@ -207,7 +207,7 @@ export class DemoTransport implements Transport {
   /** Departments and van stock lists. */
   private vanRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
-    if (!(p.startsWith('/departments') || p.startsWith('/van-stock') || p === '/me/van' || /^\/access\/users\/[^/]+\/department$/.test(p))) return null;
+    if (!(p.startsWith('/departments') || p.startsWith('/van-stock') || p === '/me/van' || p === '/team/map' || /^\/access\/users\/[^/]+\/department$/.test(p))) return null;
     const v = this.vans();
     const office = ['admin', 'management', 'director', 'creator'].includes(this.who.level);
     const stockroom = this.does('stockroom');
@@ -216,6 +216,23 @@ export class DemoTransport implements Transport {
     const mine = this.who.level === 'management' ? [v.v.memberOf[this.who.id]].filter(Boolean) as string[] : null;
     const editable = (d: string) => this.does('vanstock') && (mine ? mine.includes(d) : true);
     if (p === '/me/van') return ok(v.report(this.who.id));
+    if (p === '/team/map') {
+      const all = ['director', 'creator'].includes(this.who.level) || (this.who.level !== 'management' && this.does('flags'));
+      if (!all && this.who.level !== 'management') return refuse(403, 'you have no team on the map');
+      const deptIds = all ? null : [...new Set([...v.manages(this.who.id), v.v.memberOf[this.who.id]].filter(Boolean) as string[])];
+      const o = this.office(); const f = this.fleet(); const spots = f.positions(); const crew = f.technicians(this.thaboIn());
+      const techs = o.o.people.filter(x => x.login_level === 'technician' && (all || deptIds!.includes(v.v.memberOf[x.id] ?? '')))
+        .sort((a, c) => (v.deptOf(a.id)?.name ?? '~').localeCompare(v.deptOf(c.id)?.name ?? '~') || a.full_name.localeCompare(c.full_name));
+      const flags = { record: { read: false, write: false }, kit: { read: false, write: false } };
+      return ok({
+        all, departments: all ? [...new Set(techs.map(t => v.deptOf(t.id)?.name).filter(Boolean))] : deptIds!.map(id => v.dept(id)!.name),
+        technicians: techs.map(t => {
+          const pr = o.profile(t.id, false, flags, crew, x => spots.find(y => y.id === x) ?? null);
+          const b = (pr.ok ? pr.body : {}) as { tradeLabel?: string | null; photo_id?: string | null; now?: unknown };
+          return { id: t.id, full_name: t.full_name, tradeLabel: b.tradeLabel ?? null, department: v.deptOf(t.id)?.name ?? null, photo_id: b.photo_id ?? null, now: b.now };
+        }),
+      });
+    }
     if (p === '/departments' && req.method === 'GET') return office || stockroom ? ok(v.departments(manages)) : refuse(403, 'departments are not part of your work');
     if (p === '/departments' || (m = p.match(/^\/departments\/([^/]+)$/))) {
       if (!manages) return refuse(403, 'only whoever manages access sets up departments');

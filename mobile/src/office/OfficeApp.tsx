@@ -11,13 +11,14 @@ import { TITLE as FLAG_TITLE } from '../screens/Flags.tsx';
 import type { CardView } from '../types.ts';
 import { KitCard, StaffRecord } from '../staff/Staff.tsx';
 import { DepartmentCard, VanCard, VanLists } from '../vanstock/VanStock.tsx';
+import { TeamMap } from '../team/TeamMap.tsx';
 import { Avatar, ProfileDetails, ProfileTop, useProfile } from './Profile.tsx';
 import { Accounts, InvoiceDetail, InvoiceList, NewQuote, QuoteDetail, QuoteList, useBooks } from './Books.tsx';
 import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries.tsx';
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 
 const K = { band: '#121212', bandText: '#F7F3EC', stripe: '#E8701A' };
-type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'vans' | 'people' | 'stores';
+type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'people' | 'stores';
 type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
@@ -65,6 +66,7 @@ export function OfficeApp() {
       { key: 'flags' as Tab, label: 'Flags', count: ov?.flags?.unresolved },
       { key: 'handovers' as Tab, label: 'Handovers', short: 'Approve', count: ov?.handoversAwaitingApproval },
     ] : []),
+    ...(does('flags') || s.session?.user.level === 'management' ? [{ key: 'map' as Tab, label: 'Team map', short: 'Map' }] : []),
     ...(does('vanstock') ? [{ key: 'vans' as Tab, label: 'Van stock', short: 'Vans' }] : []),
     ...(canPeople ? [{ key: 'people' as Tab, label: 'People' }] : []),
     { key: 'stores', label: 'Stores' },
@@ -80,6 +82,7 @@ export function OfficeApp() {
       {tab === 'accounts' ? <Accounts b={books} canPrices={does('prices')} /> : null}
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
       {tab === 'handovers' ? <HandoverList o={o} open={id => setSel({ kind: 'handover', id })} /> : null}
+      {tab === 'map' ? <TeamMap openPerson={canPeople ? id => { setTab('people'); setSel({ kind: 'person', id }); } : undefined} /> : null}
       {tab === 'vans' ? <VanLists openTech={id => setSel({ kind: 'van', id })} /> : null}
       {tab === 'people' ? <PeopleList o={o} open={id => setSel({ kind: 'person', id })} /> : null}
       {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
@@ -138,8 +141,8 @@ export function OfficeApp() {
               </Pressable>
             ))}
           </View>
-          <View style={{ width: tab === 'today' || tab === 'accounts' ? undefined : 460, flex: tab === 'today' || tab === 'accounts' ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
-          {tab !== 'today' && tab !== 'accounts' ? <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}</View> : null}
+          <View style={{ width: tab === 'today' || tab === 'accounts' || tab === 'map' ? undefined : 460, flex: tab === 'today' || tab === 'accounts' || tab === 'map' ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
+          {tab !== 'today' && tab !== 'accounts' && tab !== 'map' ? <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}</View> : null}
         </View>
       </View>
     );
