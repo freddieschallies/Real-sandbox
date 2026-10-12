@@ -202,6 +202,7 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
     const b = parse(z.object({
       id: Uuid.optional(), jobType: z.enum(F.JOB_TYPES as [F.FleetJobType, ...F.FleetJobType[]]), reason: z.string().trim().min(5).max(1000),
       odometerIn: z.number().int().min(0), faultIds: z.array(Uuid).max(50).default([]), vehicleStatus: z.enum(['workshop', 'off_road', 'in_service']).default('workshop'), at: Iso,
+      bookingId: Uuid.optional(),
     }), req.body);
     const me = req.actor.id;
     const out = await tx(req.db, async c => {
@@ -214,6 +215,10 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
         'INSERT INTO fleet_jobs (id, vehicle_id, job_type, reason, opened_by, opened_at, odometer_in) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING number',
         [id, vehicleId, b.jobType, b.reason, me, b.at, b.odometerIn])).rows[0].number;
       await recordKm(c, vehicleId, b.odometerIn, b.at, 'fleet_job', id, me);
+      if (b.bookingId) {
+        const r = await c.query("UPDATE fleet_bookings SET status = 'started', fleet_job_id = $2 WHERE id = $1 AND vehicle_id = $3 AND status = 'booked'", [b.bookingId, id, vehicleId]);
+        if (!r.rowCount) throw new Refused(409, ['that booking is not open for this vehicle']);
+      }
       for (const f of b.faultIds) {
         const r = await c.query("UPDATE vehicle_faults SET status = 'in_progress', fleet_job_id = $2 WHERE id = $1 AND vehicle_id = $3 AND status IN ('open', 'deferred') RETURNING id", [f, id, vehicleId]);
         if (!r.rowCount) throw new Refused(409, ['a chosen fault is not open on this vehicle']);
@@ -335,6 +340,160 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
       return { id, status: 'completed' };
     });
   });
+
+  // ---- Bookings: vehicles booked in for a service or repair -----------------------------
+
+  app.get('/fleet/bookings', async req => {
+    viewer(req);
+    const { rows } = await req.db.query(
+      `SELECT b.id, b.vehicle_id, v.registration, b.job_type, to_char(b.booked_for, 'YYYY-MM-DD') AS booked_for, b.time_slot, b.place, b.reason,
+              b.status, b.booked_at, u.full_name AS booked_by, b.fleet_job_id, b.cancelled_note,
+              (SELECT u2.full_name FROM vehicle_scans s JOIN users u2 ON u2.id = s.user_id
+                WHERE s.vehicle_id = v.id AND s.mode = 'driving' AND s.released_at IS NULL ORDER BY s.scanned_at DESC LIMIT 1) AS driver
+         FROM fleet_bookings b JOIN vehicles v ON v.id = b.vehicle_id JOIN users u ON u.id = b.booked_by
+        WHERE b.status = 'booked' OR b.booked_for >= current_date - 7
+        ORDER BY (b.status = 'booked') DESC, b.booked_for, b.time_slot`,
+    );
+    return rows;
+  });
+
+  app.post('/fleet/vehicles/:id/bookings', async (req: FastifyRequest<{ Params: { id: string } }>, reply) => {
+    mechanic(req);
+    const vehicleId = parse(Uuid, req.params.id);
+    const b = parse(z.object({
+      id: Uuid.optional(), jobType: z.enum(F.JOB_TYPES as [F.FleetJobType, ...F.FleetJobType[]]), bookedFor: DateOnly,
+      timeSlot: z.enum(['morning', 'afternoon', 'all_day']).default('morning'), place: z.string().trim().min(2).max(200).default('Own workshop'),
+      reason: z.string().trim().min(5).max(1000), at: Iso,
+    }), req.body);
+    if (b.bookedFor < today()) throw new Refused(409, ['a booking cannot be in the past']);
+    const out = await tx(req.db, async c => {
+      const v = (await c.query('SELECT registration FROM vehicles WHERE id = $1', [vehicleId])).rows[0];
+      if (!v) throw new Refused(404, ['no such vehicle']);
+      const clash = (await c.query("SELECT to_char(booked_for, 'YYYY-MM-DD') AS d FROM fleet_bookings WHERE vehicle_id = $1 AND status = 'booked'", [vehicleId])).rows[0];
+      if (clash) throw new Refused(409, [`${v.registration} is already booked for ${clash.d}: move that booking instead`]);
+      const id = b.id ?? randomUUID();
+      await c.query(
+        'INSERT INTO fleet_bookings (id, vehicle_id, job_type, booked_for, time_slot, place, reason, booked_by, booked_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+        [id, vehicleId, b.jobType, b.bookedFor, b.timeSlot, b.place, b.reason, req.actor.id, b.at]);
+      await tellDriverAndManager(c, vehicleId, `${v.registration} is booked in for ${b.jobType} on ${b.bookedFor} (${slotText(b.timeSlot)}) at ${b.place}: ${b.reason}`);
+      await audit(c, req.actor.id, 'fleet_booking', 'vehicle', vehicleId, b);
+      return { id };
+    });
+    return reply.code(201).send(out);
+  });
+
+  app.post('/fleet/bookings/:id/move', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    mechanic(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ bookedFor: DateOnly, timeSlot: z.enum(['morning', 'afternoon', 'all_day']).optional(), note: z.string().trim().min(5, 'say why it is moved').max(500) }), req.body);
+    if (b.bookedFor < today()) throw new Refused(409, ['a booking cannot be in the past']);
+    return tx(req.db, async c => {
+      const bk = (await c.query("SELECT b.vehicle_id, v.registration FROM fleet_bookings b JOIN vehicles v ON v.id = b.vehicle_id WHERE b.id = $1 AND b.status = 'booked' FOR UPDATE OF b", [id])).rows[0];
+      if (!bk) throw new Refused(409, ['only a booking that has not started can be moved']);
+      await c.query('UPDATE fleet_bookings SET booked_for = $2, time_slot = COALESCE($3, time_slot) WHERE id = $1', [id, b.bookedFor, b.timeSlot ?? null]);
+      await tellDriverAndManager(c, bk.vehicle_id, `${bk.registration}'s booking moved to ${b.bookedFor}: ${b.note}`);
+      await audit(c, req.actor.id, 'fleet_booking_moved', 'fleet_booking', id, b);
+      return { id, bookedFor: b.bookedFor };
+    });
+  });
+
+  app.post('/fleet/bookings/:id/cancel', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    mechanic(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ note: z.string().trim().min(5, 'say why it is cancelled').max(500) }), req.body);
+    return tx(req.db, async c => {
+      const bk = (await c.query("UPDATE fleet_bookings SET status = 'cancelled', cancelled_note = $2 WHERE id = $1 AND status = 'booked' RETURNING vehicle_id", [id, b.note])).rows[0];
+      if (!bk) throw new Refused(409, ['only a booking that has not started can be cancelled']);
+      const reg = (await c.query('SELECT registration FROM vehicles WHERE id = $1', [bk.vehicle_id])).rows[0].registration;
+      await tellDriverAndManager(c, bk.vehicle_id, `${reg}'s booking is cancelled: ${b.note}`);
+      return { id, status: 'cancelled' };
+    });
+  });
+
+  // ---- Where every vehicle is: the tracker's latest position ---------------------------------
+
+  app.get('/fleet/positions', async req => {
+    viewer(req);
+    const { rows } = await req.db.query(
+      `SELECT v.id, v.registration, v.status, p.lat, p.lng, p.speed_kmh, p.ignition, p.recorded_at,
+              (SELECT u.full_name FROM vehicle_scans s JOIN users u ON u.id = s.user_id
+                WHERE s.vehicle_id = v.id AND s.mode = 'driving' AND s.released_at IS NULL ORDER BY s.scanned_at DESC LIMIT 1) AS driver
+         FROM vehicles v
+         LEFT JOIN LATERAL (SELECT * FROM tracker_positions t WHERE t.vehicle_id = v.id ORDER BY t.recorded_at DESC LIMIT 1) p ON true
+        WHERE v.active ORDER BY v.registration`,
+    );
+    return rows.map(r => ({ ...r, minutesAgo: r.recorded_at ? Math.round((Date.now() - new Date(r.recorded_at).getTime()) / 60000) : null }));
+  });
+
+  // ---- Putting technicians in a vehicle when their phone is off or broken ----------------------
+
+  app.get('/fleet/technicians', async req => {
+    mechanic(req);
+    const { rows } = await req.db.query(
+      `SELECT u.id, u.full_name, s.mode, v.id AS vehicle_id, v.registration
+         FROM users u
+         LEFT JOIN LATERAL (SELECT * FROM vehicle_scans s WHERE s.user_id = u.id AND s.released_at IS NULL ORDER BY s.scanned_at DESC LIMIT 1) s ON true
+         LEFT JOIN vehicles v ON v.id = s.vehicle_id
+        WHERE u.login_level = 'technician' AND u.status = 'active' ORDER BY u.full_name`,
+    );
+    return rows;
+  });
+
+  app.post('/fleet/vehicles/:id/assign', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    mechanic(req);
+    const vehicleId = parse(Uuid, req.params.id);
+    const b = parse(z.object({
+      technicianId: Uuid, mode: z.enum(['driving', 'riding_along']), reason: z.string().trim().min(5, 'say why you are doing it for him (e.g. phone broken)').max(500),
+      km: z.number().int().min(0).optional(), at: Iso,
+    }), req.body);
+    const me = req.actor.id;
+    return tx(req.db, async c => {
+      const v = (await c.query('SELECT registration, status, status_note FROM vehicles WHERE id = $1 AND active FOR UPDATE', [vehicleId])).rows[0];
+      if (!v) throw new Refused(404, ['no such vehicle']);
+      const t = (await c.query("SELECT full_name FROM users WHERE id = $1 AND login_level = 'technician' AND status = 'active'", [b.technicianId])).rows[0];
+      if (!t) throw new Refused(404, ['no such technician']);
+      if (b.mode === 'driving') {
+        const ok = F.canDrive(v.status);
+        if (!ok.ok) throw new Refused(409, [ok.reason.replace('speak to the mechanic', 'put it back in service first')]);
+        if (b.km === undefined) throw new Refused(409, ['odometer reading (km), so the handover is on record']);
+        await recordKm(c, vehicleId, b.km, b.at, 'mechanic', null, me);
+      }
+      await c.query('UPDATE vehicle_scans SET released_at = $2 WHERE user_id = $1 AND released_at IS NULL', [b.technicianId, b.at]);
+      if (b.mode === 'driving') {
+        const prev = await c.query("UPDATE vehicle_scans SET released_at = $2 WHERE vehicle_id = $1 AND mode = 'driving' AND released_at IS NULL RETURNING user_id", [vehicleId, b.at]);
+        for (const p of prev.rows) await notify(c, p.user_id, 'vehicle_taken', `${t.full_name} was put in ${v.registration} by the mechanic`, { vehicleId });
+        await c.query('INSERT INTO tracker_driver_outbox (vehicle_id, driver_id) VALUES ($1, $2)', [vehicleId, b.technicianId]);
+      }
+      const scan = (await c.query(
+        `INSERT INTO vehicle_scans (vehicle_id, user_id, mode, reason, reason_note, scanned_at, assigned_by, assign_reason)
+         VALUES ($1, $2, $3, 'other', $4, $5, $6, $4) RETURNING id`,
+        [vehicleId, b.technicianId, b.mode, b.reason, b.at, me])).rows[0];
+      await notify(c, b.technicianId, 'vehicle_assigned', `The mechanic put you in ${v.registration} (${b.mode === 'driving' ? 'driving' : 'riding along'}): ${b.reason}`, { vehicleId });
+      await notify(c, await managerOf(c, b.technicianId), 'vehicle_assigned', `${t.full_name} was put in ${v.registration} by the mechanic: ${b.reason}`, { vehicleId });
+      await audit(c, me, 'vehicle_assigned', 'vehicle', vehicleId, { technicianId: b.technicianId, mode: b.mode, reason: b.reason });
+      return { scanId: scan.id, vehicle: v.registration, technician: t.full_name };
+    });
+  });
+
+  app.post('/fleet/technicians/:id/release', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    mechanic(req);
+    const techId = parse(Uuid, req.params.id);
+    const b = parse(z.object({ reason: z.string().trim().min(5).max(500), km: z.number().int().min(0).optional(), at: Iso }), req.body);
+    return tx(req.db, async c => {
+      const s = (await c.query('SELECT id, vehicle_id, mode FROM vehicle_scans WHERE user_id = $1 AND released_at IS NULL ORDER BY scanned_at DESC LIMIT 1 FOR UPDATE', [techId])).rows[0];
+      if (!s) throw new Refused(409, ['no vehicle is on his name']);
+      if (s.mode === 'driving') {
+        if (b.km === undefined) throw new Refused(409, ['odometer reading (km)']);
+        await recordKm(c, s.vehicle_id, b.km, b.at, 'release', s.id, req.actor.id);
+        await c.query('INSERT INTO tracker_driver_outbox (vehicle_id, driver_id) VALUES ($1, NULL)', [s.vehicle_id]);
+      }
+      await c.query("UPDATE vehicle_scans SET released_at = $2, release_km = $3, release_note = $4, release_place = 'other' WHERE id = $1", [s.id, b.at, b.km ?? null, `By the mechanic: ${b.reason}`]);
+      await notify(c, techId, 'vehicle_released', `The mechanic took the vehicle off your name: ${b.reason}`, { vehicleId: s.vehicle_id });
+      await audit(c, req.actor.id, 'vehicle_released_for', 'user', techId, { reason: b.reason });
+      return { released: true };
+    });
+  });
+
 }
 
 /** The vehicle's usual driver and his manager hear when it goes off the road or comes back. */
@@ -350,5 +509,7 @@ async function tellDriverAndManager(c: Q, vehicleId: string, msg: string) {
     }
   }
 }
+
+const slotText = (s: string) => (s === 'all_day' ? 'all day' : s);
 
 const toDate = (d: Date | string) => (typeof d === 'string' ? d.slice(0, 10) : new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10));

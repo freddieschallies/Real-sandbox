@@ -197,7 +197,9 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
       [me, today],
     );
     const vehicle = await req.db.query(
-      `SELECT v.id, v.registration, s.mode, s.scanned_at, s.dropped_off_at, i.status AS handover_status
+      `SELECT v.id, v.registration, s.mode, s.scanned_at, s.dropped_off_at, i.status AS handover_status, s.assigned_by IS NOT NULL AS assigned_by_mechanic,
+              (SELECT json_build_object('bookedFor', to_char(b.booked_for, 'YYYY-MM-DD'), 'timeSlot', b.time_slot, 'place', b.place, 'jobType', b.job_type, 'reason', b.reason)
+                 FROM fleet_bookings b WHERE b.vehicle_id = v.id AND b.status = 'booked' ORDER BY b.booked_for LIMIT 1) AS booking
          FROM vehicle_scans s JOIN vehicles v ON v.id = s.vehicle_id
          LEFT JOIN vehicle_inspections i ON i.id = s.inspection_id
         WHERE s.user_id = $1 AND s.released_at IS NULL ORDER BY s.scanned_at DESC LIMIT 1`,

@@ -664,6 +664,58 @@ test('a technician releases the vehicle from his name, with the km and where he 
   assert.equal((await call('tech2', 'GET', '/vehicles/lookup?barcode=RS-V1')).body.needsInspection, true, 'the next driver still inspects it');
 });
 
+test('the mechanic books vehicles in, sees where they are, and puts a technician in a vehicle when his phone is off', async () => {
+  const day = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
+  // Booking a vehicle in for a service.
+  assert.equal((await call('tech', 'POST', `/fleet/vehicles/${ids.v1}/bookings`, { jobType: 'service', bookedFor: day(3), reason: 'Due for a service', at: '2026-10-16T09:00:00+02:00' })).status, 403);
+  assert.equal((await call('mech', 'POST', `/fleet/vehicles/${ids.v1}/bookings`, { jobType: 'service', bookedFor: day(-1), reason: 'Due for a service', at: '2026-10-16T09:00:00+02:00' })).status, 409, 'not in the past');
+  const bk = await call('mech', 'POST', `/fleet/vehicles/${ids.v1}/bookings`, { jobType: 'service', bookedFor: day(3), timeSlot: 'afternoon', reason: 'Due for a service', at: '2026-10-16T09:00:00+02:00' });
+  assert.equal(bk.status, 201, JSON.stringify(bk.body));
+  assert.match((await call('mech', 'POST', `/fleet/vehicles/${ids.v1}/bookings`, { jobType: 'repair', bookedFor: day(4), reason: 'Another one', at: '2026-10-16T09:00:00+02:00' })).body.reasons[0], /already booked/);
+  assert.equal((await call('mech', 'POST', `/fleet/bookings/${bk.body.id}/move`, { bookedFor: day(5) })).status, 400, 'say why it moves');
+  assert.equal((await call('mech', 'POST', `/fleet/bookings/${bk.body.id}/move`, { bookedFor: day(5), note: 'Parts arrive later' })).status, 200);
+  const list = (await call('manager', 'GET', '/fleet/bookings')).body;
+  assert.equal(list[0].booked_for, day(5));
+  assert.equal(list[0].time_slot, 'afternoon');
+
+  // Where every vehicle is.
+  await db.query('INSERT INTO tracker_positions (vehicle_id, recorded_at, lat, lng, speed_kmh, ignition) VALUES ($1, now() - interval \'10 minutes\', -28.75, 32.05, 0, false), ($1, now() - interval \'2 minutes\', -28.78, 32.04, 45, true)', [ids.v1]);
+  const pos = (await call('mech', 'GET', '/fleet/positions')).body;
+  const p1 = pos.find((v: { id: string }) => v.id === ids.v1);
+  assert.equal(p1.lat, -28.78, 'latest position only');
+  assert.equal(p1.minutesAgo, 2);
+  assert.ok(pos.some((v: { lat: number | null }) => v.lat === null), 'vehicles without a tracker fix still listed');
+
+  // Tech's phone is broken: the mechanic puts him in the vehicle.
+  const techs = (await call('mech', 'GET', '/fleet/technicians')).body;
+  assert.ok(techs.some((t: { id: string; vehicle_id: string | null }) => t.id === ids.tech && t.vehicle_id === null));
+  assert.equal((await call('mech', 'POST', `/fleet/vehicles/${ids.v1}/assign`, { technicianId: ids.tech, mode: 'driving', reason: 'x', at: '2026-10-16T09:10:00+02:00' })).status, 400, 'a real reason');
+  assert.match((await call('mech', 'POST', `/fleet/vehicles/${ids.v1}/assign`, { technicianId: ids.tech, mode: 'driving', reason: 'His phone screen is broken', at: '2026-10-16T09:10:00+02:00' })).body.reasons[0], /odometer/);
+  const as = await call('mech', 'POST', `/fleet/vehicles/${ids.v1}/assign`, { technicianId: ids.tech, mode: 'driving', reason: 'His phone screen is broken', km: 88400, at: '2026-10-16T09:10:00+02:00' });
+  assert.equal(as.status, 200, JSON.stringify(as.body));
+  const today = (await call('tech', 'GET', '/me/today?date=2026-10-16')).body.vehicle;
+  assert.equal(today.registration, 'ND 412-778');
+  assert.equal(today.assigned_by_mechanic, true);
+  assert.equal(today.booking.bookedFor, day(5), 'the driver sees the booking');
+  assert.ok((await call('tech', 'GET', '/me/notifications')).body.some((n: { message: string }) => /mechanic put you in ND 412-778/.test(n.message)));
+  const out = await db.query('SELECT driver_id FROM tracker_driver_outbox WHERE vehicle_id = $1 ORDER BY created_at DESC LIMIT 1', [ids.v1]);
+  assert.equal(out.rows[0].driver_id, ids.tech, 'the tracker is told who drives');
+  assert.equal((await db.query('SELECT assign_reason FROM vehicle_scans WHERE id = $1', [as.body.scanId])).rows[0].assign_reason, 'His phone screen is broken');
+
+  // And takes it off his name again.
+  assert.equal((await call('mech', 'POST', `/fleet/technicians/${ids.tech}/release`, { reason: 'Back at the yard', at: '2026-10-16T16:00:00+02:00' })).status, 409, 'km needed');
+  assert.equal((await call('mech', 'POST', `/fleet/technicians/${ids.tech}/release`, { reason: 'Back at the yard', km: 88450, at: '2026-10-16T16:00:00+02:00' })).status, 200);
+  assert.equal((await call('tech', 'GET', '/me/today?date=2026-10-16')).body.vehicle, null);
+
+  // A booking turns into a job card.
+  const job = await call('mech', 'POST', `/fleet/vehicles/${ids.v1}/jobs`, { jobType: 'service', reason: 'Booked service', odometerIn: 88450, bookingId: bk.body.id, at: '2026-10-16T16:10:00+02:00' });
+  assert.equal(job.status, 201, JSON.stringify(job.body));
+  assert.equal((await call('mech', 'GET', '/fleet/bookings')).body.find((b: { id: string }) => b.id === bk.body.id).status, 'started');
+  assert.equal((await call('mech', 'POST', `/fleet/bookings/${bk.body.id}/cancel`, { note: 'Not needed now' })).status, 409, 'already started');
+  await db.query("UPDATE fleet_jobs SET status = 'completed', completed_at = now(), found = 'x', did = 'x', labour_hours = 1, odometer_out = 88450 WHERE id = $1", [job.body.id]).catch(() => undefined);
+  await db.query("UPDATE vehicles SET status = 'in_service' WHERE id = $1", [ids.v1]);
+});
+
 test('the CEO assigns each person a position; it takes effect at once and is logged', async () => {
   assert.equal((await call('manager', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'mechanic' })).status, 403, 'only whoever manages access');
   const list = (await call('director', 'GET', '/access/positions')).body;
