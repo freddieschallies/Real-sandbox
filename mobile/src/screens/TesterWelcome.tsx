@@ -22,6 +22,7 @@ const STEPS: [string, string[]][] = [
     'To receive: count and tick what Thabo sent back.',
     'Stock: the whole inventory by item or technician; Live: every movement as it happens; Issued register.',
     'Stock: three separate categories, Stock (parts for jobs), Tools and PPE. Technicians book only stock onto jobs. Change an item\'s category on the part screen.',
+    'People: open a technician to see his van against his department\'s list and put what is missing on his van in one go (Thabo is short of capacitors and a contactor). The flag closes when it is complete.',
     'People: open anyone to see their PPE, the stock they hold and their tools (names only, no personal details). Sipho\'s boots are due for replacement: issue him gloves from stock, take something back (it goes back into stock), or write it off as lost or damaged with a note.',
     'To order: fills by itself as items drop below their minimum (fuses and contactors are low). Mark one as ordered; receiving the delivery takes it off.',
     'Open a part (Stock → the part → Open part): add a photo of it, set its minimum and supplier, and see where it was last used.',
@@ -39,6 +40,11 @@ const STEPS: [string, string[]][] = [
     'Stock: his own workshop stock (oil, coolant, filters, pads). Dip the oil drum: a little short is allowed and recorded; a lot short goes to the office. Note a spill straight away. Parts on a job card can come from it.',
     'Techs: Thabo\'s phone is broken, so put him in a vehicle yourself (or take it off his name). Switch to Tech to see it on his My day.',
   ]],
+  ['As department manager (Pieter)', [
+    'He runs the Refrigeration department: Thabo, Sipho and Nomvula work under him. He assigns jobs, checks job cards and answers flags for his technicians; quotes, invoices and the stockroom only if the CEO adds them.',
+    'Van stock: his department\'s list of spares every technician must carry. Thabo and Nomvula are short (flagged); Sipho is complete. Add an item or raise a quantity and see who goes short; every change is kept.',
+    'Flags: a van that is short of the list stays flagged until the stockroom tops it up, then closes by itself.',
+  ]],
   ['As the office admin (Zanele)', [
     'She only sees the work the CEO switched on for her. By default: jobs, quotes and invoices, and stores.',
     'Invoices: two closed jobs are waiting. Make the invoice from the job card (labour from the job timers, call-out, parts), price the lines, send it, print it.',
@@ -55,6 +61,7 @@ const STEPS: [string, string[]][] = [
     'People: open a person for their picture, the vehicle they are in, where they are, the job they are busy with and who with, contact details, and (CEO only) personal details. A dropdown sets their position and a technician\'s trade.',
     'Staff record: on Ayanda\'s profile, add an issue or a warning (a warning needs the action taken and the reason). Delete one: it goes, but a line says who deleted a record and when. Give Zanele "Staff records (HR)" to let her do this too.',
     'Tools and PPE: each profile shows what the stockroom has on that person\'s name.',
+    'Departments: on a technician\'s profile choose which department (and manager) he works under; Ayanda is in Plumbing, which has no manager yet. On Pieter\'s profile make him manager of a department, or start a new one.',
     'Today: jobs, flags, handovers to approve, daily checks, safety faults and stock on one screen. Flags and Handovers: resolve and approve.',
   ]],
 ];
@@ -63,7 +70,7 @@ export function TesterWelcome() {
   const s = useStore();
   const [busy, setBusy] = useState<string | null>(null);
   const [reset, setReset] = useState(false);
-  const go = async (who: 'demo' | 'stock' | 'mech' | 'office' | 'admin') => { setBusy(who); await s.signIn('demo', '', who, 'demo'); setBusy(null); };
+  const go = async (who: 'demo' | 'stock' | 'mech' | 'office' | 'admin' | 'manager') => { setBusy(who); await s.signIn('demo', '', who, 'demo'); setBusy(null); };
   return (
     <Screen title="Real Sandbox" sub="Test drive · ZSP job cards and stock">
       <View style={{ gap: 6 }}>
@@ -73,6 +80,7 @@ export function TesterWelcome() {
       <Button label="Open as technician" onPress={() => go('demo')} busy={busy === 'demo'} />
       <Button label="Open as stock controller" kind="secondary" onPress={() => go('stock')} busy={busy === 'stock'} />
       <Button label="Open as mechanic" kind="secondary" onPress={() => go('mech')} busy={busy === 'mech'} />
+      <Button label="Open as department manager (Pieter)" kind="secondary" onPress={() => go('manager')} busy={busy === 'manager'} />
       <Button label="Open as office admin (Zanele)" kind="secondary" onPress={() => go('admin')} busy={busy === 'admin'} />
       <Button label="Open as CEO (Lilanie)" kind="secondary" onPress={() => go('office')} busy={busy === 'office'} />
       {STEPS.map(([title, lines]) => (

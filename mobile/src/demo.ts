@@ -3,6 +3,7 @@
 // feel in demo mode is what the technicians will get. Data is invented.
 import { DemoWorkshop, seedWorkshop, type DemoWorkshopState } from './demoWorkshop.ts';
 import { DemoDocs, seedDocs, type DemoDocsState } from './demoDocs.ts';
+import { DemoVan, seedVan, type DemoVanState } from './demoVan.ts';
 import { DemoOffice, seedOffice, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
@@ -28,6 +29,7 @@ export interface DemoState {
   /** The demo van: who drove it last and what the last handover recorded. */
   van?: { lastDriverMe: boolean; odometerKm: number; problems: H.CheckKey[] };
   stockControl?: DemoStockState;
+  vanStock?: DemoVanState;
   fleet?: DemoFleetState;
   who?: { id: string; name: string; level: string };
   fuel: { litres: number; at: string }[];
@@ -196,10 +198,44 @@ export class DemoTransport implements Transport {
   }
 
   /** Whether the signed-in person does this kind of work (their position, or switched on by the CEO). */
-  private does(area: 'jobs' | 'documents' | 'stores' | 'stockroom' | 'fleet' | 'flags' | 'prices' | 'access' | 'hr') {
+  private does(area: 'jobs' | 'documents' | 'stores' | 'stockroom' | 'fleet' | 'flags' | 'prices' | 'access' | 'hr' | 'vanstock') {
     if (area === 'fleet' && this.who.level === 'mechanic') return true;
     if (area === 'stockroom' && this.who.level === 'stockroom') return true;
     return this.office().workOf(this.who.id, this.who.level)[area];
+  }
+
+  /** Departments and van stock lists. */
+  private vanRoute(p: string, req: Request, b: any): Response | null {
+    let m: RegExpMatchArray | null;
+    if (!(p.startsWith('/departments') || p.startsWith('/van-stock') || p === '/me/van' || /^\/access\/users\/[^/]+\/department$/.test(p))) return null;
+    const v = this.vans();
+    const office = ['admin', 'management', 'director', 'creator'].includes(this.who.level);
+    const stockroom = this.does('stockroom');
+    const manages = this.does('access');
+    const save = (r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }) => { this.persist(this.state); return r.ok ? ok(r.body) : refuse(r.status, ...r.reasons); };
+    const mine = this.who.level === 'management' ? [v.v.memberOf[this.who.id]].filter(Boolean) as string[] : null;
+    const editable = (d: string) => this.does('vanstock') && (mine ? mine.includes(d) : true);
+    if (p === '/me/van') return ok(v.report(this.who.id));
+    if (p === '/departments' && req.method === 'GET') return office || stockroom ? ok(v.departments(manages)) : refuse(403, 'departments are not part of your work');
+    if (p === '/departments' || (m = p.match(/^\/departments\/([^/]+)$/))) {
+      if (!manages) return refuse(403, 'only whoever manages access sets up departments');
+      const r = p === '/departments' ? v.createDept(b) : v.updateDept(m![1], b);
+      if (r.ok && b.managerId) { const d = p === '/departments' ? (r.body as { id: string }).id : m![1]; if (this.office().o.people.find(x => x.id === b.managerId)?.login_level === 'management') v.v.memberOf[b.managerId] = d; }
+      return save(r);
+    }
+    if ((m = p.match(/^\/access\/users\/([^/]+)\/department$/))) return manages ? save(v.setDepartment(m[1], b.departmentId ?? null, this.who.name)) : refuse(403, 'only whoever manages access');
+    if (p === '/van-stock') {
+      if (!office && !stockroom && !this.does('vanstock')) return refuse(403, 'van stock lists are not part of your work');
+      return ok(v.lists(mine && !manages && !stockroom ? mine : 'all', editable));
+    }
+    if ((m = p.match(/^\/van-stock\/departments\/([^/]+)\/items\/([^/]+)$/))) {
+      if (!editable(m[1])) return refuse(403, "only the department's manager (or the CEO) sets its van stock list");
+      return save(v.setItem(m[1], m[2], Number(b.qty), this.who.id));
+    }
+    if ((m = p.match(/^\/van-stock\/departments\/([^/]+)\/changes$/))) return ok(v.changes(m[1]));
+    if ((m = p.match(/^\/van-stock\/technicians\/([^/]+)\/issue$/))) return stockroom ? save(v.issue(m[1], b.lines, this.who.id)) : refuse(403, 'the stockroom issues van stock');
+    if ((m = p.match(/^\/van-stock\/technicians\/([^/]+)$/))) return office || stockroom || m[1] === this.who.id ? ok(v.report(m[1], stockroom)) : refuse(403, 'not your technician');
+    return refuse(404, 'not found');
   }
 
   /** The office's routes; only office positions get here. */
@@ -231,7 +267,12 @@ export class DemoTransport implements Transport {
       const f = this.fleet();
       const spots = f.positions();
       const rec = this.does('hr') && m[1] !== this.who.id;
-      return done(o.profile(m[1], manages, { record: { read: rec, write: rec }, kit: { read: true, write: this.does('stockroom') } }, f.technicians(this.thaboIn()), v => spots.find(x => x.id === v) ?? null));
+      const res = o.profile(m[1], manages, { record: { read: rec, write: rec }, kit: { read: true, write: this.does('stockroom') } }, f.technicians(this.thaboIn()), v => spots.find(x => x.id === v) ?? null);
+      if (res.ok) {
+        const vn = this.vans(); const d = vn.deptOf(m[1]);
+        Object.assign(res.body as object, { department: d?.name ?? null, departmentId: d?.id ?? null, manager: d?.managerId ? o.name(d.managerId) : null, team: vn.team(m[1]) });
+      }
+      return done(res);
     }
     if ((m = p.match(/^\/access\/users\/([^/]+)\/work$/))) return manages ? done(o.setWork(m[1], b.area, !!b.on)) : refuse(403, 'only whoever manages access');
     if ((m = p.match(/^\/access\/users\/([^/]+)\/trade$/))) return manages ? done(o.setTrade(m[1], b.trade)) : refuse(403, 'only whoever manages access');
@@ -469,6 +510,15 @@ export class DemoTransport implements Transport {
     return new DemoWorkshop(this.state.workshop ?? (this.state.workshop = seedWorkshop(st)), st);
   }
 
+  private vans(): DemoVan {
+    const fresh = !this.state.vanStock;
+    const v = this.state.vanStock ?? (this.state.vanStock = seedVan());
+    this.office(); this.stock();
+    const dv = new DemoVan(v, this.state.office!, this.state.stockControl!, this.state.flags);
+    if (fresh) { dv.checkAll('the system'); this.persist(this.state); }
+    return dv;
+  }
+
   private stock(): DemoStock {
     const st = this.state.stockControl ?? (this.state.stockControl = seedStock());
     const ds = new DemoStock(st, jobId => {
@@ -510,6 +560,7 @@ export class DemoTransport implements Transport {
   }
 
   private stockResult(r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }, status = 200): Response {
+    if (r.ok) this.vans().checkAll(this.who.name);
     this.persist(this.state);
     return r.ok ? ok(r.body, status) : refuse(r.status, ...r.reasons);
   }
@@ -540,6 +591,7 @@ export class DemoTransport implements Transport {
         : b.email === 'mech' ? { id: 'mech', name: 'Bongani Khumalo', level: 'mechanic' }
         : b.email === 'office' ? { id: 'office', name: 'Lilanie Schallies', level: 'creator' }
         : b.email === 'admin' ? { id: 'admin-1', name: 'Zanele Khoza', level: 'admin' }
+        : b.email === 'manager' ? { id: 'mgr-1', name: 'Pieter van Wyk', level: 'management' }
         : { id: 'me', name: 'Thabo Mkhize', level: 'technician' };
       this.who = who;
       return ok({
@@ -551,10 +603,13 @@ export class DemoTransport implements Transport {
     if (p === '/policy/current') return ok({ id: 'policy-1', version: '1.0', body: DEMO_POLICY });
     if (p === '/policy/acknowledge') { this.state.acknowledged = true; this.persist(this.state); return ok({ ok: true }); }
     if (!this.state.acknowledged) return { status: 403, body: { error: 'acknowledge the monitoring policy first', code: 'policy_required' } };
+    if (!this.state.vanStock) this.vans();
     const dr = this.docRoute(p, req, b);
     if (dr) return dr;
     const qr = this.queryRoute(p, req, b);
     if (qr) return qr;
+    const vr = this.vanRoute(p, req, b);
+    if (vr) return vr;
     const off = this.officeRoute(p, req, b);
     if (off) return off;
 
@@ -588,7 +643,7 @@ export class DemoTransport implements Transport {
       const kitWrite = this.does('stockroom');
       const office = ['admin', 'management', 'director', 'creator'].includes(this.who.level);
       if (p === '/me/kit') { const k = this.stock().kitFor(this.who.id, false); this.persist(this.state); return ok(k); }
-      if (p === '/kit/people') return kitWrite ? ok(this.stock().kitPeople(this.office().stockroomPeople())) : refuse(403, 'the stockroom keeps tools and PPE');
+      if (p === '/kit/people') return kitWrite ? ok((() => { const v = this.vans(); return this.stock().kitPeople(this.office().stockroomPeople()).map(x => ({ ...x, van_short: v.shortCount(x.id) })); })()) : refuse(403, 'the stockroom keeps tools and PPE');
       if ((m = p.match(/^\/people\/([^/]+)\/kit$/))) {
         if (req.method === 'GET') return (kitWrite || office || m[1] === this.who.id) ? ok(this.stock().kitFor(m[1], kitWrite)) : refuse(403, 'not your list');
         if (!kitWrite) return refuse(403, 'the stockroom keeps tools and PPE');
@@ -811,6 +866,7 @@ export class DemoTransport implements Transport {
       const jobId = m[1];
       const check = ds.use(jobId, b.stockItemId, b.qty);
       if (!check.ok) return refuse(check.status, ...check.reasons);
+      this.vans().check('me', 'Thabo Mkhize');
       return this.rule(jobId, c => {
         const it = c.items.find(i => i.id === m![2]);
         return it ? J.updateItem(c, it.id, { vanStockLines: it.vanStockLines + 1 }) : { ok: false, reasons: ['no such item'] };

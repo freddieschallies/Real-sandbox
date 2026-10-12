@@ -66,7 +66,7 @@ export interface DemoOfficeState {
 export const WORK_AREAS = {
   jobs: 'Jobs: open, assign and edit', documents: 'Quotes and invoices', stores: 'Clients, stores and equipment', stockroom: 'Stockroom (full access)',
   fleet: "Fleet (the mechanic's work)", flags: 'Flags and approvals', prices: 'Prices and rates', access: 'Positions and access (People)',
-  hr: 'Staff records (HR): issues and warnings',
+  hr: 'Staff records (HR): issues and warnings', vanstock: 'Van stock lists (bill of quantities)',
 } as const;
 export const TRADES = { foodservice: 'Foodservice tech', plumber: 'Plumber', electrician: 'Electrician', assistant: 'Assistant' } as const;
 export type WorkArea = keyof typeof WORK_AREAS;
@@ -74,11 +74,11 @@ const ALL_WORK = Object.keys(WORK_AREAS) as WorkArea[];
 /** What each position does before the CEO changes anything (as on the server). */
 const DEFAULT_WORK: Record<string, WorkArea[]> = {
   technician: [], mechanic: ['fleet'], admin: ['jobs', 'documents', 'stores'], stockroom: ['jobs', 'documents', 'stores', 'stockroom'],
-  management: ['jobs', 'documents', 'stores', 'stockroom', 'flags'], director: ALL_WORK, creator: ALL_WORK,
+  management: ['jobs', 'flags', 'vanstock'], director: ALL_WORK, creator: ALL_WORK,
 };
 
 export const POSITION_LABEL: Record<string, string> = {
-  technician: 'Technician', mechanic: 'Mechanic (fleet)', admin: 'Admin', stockroom: 'Stock controller', management: 'Management', director: 'Director', creator: 'Creator (CEO)',
+  technician: 'Technician', mechanic: 'Mechanic (fleet)', admin: 'Admin', stockroom: 'Stock controller', management: 'Department manager', director: 'Director', creator: 'Creator (CEO)',
 };
 
 const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();

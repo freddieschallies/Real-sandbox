@@ -1239,6 +1239,10 @@ test('department managers: techs under them, the van stock list they set, vans s
   const plumbing = await call('director', 'POST', '/departments', { name: 'Plumbing' });
   assert.equal(plumbing.status, 200);
   assert.equal((await call('manager', 'PUT', `/van-stock/departments/${plumbing.body.id}/items/${fuse}`, { qty: 1 })).status, 403, 'not his department');
+  const hr = await call('director', 'POST', '/departments', { name: 'HVAC', managerId: ids.manager });
+  assert.equal((await call('manager', 'PUT', `/van-stock/departments/${hr.body.id}/items/${fuse}`, { qty: 1 })).status, 200, 'he now runs HVAC');
+  await call('manager', 'PUT', `/van-stock/departments/${hr.body.id}/items/${fuse}`, { qty: 0 });
+  await call('director', 'PUT', `/departments/${ids.dept}`, { managerId: ids.manager });
   const moved = await call('director', 'PUT', `/access/users/${ids.tech}/department`, { departmentId: plumbing.body.id });
   assert.equal(moved.status, 200);
   assert.equal((await openFlag(ids.tech)).length, 0, 'no list in Plumbing yet: nothing short');

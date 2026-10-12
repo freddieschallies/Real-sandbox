@@ -1,5 +1,6 @@
 // Everything on my name: what must go back, what is for which job, my van stock,
 // invoices to check, and returns the stock controller hasn't confirmed yet.
+import { VanCard } from '../vanstock/VanStock.tsx';
 import React, { useEffect } from 'react';
 import { Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
@@ -41,6 +42,8 @@ export function MyStock() {
         <Button label="Scan invoice" onPress={() => nav.push({ name: 'invoice' })} style={{ flex: 1 }} />
         <Button label="Return stock" kind="secondary" onPress={() => nav.push({ name: 'return' })} style={{ flex: 1 }} />
       </View>
+
+      <VanCard userId={s.session?.user.id ?? ''} mine />
 
       {toCheck.map(i => (
         <Card key={i.id} onPress={() => nav.push({ name: 'invoice', invoiceId: i.id })} style={{ borderColor: C.warn }}>

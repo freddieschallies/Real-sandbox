@@ -9,6 +9,7 @@ const ROLES = [
   { who: 'demo', level: 'technician', label: 'Technician', short: 'Tech' },
   { who: 'stock', level: 'stockroom', label: 'Stock controller', short: 'Stock' },
   { who: 'mech', level: 'mechanic', label: 'Mechanic', short: 'Mech' },
+  { who: 'manager', level: 'management', label: 'Manager', short: 'Mgr' },
   { who: 'admin', level: 'admin', label: 'Admin', short: 'Admin' },
   { who: 'office', level: 'creator', label: 'CEO', short: 'CEO' },
 ] as const;

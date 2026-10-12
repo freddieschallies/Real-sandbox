@@ -10,14 +10,15 @@ import { C, S } from '../theme.ts';
 import { TITLE as FLAG_TITLE } from '../screens/Flags.tsx';
 import type { CardView } from '../types.ts';
 import { KitCard, StaffRecord } from '../staff/Staff.tsx';
+import { DepartmentCard, VanCard, VanLists } from '../vanstock/VanStock.tsx';
 import { Avatar, ProfileDetails, ProfileTop, useProfile } from './Profile.tsx';
 import { Accounts, InvoiceDetail, InvoiceList, NewQuote, QuoteDetail, QuoteList, useBooks } from './Books.tsx';
 import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries.tsx';
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 
 const K = { band: '#121212', bandText: '#F7F3EC', stripe: '#E8701A' };
-type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'people' | 'stores';
-type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | null;
+type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'vans' | 'people' | 'stores';
+type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
   cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
@@ -64,6 +65,7 @@ export function OfficeApp() {
       { key: 'flags' as Tab, label: 'Flags', count: ov?.flags?.unresolved },
       { key: 'handovers' as Tab, label: 'Handovers', short: 'Approve', count: ov?.handoversAwaitingApproval },
     ] : []),
+    ...(does('vanstock') ? [{ key: 'vans' as Tab, label: 'Van stock', short: 'Vans' }] : []),
     ...(canPeople ? [{ key: 'people' as Tab, label: 'People' }] : []),
     { key: 'stores', label: 'Stores' },
   ];
@@ -78,6 +80,7 @@ export function OfficeApp() {
       {tab === 'accounts' ? <Accounts b={books} canPrices={does('prices')} /> : null}
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
       {tab === 'handovers' ? <HandoverList o={o} open={id => setSel({ kind: 'handover', id })} /> : null}
+      {tab === 'vans' ? <VanLists openTech={id => setSel({ kind: 'van', id })} /> : null}
       {tab === 'people' ? <PeopleList o={o} open={id => setSel({ kind: 'person', id })} /> : null}
       {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
@@ -99,6 +102,7 @@ export function OfficeApp() {
     if (sel.kind === 'invoice') return wrap(<InvoiceDetail key={sel.id} b={books} id={sel.id} />);
     if (sel.kind === 'flag') return wrap(<FlagDetail key={sel.id} id={sel.id} o={o} done={close} />);
     if (sel.kind === 'handover') return wrap(<HandoverDetail key={sel.id} id={sel.id} o={o} done={close} />);
+    if (sel.kind === 'van') return wrap(<><Heading>{o.d.people?.people.find(y => y.id === sel.id)?.full_name ?? 'Van'}</Heading><VanCard key={sel.id} userId={sel.id} /></>);
     if (sel.kind === 'person') return wrap(<PersonDetail key={sel.id} id={sel.id} o={o} ask={does('jobs') ? toId => setSel({ kind: 'newquery', toId }) : undefined} />);
     return wrap(<NewStore o={o} done={close} />);
   })();
@@ -109,7 +113,7 @@ export function OfficeApp() {
         {!wide && sel ? <Pressable onPress={close} accessibilityRole="button" accessibilityLabel="Back" hitSlop={10}><Text style={{ color: K.bandText, fontSize: 34 }}>‹</Text></Pressable> : null}
         <View style={{ flex: 1 }}>
           <Text style={{ color: K.bandText, fontSize: 22, fontWeight: '800' }}>Office</Text>
-          <Text style={{ color: K.bandText, opacity: 0.75 }}>{s.session?.user.name} · {s.session?.user.level === 'creator' ? 'CEO' : s.session?.user.level === 'admin' ? 'Admin' : s.session?.user.level === 'director' ? 'Director' : 'Management'} · {s.session?.company.name}</Text>
+          <Text style={{ color: K.bandText, opacity: 0.75 }}>{s.session?.user.name} · {s.session?.user.level === 'creator' ? 'CEO' : s.session?.user.level === 'admin' ? 'Admin' : s.session?.user.level === 'director' ? 'Director' : 'Department manager'} · {s.session?.company.name}</Text>
         </View>
         <Pressable onPress={o.load} accessibilityRole="button" accessibilityLabel="Refresh" hitSlop={8}
           style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: K.bandText }}>
@@ -673,6 +677,10 @@ function PersonDetail({ id, o, ask }: { id: string; o: OfficeHook; ask?: (toId: 
       {prof.p ? <ProfileTop p={prof.p} reload={prof.load} /> : <Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>{x.full_name}</Text>}
       {isTech && ask ? <Button label={`Send ${first} a query`} kind="secondary" onPress={() => ask(x.id)} /> : null}
       {prof.p ? <ProfileDetails p={prof.p} reload={prof.load} /> : null}
+      {prof.p && (isTech || ['management', 'director', 'creator'].includes(x.login_level)) ? (
+        <DepartmentCard userId={x.id} departmentId={prof.p.departmentId ?? null} level={x.login_level} name={x.full_name} canManage={manage} team={prof.p.team ?? []} reload={() => { prof.load(); o.load?.(); }} />
+      ) : null}
+      {prof.p && isTech ? <VanCard key={`van-${x.id}-${prof.p.departmentId ?? ''}`} userId={x.id} /> : null}
       {prof.p?.kit?.read ? <KitCard userId={x.id} name={x.full_name} /> : null}
       {prof.p?.record?.read ? <StaffRecord userId={x.id} name={x.full_name} /> : null}
       <Heading>Position{isTech ? ' and trade' : ''}</Heading>

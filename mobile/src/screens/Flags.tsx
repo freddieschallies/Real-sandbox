@@ -13,7 +13,7 @@ export const TITLE: Record<string, string> = {
   fuel_mismatch: 'Fuel entry looks wrong', arrived_outside_geofence: 'Arrived away from the store', manager_unavailable: 'Closed without signature',
   open_supply_run: 'Supply run', new_supplier: 'New supplier',
   vehicle_new_damage: 'New damage found on a vehicle you handed over', handover_not_signed: 'Vehicle handover not signed',
-  stock_return_short: 'Stock sent back short', workshop_stock_short: 'Workshop stock counted short', duplicate_supplier_invoice: 'Supplier invoice scanned twice',
+  stock_return_short: 'Stock sent back short', van_stock_short: 'Van short of the van stock list', workshop_stock_short: 'Workshop stock counted short', duplicate_supplier_invoice: 'Supplier invoice scanned twice',
   supplier_invoice_changed: 'Supplier invoice lines changed by hand',
 };
 

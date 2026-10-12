@@ -20,6 +20,10 @@ async function deptOfUser(c: Q, id: string) {
   if (!u) throw new Refused(404, ['no such person']);
   return u as { id: string; department_id: string | null };
 }
+/** A department manager's own department is the one he manages: his "own department" access covers it. */
+async function ownDepartment(c: Q, managerId: string, departmentId: string) {
+  await c.query("UPDATE users SET department_id = $2 WHERE id = $1 AND login_level = 'management'", [managerId, departmentId]);
+}
 const editsList = (a: Actor, departmentId: string) => can(a, 'set_van_stock', { employeeDepartmentId: departmentId });
 const seesVan = (a: Actor, u: { id: string; department_id: string | null }) =>
   a.id === u.id || can(a, 'assign_stock') || seesPeople(a) || can(a, 'set_van_stock', { employeeId: u.id, employeeDepartmentId: u.department_id });
@@ -53,6 +57,7 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
       await checkManager(c, b.managerId);
       if ((await c.query('SELECT 1 FROM departments WHERE lower(name) = lower($1)', [b.name])).rowCount) throw new Refused(409, [`there is already a ${b.name} department`]);
       const d = (await c.query('INSERT INTO departments (name, manager_id) VALUES ($1, $2) RETURNING id', [b.name, b.managerId ?? null])).rows[0];
+      if (b.managerId) await ownDepartment(c, b.managerId, d.id);
       await audit(c, req.actor.id, 'department_created', 'department', d.id, b);
       if (b.managerId) await notify(c, b.managerId, 'department', `You manage the ${b.name} department.`);
       return { id: d.id };
@@ -70,6 +75,7 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
       if (b.name && (await c.query('SELECT 1 FROM departments WHERE lower(name) = lower($1) AND id <> $2', [b.name, id])).rowCount) throw new Refused(409, [`there is already a ${b.name} department`]);
       await c.query('UPDATE departments SET name = COALESCE($2, name), manager_id = CASE WHEN $3 THEN $4::uuid ELSE manager_id END WHERE id = $1',
         [id, b.name ?? null, b.managerId !== undefined, b.managerId ?? null]);
+      if (b.managerId) await ownDepartment(c, b.managerId, id);
       await audit(c, req.actor.id, 'department_changed', 'department', id, b);
       if (b.managerId && b.managerId !== d.manager_id) await notify(c, b.managerId, 'department', `You manage the ${b.name ?? d.name} department.`);
       return { id };

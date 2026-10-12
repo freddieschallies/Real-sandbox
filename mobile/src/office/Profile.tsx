@@ -20,6 +20,7 @@ export interface Profile {
   personal: { id_number: string | null; date_of_birth: string | null; home_address: string | null; start_date: string | null; notes: string | null } | null;
   canEdit: boolean;
   record?: { read: boolean; write: boolean };
+  departmentId?: string | null; manager?: string | null; team?: { id: string; full_name: string; department: string }[];
   kit?: { read: boolean; write: boolean };
 }
 
@@ -74,7 +75,7 @@ export function ProfileTop({ p, reload }: { p: Profile; reload: () => void }) {
         <View style={{ flex: 1, gap: 2 }}>
           <Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>{p.full_name}</Text>
           <Text style={st.body}>{[p.position, p.tradeLabel].filter(Boolean).join(' · ')}</Text>
-          {p.department ? <Text style={st.small}>{p.department}</Text> : null}
+          {p.department ? <Text style={st.small}>{p.department}{p.manager && p.login_level === 'technician' ? ` · under ${p.manager}` : ''}</Text> : null}
           {p.canEdit ? <Pressable onPress={changePhoto} accessibilityRole="button"><Text style={[st.small, { color: C.info, textDecorationLine: 'underline' }]}>{p.photo_id ? 'Change picture' : 'Add a picture'}</Text></Pressable> : null}
         </View>
       </View>

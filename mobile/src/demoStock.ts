@@ -49,6 +49,7 @@ export interface DemoStockState {
   }[];
   /** Tools and PPE on each person's name. */
   kit?: DemoKit[];
+  vanSeeded?: boolean;
   stockroom: Record<string, number>;
   /** tech: 'me' (Thabo, the demo technician) or another technician's name. */
   holdings: { stockItemId: string; holdingJobId: string | null; qty: number; tech?: string }[];
@@ -126,6 +127,11 @@ export class DemoStock {
     // Older saved demos: add the tools and PPE.
     if (!s.items.some(i => i.category === 'ppe')) { s.items.push(...KIT_ITEMS.filter(k => !s.items.some(i => i.id === k.id))); Object.assign(s.stockroom, KIT_STOCK); }
     s.kit ??= seedKit();
+    // Sipho's van is complete against the Refrigeration van stock list.
+    if (!s.vanSeeded) {
+      s.holdings.push(...[['st-1', 2], ['st-2', 2], ['st-5', 1], ['st-6', 2]].map(([id, qty]) => ({ stockItemId: id as string, holdingJobId: null, qty: qty as number, tech: 'Sipho Ndlovu' })));
+      s.vanSeeded = true;
+    }
   }
 
   // ---- Tools and PPE ------------------------------------------------------------------------

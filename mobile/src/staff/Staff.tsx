@@ -6,6 +6,7 @@ import { useStore } from '../state.tsx';
 import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, Stepper, st } from '../ui.tsx';
 import { C } from '../theme.ts';
 import { Avatar } from '../office/Profile.tsx';
+import { VanCard } from '../vanstock/VanStock.tsx';
 import type { Holding } from '../stockroom/useStockroom.ts';
 
 const day = (s: string) => new Date(s.length === 10 ? `${s}T12:00:00+02:00` : s).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -248,7 +249,7 @@ function CloseKit({ item, done }: { item: KitItem; done: () => void }) {
 }
 
 /** The stockroom's People tab: names with their PPE, stock and tools. Nothing personal. */
-export interface StockPerson { id: string; full_name: string; login_level: string; position: string; tradeLabel: string | null; photo_id: string | null; tools: number; ppe: number; stock: number; due: number }
+export interface StockPerson { id: string; full_name: string; login_level: string; position: string; tradeLabel: string | null; photo_id: string | null; tools: number; ppe: number; stock: number; due: number; van_short?: number }
 export function KitPeople({ open, selected, tick = 0 }: { open: (p: StockPerson) => void; selected: string | null; tick?: number }) {
   const s = useStore();
   const [list, setList] = useState<StockPerson[] | null>(null);
@@ -266,7 +267,10 @@ export function KitPeople({ open, selected, tick = 0 }: { open: (p: StockPerson)
               <Text style={[st.body, { fontWeight: '700' }]}>{p.full_name}</Text>
               <Text style={st.small}>{p.tradeLabel ?? p.position} · {p.ppe} PPE · {p.stock} stock · {p.tools} tool{p.tools === 1 ? '' : 's'}</Text>
             </View>
-            {p.due ? <Pill text={`${p.due} to replace`} tone="warn" /> : null}
+            <View style={{ gap: 4, alignItems: 'flex-end' }}>
+              {p.van_short ? <Pill text={`Van short ${p.van_short}`} tone="bad" /> : null}
+              {p.due ? <Pill text={`${p.due} to replace`} tone="warn" /> : null}
+            </View>
           </View>
         </Card>
       ))}
@@ -305,6 +309,7 @@ export function StockPersonView({ p, holdings, onChange }: { p: StockPerson; hol
           <Text style={st.body}>{[p.position, p.tradeLabel].filter(Boolean).join(' · ')}</Text>
         </View>
       </View>
+      {p.login_level === 'technician' ? <VanCard userId={p.id} onChange={onChange} /> : null}
       <KitCard userId={p.id} name={p.full_name} title="PPE, stock and tools" between={stock} onChange={onChange} />
     </>
   );
