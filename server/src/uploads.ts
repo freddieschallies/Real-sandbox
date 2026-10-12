@@ -40,9 +40,9 @@ export async function readUpload(req: FastifyRequest): Promise<Upload> {
 
 const root = () => process.env.UPLOAD_DIR ?? join(process.cwd(), 'uploads');
 
-/** Saves the file and returns its path relative to the upload folder. */
-export async function saveFile(id: string, up: Upload, takenAt: string): Promise<string> {
-  const rel = join(takenAt.slice(0, 4), takenAt.slice(5, 7), `${id}.${TYPES[up.mimetype]}`);
+/** Saves the file in the company's own folder and returns its path relative to the upload folder. */
+export async function saveFile(companyId: string, id: string, up: Upload, takenAt: string): Promise<string> {
+  const rel = join(companyId, takenAt.slice(0, 4), takenAt.slice(5, 7), `${id}.${TYPES[up.mimetype]}`);
   const full = join(root(), rel);
   await mkdir(join(full, '..'), { recursive: true });
   await writeFile(full, up.buffer, { flag: 'wx' });

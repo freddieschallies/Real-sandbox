@@ -1,5 +1,5 @@
 // Loads a job card from the database into the rules engine's shape.
-import type { Client } from './db.ts';
+import type { Q } from './db.ts';
 import type { JobCard, Visit, WorkItem } from './core/jobCard.ts';
 
 export interface JobRow {
@@ -11,7 +11,7 @@ export interface JobRow {
   store_id: string;
 }
 
-export async function loadCard(c: Client, jobId: string, forUpdate = false): Promise<{ row: JobRow; card: JobCard; visitIds: string[] } | null> {
+export async function loadCard(c: Q, jobId: string, forUpdate = false): Promise<{ row: JobRow; card: JobCard; visitIds: string[] } | null> {
   const j = await c.query(
     `SELECT j.id, j.job_number, j.status, j.job_type, j.lead_technician_id, j.store_id, j.closed_at,
             s.lat, s.lng, s.geofence_m
@@ -91,7 +91,7 @@ export async function loadCard(c: Client, jobId: string, forUpdate = false): Pro
 }
 
 /** Lead technician or a helper on the job. */
-export async function isOnJob(c: Client, jobId: string, userId: string): Promise<boolean> {
+export async function isOnJob(c: Q, jobId: string, userId: string): Promise<boolean> {
   const { rows } = await c.query(
     `SELECT EXISTS (SELECT 1 FROM jobs WHERE id = $1 AND lead_technician_id = $2)
          OR EXISTS (SELECT 1 FROM job_helpers WHERE job_id = $1 AND user_id = $2) AS ok`,

@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import type { Client, Db } from '../db.ts';
+import type { Db, Q } from '../db.ts';
 import { audit, raiseFlag, tx } from '../db.ts';
 import { can } from '../core/permissions.ts';
 import * as J from '../core/jobCard.ts';
@@ -9,7 +9,7 @@ import { isOnJob, loadCard, type JobRow } from '../jobsRepo.ts';
 import { Iso, Point, Refused, Uuid, DateOnly, parse } from '../http.ts';
 import { readUpload, saveFile, removeFile } from '../uploads.ts';
 
-interface Ctx { c: Client; row: JobRow; card: J.JobCard; visitId?: string; actorId: string }
+interface Ctx { c: Q; row: JobRow; card: J.JobCard; visitId?: string; actorId: string }
 
 export function registerJobRoutes(app: FastifyInstance, db: Db) {
   /**
@@ -22,7 +22,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     persist: (ctx: Ctx, result: Extract<J.Result, { ok: true }>) => Promise<void>,
   ) {
     const jobId = parse(Uuid, req.params.id);
-    await tx(db, async c => {
+    await tx(req.db, async c => {
       const loaded = await loadCard(c, jobId, true);
       if (!loaded) throw new Refused(404, ['no such job']);
       if (!(await isOnJob(c, jobId, req.actor.id))) throw new Refused(403, ['you are not assigned to this job']);
@@ -30,7 +30,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
       if (!result.ok) throw new Refused(409, result.reasons);
       await persist({ c, row: loaded.row, card: loaded.card, visitId: loaded.visitIds.at(-1), actorId: req.actor.id }, result);
     });
-    return cardView(db, jobId);
+    return cardView(req.db, jobId);
   }
 
   // ---- Create, list, view ------------------------------------------------
@@ -51,9 +51,15 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     if (!can(req.actor, 'assign_jobs')) throw new Refused(403, ['you do not have access to create jobs']);
     const b = parse(NewJob, req.body);
     if (b.jobType === 'planned_maintenance' && b.maintenanceSteps.length === 0) throw new Refused(400, ['planned maintenance needs its checklist steps']);
-    const id = await tx(db, async c => {
-      const tech = await c.query("SELECT 1 FROM users WHERE id = $1 AND login_level = 'technician' AND status = 'active'", [b.leadTechnicianId]);
-      if (!tech.rowCount) throw new Refused(400, ['lead technician must be an active technician']);
+    const id = await tx(req.db, async c => {
+      // Every id the phone or browser sends is checked through this company's own rows,
+      // so nothing can be linked to another company's records.
+      const store = await c.query('SELECT 1 FROM stores WHERE id = $1', [b.storeId]);
+      if (!store.rowCount) throw new Refused(400, ['unknown store']);
+      const techs = await c.query("SELECT id FROM users WHERE id = ANY($1) AND login_level = 'technician' AND status = 'active'", [[b.leadTechnicianId, ...b.helperIds]]);
+      const ok = new Set(techs.rows.map(r => r.id));
+      if (!ok.has(b.leadTechnicianId)) throw new Refused(400, ['lead technician must be an active technician']);
+      if (b.helperIds.some(h => !ok.has(h))) throw new Refused(400, ['every helper must be an active technician']);
       const { rows } = await c.query(
         `INSERT INTO jobs (job_type, priority, store_id, client_order_ref, fault_reported, scheduled_date, lead_technician_id, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, job_number`,
@@ -67,13 +73,13 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
       await audit(c, req.actor.id, 'job_created', 'job', jobId, { jobNumber: rows[0].job_number });
       return jobId;
     });
-    return reply.code(201).send(await cardView(db, id));
+    return reply.code(201).send(await cardView(req.db, id));
   });
 
   app.get('/jobs', async req => {
     const q = req.query as { status?: string };
     const mine = !can(req.actor, 'view_all_job_cards');
-    const { rows } = await db.query(
+    const { rows } = await req.db.query(
       `SELECT j.id, j.job_number, j.job_type, j.priority, j.status, j.scheduled_date, j.fault_reported,
               s.name AS store, u.full_name AS lead_technician
          FROM jobs j JOIN stores s ON s.id = j.store_id JOIN users u ON u.id = j.lead_technician_id
@@ -88,11 +94,8 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
 
   app.get('/jobs/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {
     const jobId = parse(Uuid, req.params.id);
-    if (!can(req.actor, 'view_all_job_cards')) {
-      const c = await db.connect();
-      try { if (!(await isOnJob(c, jobId, req.actor.id))) throw new Refused(403, ['not your job']); } finally { c.release(); }
-    }
-    return cardView(db, jobId);
+    if (!can(req.actor, 'view_all_job_cards') && !(await isOnJob(req.db, jobId, req.actor.id))) throw new Refused(403, ['not your job']);
+    return cardView(req.db, jobId);
   });
 
   // ---- The forced path ----------------------------------------------------
@@ -202,7 +205,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     const up = await readUpload(req);
     const f = parse(z.object({ kind: z.enum(['before', 'after', 'rating_plate']), takenAt: Iso, id: Uuid.optional() }), up.fields);
     const photoId = f.id ?? randomUUID();
-    const rel = await saveFile(photoId, up, f.takenAt);
+    const rel = await saveFile(req.companyId, photoId, up, f.takenAt);
     try {
       return await act(req, card => (card.status === 'closed' ? { ok: false, reasons: ['job is closed'] } : card.items.some(i => i.id === itemId) ? { ok: true, card } : { ok: false, reasons: ['no such item'] }),
         async ({ c, row, actorId }) => {
@@ -273,7 +276,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
       boughtOutLines: z.array(z.object({ description: z.string().min(2), qty: z.number().positive(), estimatedPriceCents: z.number().int().min(0) })).default([]),
       emailTo: z.string().email().optional(),
     }), req.body);
-    return tx(db, async c => {
+    return tx(req.db, async c => {
       if (!(await isOnJob(c, jobId, req.actor.id))) throw new Refused(403, ['you are not assigned to this job']);
       const item = await c.query('SELECT 1 FROM work_items WHERE id = $1 AND job_id = $2', [itemId, jobId]);
       if (!item.rowCount) throw new Refused(404, ['no such item']);
@@ -360,9 +363,8 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
 }
 
 /** The job card as the app shows it: header, visits, items with what is still missing. */
-export async function cardView(db: Db, jobId: string) {
-  const c = await db.connect();
-  try {
+export async function cardView(c: Q, jobId: string) {
+  {
     const loaded = await loadCard(c, jobId);
     if (!loaded) throw new Refused(404, ['no such job']);
     const head = await c.query(
@@ -382,7 +384,5 @@ export async function cardView(db: Db, jobId: string) {
       checklist: checks.rows,
       items: card.items.map(it => ({ ...it, status: J.itemStatus(it, card.jobType), missing: J.missingOnItem(it, card.jobType) })),
     };
-  } finally {
-    c.release();
   }
 }

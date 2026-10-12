@@ -1,7 +1,7 @@
 // The CEO's access screen: what each login type and each person may do.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import type { Client, Db } from '../db.ts';
+import type { Db, Q } from '../db.ts';
 import { audit, tx } from '../db.ts';
 import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, can, isScoped, type Action, type LoginLevel } from '../core/permissions.ts';
 import { Refused, Uuid, parse } from '../http.ts';
@@ -32,7 +32,7 @@ function checkChange(action: string, c: ChangeT): Action {
   return a;
 }
 
-async function writeOverride(c: Client, target: { level?: LoginLevel; userId?: string }, action: Action, ch: ChangeT, by: string) {
+async function writeOverride(c: Q, target: { level?: LoginLevel; userId?: string }, action: Action, ch: ChangeT, by: string) {
   const where = target.level ? 'level = $1' : 'user_id = $1';
   const key = target.level ?? target.userId;
   await c.query(`DELETE FROM access_overrides WHERE ${where} AND action = $2`, [key, action]);
@@ -51,15 +51,19 @@ async function writeOverride(c: Client, target: { level?: LoginLevel; userId?: s
   );
 }
 
+async function checkDepartments(c: Q, ch: ChangeT) {
+  if (!ch.departmentIds.length) return;
+  const { rows } = await c.query('SELECT count(*)::int AS n FROM departments WHERE id = ANY($1)', [ch.departmentIds]);
+  if (rows[0].n !== new Set(ch.departmentIds).size) throw new Refused(400, ['unknown department']);
+}
+
 /** Nobody may remove the last way in: at least one active login must keep "manage_access". */
-async function ensureSomeoneCanManageAccess(c: Client, db: Db) {
+async function ensureSomeoneCanManageAccess(c: Q) {
   const users = await c.query("SELECT id FROM users WHERE login_enabled AND status = 'active'");
   for (const u of users.rows) {
-    // Read through this transaction's view of the overrides.
-    const a = await loadActor({ query: c.query.bind(c) } as unknown as Db, u.id);
+    const a = await loadActor(c, u.id);
     if (a && can(a, 'manage_access')) return;
   }
-  void db;
   throw new Refused(409, ['this would leave nobody able to manage access']);
 }
 
@@ -78,7 +82,7 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
 
   app.get('/access/levels', async req => {
     guard(req);
-    const { rows } = await db.query('SELECT level, action, effect, scope, department_ids, set_at FROM access_overrides WHERE level IS NOT NULL ORDER BY level, action');
+    const { rows } = await req.db.query('SELECT level, action, effect, scope, department_ids, set_at FROM access_overrides WHERE level IS NOT NULL ORDER BY level, action');
     return rows;
   });
 
@@ -87,9 +91,10 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
     const level = parse(z.enum(LEVELS as [LoginLevel, ...LoginLevel[]]), req.params.level);
     const ch = parse(Change, req.body);
     const action = checkChange(req.params.action, ch);
-    await tx(db, async c => {
+    await tx(req.db, async c => {
+      await checkDepartments(c, ch);
       await writeOverride(c, { level }, action, ch, req.actor.id);
-      await ensureSomeoneCanManageAccess(c, db);
+      await ensureSomeoneCanManageAccess(c);
       await audit(c, req.actor.id, 'access_changed', 'login_level', level, { action, change: describe(ch, action) });
     });
     return { level, action, change: describe(ch, action) };
@@ -98,10 +103,10 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
   app.get('/access/users/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {
     guard(req);
     const id = parse(Uuid, req.params.id);
-    const target = await loadActor(db, id);
-    const u = (await db.query('SELECT id, full_name, login_level, department_id, login_enabled FROM users WHERE id = $1', [id])).rows[0];
+    const target = await loadActor(req.db, id);
+    const u = (await req.db.query('SELECT id, full_name, login_level, department_id, login_enabled FROM users WHERE id = $1', [id])).rows[0];
     if (!u) throw new Refused(404, ['no such user']);
-    const overrides = (await db.query('SELECT action, effect, scope, department_ids, set_by, set_at FROM access_overrides WHERE user_id = $1', [id])).rows;
+    const overrides = (await req.db.query('SELECT action, effect, scope, department_ids, set_by, set_at FROM access_overrides WHERE user_id = $1', [id])).rows;
     return { user: u, effective: target?.perms ?? {}, overrides };
   });
 
@@ -110,11 +115,12 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
     const userId = parse(Uuid, req.params.id);
     const ch = parse(Change, req.body);
     const action = checkChange(req.params.action, ch);
-    await tx(db, async c => {
+    await tx(req.db, async c => {
       const u = await c.query('SELECT full_name FROM users WHERE id = $1', [userId]);
       if (!u.rowCount) throw new Refused(404, ['no such user']);
+      await checkDepartments(c, ch);
       await writeOverride(c, { userId }, action, ch, req.actor.id);
-      await ensureSomeoneCanManageAccess(c, db);
+      await ensureSomeoneCanManageAccess(c);
       await audit(c, req.actor.id, 'access_changed', 'user', userId, { action, change: describe(ch, action) });
       // The person is told when their access changes.
       await notify(c, userId, 'access_changed', `Your access changed: ${CATALOGUE[action].label} – ${describe(ch, action)}`, { action });
@@ -124,7 +130,7 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
 
   app.get('/access/changes', async req => {
     guard(req);
-    const { rows } = await db.query(
+    const { rows } = await req.db.query(
       `SELECT a.at, b.full_name AS changed_by, a.level, u.full_name AS person, a.action, a.change
          FROM access_changes a JOIN users b ON b.id = a.changed_by LEFT JOIN users u ON u.id = a.user_id
         ORDER BY a.at DESC LIMIT 500`,

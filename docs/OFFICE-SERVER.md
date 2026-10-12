@@ -31,7 +31,7 @@ cp .env.example .env
 nano .env
 ```
 
-Fill in `DB_PASSWORD` and `JWT_SECRET` with long random values. `openssl rand -base64 36` makes one each time you run it.
+Fill in `DB_PASSWORD`, `APP_DB_PASSWORD` and `JWT_SECRET` with long random values. `openssl rand -hex 24` makes one each time you run it; use a different one for each.
 
 ## 4. Start it
 
@@ -42,18 +42,25 @@ docker compose logs -f api      # Ctrl+C to stop watching
 
 The server sets up the database by itself on first start.
 
-## 5. First login and the policy
+## 5. Platform owner, first company, and its policy
+
+The server can hold several companies; each one's data is kept apart by the database itself.
 
 ```bash
-docker compose exec api node --experimental-strip-types scripts/create-user.ts \
-  --name "Fred Schallies" --email you@yourcompany.co.za --level creator
+# Your platform owner login (creates and suspends companies; cannot see company data)
+docker compose exec api node --experimental-strip-types scripts/create-platform-admin.ts \
+  --name "Fred Schallies" --email you@yourcompany.co.za
+
+# A company and its first Creator login (repeat for each client company)
+docker compose exec api node --experimental-strip-types scripts/create-company.ts \
+  --company "ZSP" --name "Fred Schallies" --email fred@zsp.co.za
 ```
 
-It asks for a password (at least 10 characters). Then publish the monitoring policy, after the attorney has reviewed it:
+Each asks for a password. One email address can belong to only one login. Then publish that company's monitoring policy, after the attorney has reviewed it:
 
 ```bash
 docker compose cp policy.md api:/tmp/policy.md
-docker compose exec api node --experimental-strip-types scripts/publish-policy.ts --version 1.0 --file /tmp/policy.md
+docker compose exec api node --experimental-strip-types scripts/publish-policy.ts --company "ZSP" --version 1.0 --file /tmp/policy.md
 ```
 
 ## 6. Let the phones reach it (Cloudflare Tunnel)

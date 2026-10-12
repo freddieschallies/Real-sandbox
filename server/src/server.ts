@@ -1,10 +1,16 @@
+import pg from 'pg';
 import { buildApp } from './app.ts';
 import { createPool } from './db.ts';
-import { migrate } from './migrate.ts';
+import { ensureAppRole, migrate } from './migrate.ts';
 
-const db = createPool();
-await migrate(db, s => console.log(s));
-const app = await buildApp(db, {
+// Migrations run as the database owner; the app then runs as its own restricted user.
+const appUrl = process.env.DATABASE_URL ?? '';
+const owner = new pg.Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
+await migrate(owner, s => console.log(s));
+await ensureAppRole(owner, appUrl);
+await owner.end();
+
+const app = await buildApp(createPool(appUrl), {
   jwtSecret: process.env.JWT_SECRET ?? '',
   logger: true,
   corsOrigins: (process.env.CORS_ORIGINS ?? '').split(',').filter(Boolean),

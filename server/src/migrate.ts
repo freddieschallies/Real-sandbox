@@ -17,9 +17,34 @@ export async function migrate(db: pg.Pool, log: (s: string) => void = () => {}) 
   }
 }
 
+/**
+ * The app itself connects as its own role, which can read and write data but is not a superuser
+ * and cannot bypass row-level security. That is what makes company separation hold even if a
+ * query in the app were wrong. Run with the owner connection; appUrl names the role and password.
+ */
+export async function ensureAppRole(owner: pg.Pool, appUrl: string) {
+  const u = new URL(appUrl);
+  const role = decodeURIComponent(u.username);
+  const password = decodeURIComponent(u.password);
+  if (!/^[a-z_][a-z0-9_]{2,40}$/.test(role)) throw new Error('app database user must be a simple lower-case name');
+  const ownerRole = (await owner.query('SELECT current_user AS r')).rows[0].r;
+  if (role === ownerRole) throw new Error('the app must connect as its own database user, not the owner');
+  const exists = (await owner.query('SELECT 1 FROM pg_roles WHERE rolname = $1', [role])).rowCount;
+  const pw = password ? (await owner.query('SELECT format(\'PASSWORD %L\', $1::text) AS p', [password])).rows[0].p : '';
+  await owner.query(`${exists ? 'ALTER' : 'CREATE'} ROLE ${role} LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE ${pw}`);
+  const dbName = (await owner.query('SELECT current_database() AS d')).rows[0].d;
+  await owner.query(`GRANT CONNECT ON DATABASE "${dbName}" TO ${role}`);
+  await owner.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
+  await owner.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
+  await owner.query(`REVOKE ALL ON schema_migrations FROM ${role}`);
+  await owner.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
+  await owner.query(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO ${role}`);
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const db = new pg.Pool({ connectionString: process.env.DATABASE_URL });
-  await migrate(db, s => console.log(s));
-  await db.end();
+  const owner = new pg.Pool({ connectionString: process.env.MIGRATION_DATABASE_URL });
+  await migrate(owner, s => console.log(s));
+  if (process.env.DATABASE_URL) await ensureAppRole(owner, process.env.DATABASE_URL);
+  await owner.end();
   console.log('database up to date');
 }

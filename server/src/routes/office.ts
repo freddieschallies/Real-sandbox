@@ -27,7 +27,7 @@ export function registerOfficeRoutes(app: FastifyInstance, db: Db) {
       newSupplierName: z.string().trim().min(2).max(200).optional(),
     }).refine(x => !!x.supplierId !== !!x.newSupplierName, 'choose a supplier or type a new one'), req.body);
     const me = req.actor.id;
-    const out = await tx(db, async c => {
+    const out = await tx(req.db, async c => {
       const open = await c.query("SELECT 1 FROM supply_runs WHERE technician_id = $1 AND status IN ('awaiting_approval', 'approved')", [me]);
       if (open.rowCount) throw new Refused(409, ['finish your open supply run first']);
       if (b.purpose === 'job_parts') {
@@ -70,7 +70,7 @@ export function registerOfficeRoutes(app: FastifyInstance, db: Db) {
 
   app.post('/supply-runs/:id/approve', async (req: FastifyRequest<{ Params: { id: string } }>) => {
     const id = parse(Uuid, req.params.id);
-    return tx(db, async c => {
+    return tx(req.db, async c => {
       const r = (await c.query(
         `SELECT s.status, s.technician_id, u.department_id FROM supply_runs s JOIN users u ON u.id = s.technician_id WHERE s.id = $1 FOR UPDATE OF s`,
         [id],
@@ -91,7 +91,7 @@ export function registerOfficeRoutes(app: FastifyInstance, db: Db) {
       stock: z.array(z.object({ stockItemId: Uuid, qty: z.number().positive() })).default([]),
     }), req.body);
     const me = req.actor.id;
-    return tx(db, async c => {
+    return tx(req.db, async c => {
       const r = (await c.query('SELECT status, technician_id, job_id FROM supply_runs WHERE id = $1 FOR UPDATE', [id])).rows[0];
       if (!r || r.technician_id !== me) throw new Refused(404, ['no such supply run of yours']);
       if (r.status === 'awaiting_approval') throw new Refused(409, ['wait for your manager to approve this run']);
@@ -123,7 +123,7 @@ export function registerOfficeRoutes(app: FastifyInstance, db: Db) {
     }), req.body);
     const me = req.actor.id;
     if (b.workDate > sastDate(new Date(b.at))) throw new Refused(400, ['cannot submit a timesheet for a future day']);
-    const out = await tx(db, async c => {
+    const out = await tx(req.db, async c => {
       const exists = await c.query('SELECT 1 FROM timesheets WHERE technician_id = $1 AND work_date = $2', [me, b.workDate]);
       if (exists.rowCount) throw new Refused(409, ['a timesheet for this day is already submitted; corrections go through your supervisor']);
       const ts = (await c.query('INSERT INTO timesheets (technician_id, work_date, submitted_at) VALUES ($1, $2, $3) RETURNING id', [me, b.workDate, b.at])).rows[0].id;
@@ -178,7 +178,7 @@ export function registerOfficeRoutes(app: FastifyInstance, db: Db) {
     if (!allowed) throw new Refused(403, ['you do not have access to flags']);
     if (q.departmentId && allowed !== 'all' && !allowed.includes(q.departmentId)) throw new Refused(403, ['you do not have access to that department']);
     const deptFilter: string[] | null = q.departmentId ? [q.departmentId] : (allowed === 'all' ? null : allowed);
-    const { rows } = await db.query(
+    const { rows } = await req.db.query(
       `SELECT f.id, f.flag_type, f.severity, f.raised_at, f.question, f.explanation, f.explained_at, f.status,
               f.details, f.job_id, j.job_number, f.vehicle_id, u.full_name AS technician, d.name AS department
          FROM flags f
@@ -197,7 +197,7 @@ export function registerOfficeRoutes(app: FastifyInstance, db: Db) {
   app.post('/flags/:id/resolve', async (req: FastifyRequest<{ Params: { id: string } }>) => {
     const id = parse(Uuid, req.params.id);
     const b = parse(z.object({ note: z.string().trim().min(5, 'add a note saying how it was handled').max(2000) }), req.body);
-    return tx(db, async c => {
+    return tx(req.db, async c => {
       const f = (await c.query(
         'SELECT f.status, f.technician_id, u.department_id FROM flags f LEFT JOIN users u ON u.id = f.technician_id WHERE f.id = $1 FOR UPDATE OF f',
         [id],

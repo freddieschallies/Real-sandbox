@@ -1,5 +1,7 @@
 // Integration tests: real HTTP requests against a fresh test database.
 // Needs TEST_DATABASE_ADMIN_URL (a server where the test database can be dropped and re-created).
+// The app runs as its own restricted database user, exactly as in production, so row-level
+// security is really in force. `db` below is the owner, used only to set up and inspect.
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
@@ -9,14 +11,19 @@ import pg from 'pg';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import { hashPassword } from '../src/auth.ts';
-import { migrate } from '../src/migrate.ts';
+import { ensureAppRole, migrate } from '../src/migrate.ts';
+import { createCompany } from '../src/routes/platform.ts';
 
 const ADMIN_URL = process.env.TEST_DATABASE_ADMIN_URL ?? 'postgres://postgres@localhost:5433/postgres?host=/tmp';
 const TEST_DB = 'realsandbox_test';
 const TEST_URL = ADMIN_URL.replace(/\/postgres(\?|$)/, `/${TEST_DB}$1`);
 const PW = 'test-password-123';
 
-let db: pg.Pool;
+const APP_URL = TEST_URL.replace('postgres://postgres@', 'postgres://rs_app_test:test@');
+
+let db: pg.Pool;       // owner connection, company A set on every connection
+let owner: pg.Pool;    // owner connection, no company set
+let appDb: pg.Pool;    // the app's own restricted connection
 let app: FastifyInstance;
 const ids: Record<string, string> = {};
 const tokens: Record<string, string> = {};
@@ -55,18 +62,28 @@ before(async () => {
   await admin.query(`CREATE DATABASE ${TEST_DB}`);
   await admin.end();
 
-  db = new pg.Pool({ connectionString: TEST_URL });
-  await migrate(db);
+  owner = new pg.Pool({ connectionString: TEST_URL });
+  await migrate(owner);
+  await ensureAppRole(owner, APP_URL);
+  appDb = new pg.Pool({ connectionString: APP_URL });
   process.env.UPLOAD_DIR = mkdtempSync(join(tmpdir(), 'rs-uploads-'));
+
+  // Company A is set up the way the platform owner would: company + its first Creator.
+  const a = await createCompany(appDb, 'ZSP Test', { name: 'creator', email: 'creator@zsp.test', password: PW });
+  ids.company = a.companyId;
+  ids.creator = a.creatorUserId;
+  db = new pg.Pool({ connectionString: TEST_URL });
+  db.on('connect', c => { c.query("SELECT set_config('app.company_id', $1, false)", [ids.company]); });
 
   const hash = await hashPassword(PW);
   const q = async (sql: string, p: unknown[]) => (await db.query(sql, p)).rows[0];
   ids.dept = (await q("INSERT INTO departments (name) VALUES ('Refrigeration') RETURNING id", [])).id;
+  await db.query('UPDATE users SET department_id = $1 WHERE id = $2', [ids.dept, ids.creator]);
   const user = async (key: string, level: string) => {
     ids[key] = (await q('INSERT INTO users (full_name, email, login_level, department_id, password_hash) VALUES ($1, $2, $3, $4, $5) RETURNING id',
       [key, `${key}@zsp.test`, level, ids.dept, hash])).id;
+    await db.query('INSERT INTO logins (email, user_id, company_id) VALUES ($1, $2, $3)', [`${key}@zsp.test`, ids[key], ids.company]);
   };
-  await user('creator', 'creator');
   await user('admin', 'admin');
   await user('director', 'director');
   await user('manager', 'management');
@@ -81,12 +98,14 @@ before(async () => {
   await db.query("INSERT INTO stock_movements (stock_item_id, qty, kind, from_stockroom, to_technician_id, created_by) VALUES ($1, 2, 'assign', true, $2, $3)", [ids.seal, ids.tech, ids.admin]);
   ids.policy = (await q("INSERT INTO policy_versions (version, body) VALUES ('1.0', 'Vehicle and App Monitoring Policy') RETURNING id", [])).id;
 
-  app = await buildApp(db, { jwtSecret: 'x'.repeat(40) });
+  app = await buildApp(appDb, { jwtSecret: 'x'.repeat(40) });
 });
 
 after(async () => {
   await app?.close();
   await db?.end();
+  await appDb?.end();
+  await owner?.end();
 });
 
 test('login: wrong password refused, right password gives a token', async () => {
@@ -390,6 +409,84 @@ test('the CEO decides access: changes apply at once, are logged, and nobody can 
   const log = await call('director', 'GET', '/access/changes');
   assert.equal(log.body.length, 3, 'every change is in the history');
   assert.equal(log.body[2].change, 'granted (all departments)');
+});
+
+test('platform owner creates a second company, but cannot see any company data', async () => {
+  await owner.query("INSERT INTO platform_admins (full_name, email, password_hash) VALUES ('Platform', 'owner@platform.test', $1)", [await hashPassword(PW)]);
+  const login = await call('', 'POST', '/platform/login', { email: 'owner@platform.test', password: PW });
+  assert.equal(login.status, 200);
+  tokens.platform = login.body.token;
+  assert.equal((await call('platform', 'GET', '/jobs')).status, 401, 'a platform login is not a company login');
+  assert.equal((await call('creator', 'GET', '/platform/companies')).status, 403, 'a company login cannot manage companies');
+
+  const dup = await call('platform', 'POST', '/platform/companies', { name: 'Other Co', creator: { name: 'Clash', email: 'tech@zsp.test', password: PW } });
+  assert.equal(dup.status, 409, 'one email = one person = one company');
+  const b = await call('platform', 'POST', '/platform/companies', { name: 'Coastal Cooling', creator: { name: 'Bea Creator', email: 'bea@coastal.test', password: PW } });
+  assert.equal(b.status, 201);
+  ids.companyB = b.body.companyId;
+  const list = await call('platform', 'GET', '/platform/companies');
+  assert.deepEqual(list.body.map((c: { name: string }) => c.name), ['Coastal Cooling', 'ZSP Test']);
+});
+
+test('company B sees nothing of company A, and cannot link to its records', async () => {
+  const login = await call('', 'POST', '/auth/login', { email: 'bea@coastal.test', password: PW });
+  assert.equal(login.status, 200);
+  assert.equal(login.body.company.name, 'Coastal Cooling');
+  tokens.bea = login.body.token;
+  // Company B has its own policy to publish and acknowledge
+  const pb = new pg.Client({ connectionString: TEST_URL });
+  await pb.connect();
+  await pb.query("SELECT set_config('app.company_id', $1, false)", [ids.companyB]);
+  const pol = (await pb.query("INSERT INTO policy_versions (version, body) VALUES ('1.0', 'Coastal policy') RETURNING id")).rows[0].id;
+  await pb.end();
+  assert.equal((await call('bea', 'GET', '/jobs')).status, 403);
+  await call('bea', 'POST', '/policy/acknowledge', { policyVersionId: pol });
+
+  assert.deepEqual((await call('bea', 'GET', '/jobs')).body, [], "A's jobs are invisible");
+  assert.equal((await call('bea', 'GET', `/jobs/${ids.job}`)).status, 404, "A's job card cannot be opened by id");
+  assert.equal((await call('bea', 'GET', '/flags')).body.length, 0);
+  const steal = await call('bea', 'POST', '/jobs', { jobType: 'breakdown', storeId: ids.store, faultReported: 'Using A store', scheduledDate: '2026-10-15', leadTechnicianId: ids.tech });
+  assert.equal(steal.status, 400, "cannot create a job on A's store or for A's technician");
+  assert.equal((await call('bea', 'GET', `/access/users/${ids.tech}`)).status, 404, "A's people do not exist for B");
+  const photo = (await owner.query("SELECT id FROM photos LIMIT 1")).rows[0].id;
+  assert.equal((await call('bea', 'GET', `/photos/${photo}`)).status, 404, "A's photos cannot be fetched");
+  // B numbers its own jobs from the start
+  const pc = new pg.Client({ connectionString: TEST_URL });
+  await pc.connect();
+  await pc.query("SELECT set_config('app.company_id', $1, false)", [ids.companyB]);
+  const cl = (await pc.query("INSERT INTO clients (name) VALUES ('FreshMart') RETURNING id")).rows[0].id;
+  const st = (await pc.query("INSERT INTO stores (client_id, name, lat, lng) VALUES ($1, 'FreshMart Meerensee', -28.78, 32.03) RETURNING id", [cl])).rows[0].id;
+  const tb = (await pc.query("INSERT INTO users (full_name, email, login_level, password_hash) VALUES ('Ben', 'ben@coastal.test', 'technician', 'x') RETURNING id")).rows[0].id;
+  await pc.end();
+  const jb = await call('bea', 'POST', '/jobs', { jobType: 'breakdown', storeId: st, faultReported: 'Fridge warm', scheduledDate: '2026-10-15', leadTechnicianId: tb });
+  assert.equal(jb.status, 201);
+  assert.equal(jb.body.job_number, 10001, 'same client and store names, own numbering');
+});
+
+test('the database itself enforces separation, whatever the app asks', async () => {
+  const c = await appDb.connect();
+  try {
+    assert.equal((await c.query('SELECT count(*)::int AS n FROM jobs')).rows[0].n, 0, 'no company set: nothing visible');
+    await assert.rejects(c.query("INSERT INTO clients (name) VALUES ('Sneaky')"), 'no company set: cannot write');
+    await c.query("SELECT set_config('app.company_id', $1, false)", [ids.companyB]);
+    assert.equal((await c.query('SELECT count(*)::int AS n FROM jobs')).rows[0].n, 1, 'only B\'s one job');
+    const upd = await c.query("UPDATE jobs SET priority = 'urgent' WHERE id = $1", [ids.job3]);
+    assert.equal(upd.rowCount, 0, "cannot change A's job even by its id");
+    await assert.rejects(c.query('INSERT INTO clients (company_id, name) VALUES ($1, $2)', [ids.company, 'Planted']), 'cannot write rows into A');
+  } finally {
+    await c.query('RESET app.company_id');
+    c.release();
+  }
+});
+
+test('a suspended company is locked out at once', async () => {
+  assert.equal((await call('platform', 'PATCH', `/platform/companies/${ids.companyB}`, { active: false })).status, 400, 'needs a reason');
+  assert.equal((await call('platform', 'PATCH', `/platform/companies/${ids.companyB}`, { active: false, reason: 'Account overdue' })).status, 200);
+  const r = await call('bea', 'GET', '/jobs');
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, 'company_suspended');
+  assert.equal((await call('', 'POST', '/auth/login', { email: 'bea@coastal.test', password: PW })).status, 403);
+  assert.equal((await call('tech', 'GET', '/me/stock')).status, 200, 'company A unaffected');
 });
 
 test('a disabled login stops working immediately', async () => {

@@ -2,7 +2,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import type { Client, Db } from '../db.ts';
+import type { Db, Q } from '../db.ts';
 import { audit, raiseFlag, tx } from '../db.ts';
 import { can } from '../core/permissions.ts';
 import { fuelProblems } from '../core/rules.ts';
@@ -10,7 +10,7 @@ import { Iso, Point, Refused, Uuid, parse } from '../http.ts';
 import { openFile, readUpload, removeFile, saveFile } from '../uploads.ts';
 
 /** The manager of a person's department, if any. */
-export async function managerOf(c: Client | Db, userId: string): Promise<string | null> {
+export async function managerOf(c: Q | Db, userId: string): Promise<string | null> {
   const { rows } = await c.query(
     'SELECT d.manager_id FROM users u JOIN departments d ON d.id = u.department_id WHERE u.id = $1',
     [userId],
@@ -18,13 +18,13 @@ export async function managerOf(c: Client | Db, userId: string): Promise<string 
   return rows[0]?.manager_id ?? null;
 }
 
-export async function notify(c: Client | Db, recipientId: string | null, kind: string, message: string, details: object = {}) {
+export async function notify(c: Q | Db, recipientId: string | null, kind: string, message: string, details: object = {}) {
   if (!recipientId) return;
   await c.query('INSERT INTO notifications (recipient_id, kind, message, details) VALUES ($1, $2, $3, $4)',
     [recipientId, kind, message, JSON.stringify(details)]);
 }
 
-async function nameOf(c: Client, userId: string): Promise<string> {
+async function nameOf(c: Q, userId: string): Promise<string> {
   return (await c.query('SELECT full_name FROM users WHERE id = $1', [userId])).rows[0]?.full_name ?? 'unknown';
 }
 
@@ -39,9 +39,9 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
     }), up.fields);
     if (f.kind === 'signature' && !f.jobId) throw new Refused(400, ['a signature belongs to a job: send jobId']);
     const id = f.id ?? randomUUID();
-    const rel = await saveFile(id, up, f.takenAt);
+    const rel = await saveFile(req.companyId, id, up, f.takenAt);
     try {
-      await db.query(
+      await req.db.query(
         'INSERT INTO photos (id, kind, job_id, file_path, taken_at, taken_by, content_type, bytes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
         [id, f.kind, f.jobId ?? null, rel, f.takenAt, req.actor.id, up.mimetype, up.buffer.length],
       );
@@ -54,7 +54,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
 
   app.get('/photos/:id', async (req: FastifyRequest<{ Params: { id: string } }>, reply) => {
     const id = parse(Uuid, req.params.id);
-    const { rows } = await db.query('SELECT file_path, content_type, taken_by FROM photos WHERE id = $1', [id]);
+    const { rows } = await req.db.query('SELECT file_path, content_type, taken_by FROM photos WHERE id = $1', [id]);
     const p = rows[0];
     if (!p) throw new Refused(404, ['no such photo']);
     if (p.taken_by !== req.actor.id && !can(req.actor, 'view_all_job_cards')) throw new Refused(403, ['not your photo']);
@@ -68,7 +68,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
     const q = parse(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }), req.query);
     const today = q.date ?? new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
     const me = req.actor.id;
-    const jobs = await db.query(
+    const jobs = await req.db.query(
       `SELECT j.id, j.job_number, j.job_type, j.priority, j.status, j.scheduled_date, j.fault_reported,
               s.name AS store, s.address, s.lat, s.lng,
               (j.lead_technician_id = $1) AS i_am_lead,
@@ -80,14 +80,14 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
         ORDER BY (j.status = 'closed'), (j.priority = 'urgent') DESC, j.scheduled_date, j.job_number`,
       [me, today],
     );
-    const vehicle = await db.query(
+    const vehicle = await req.db.query(
       `SELECT v.id, v.registration, s.mode, s.scanned_at, s.dropped_off_at
          FROM vehicle_scans s JOIN vehicles v ON v.id = s.vehicle_id
         WHERE s.user_id = $1 AND s.released_at IS NULL ORDER BY s.scanned_at DESC LIMIT 1`,
       [me],
     );
-    const flags = await db.query("SELECT count(*)::int AS n FROM flags WHERE technician_id = $1 AND status = 'open' AND question IS NOT NULL", [me]);
-    const notes = await db.query('SELECT count(*)::int AS n FROM notifications WHERE recipient_id = $1 AND read_at IS NULL', [me]);
+    const flags = await req.db.query("SELECT count(*)::int AS n FROM flags WHERE technician_id = $1 AND status = 'open' AND question IS NOT NULL", [me]);
+    const notes = await req.db.query('SELECT count(*)::int AS n FROM notifications WHERE recipient_id = $1 AND read_at IS NULL', [me]);
     return {
       date: today,
       jobs: jobs.rows,
@@ -98,7 +98,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
   });
 
   app.get('/me/stock', async req => {
-    const { rows } = await db.query(
+    const { rows } = await req.db.query(
       `SELECT i.id, i.code, i.description, i.unit, ts.qty
          FROM technician_stock ts JOIN stock_items i ON i.id = ts.stock_item_id
         WHERE ts.technician_id = $1 AND ts.qty <> 0 ORDER BY i.code`,
@@ -108,7 +108,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
   });
 
   app.get('/me/flags', async req => {
-    const { rows } = await db.query(
+    const { rows } = await req.db.query(
       `SELECT id, flag_type, severity, raised_at, question, explanation, status, details, job_id
          FROM flags WHERE technician_id = $1 AND status IN ('open', 'explained') ORDER BY raised_at DESC`,
       [req.actor.id],
@@ -119,7 +119,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
   app.post('/flags/:id/explain', async (req: FastifyRequest<{ Params: { id: string } }>) => {
     const id = parse(Uuid, req.params.id);
     const b = parse(z.object({ explanation: z.string().trim().min(10, 'give a proper explanation (at least a short sentence)').max(2000) }), req.body);
-    const { rows } = await db.query(
+    const { rows } = await req.db.query(
       `UPDATE flags SET explanation = $3, explained_at = now(), status = 'explained'
         WHERE id = $1 AND technician_id = $2 AND status = 'open' RETURNING id, status`,
       [id, req.actor.id, b.explanation],
@@ -129,7 +129,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
   });
 
   app.get('/me/notifications', async req => {
-    const { rows } = await db.query(
+    const { rows } = await req.db.query(
       'SELECT id, kind, message, details, created_at, read_at FROM notifications WHERE recipient_id = $1 ORDER BY created_at DESC LIMIT 100',
       [req.actor.id],
     );
@@ -138,7 +138,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
 
   app.post('/notifications/:id/read', async (req: FastifyRequest<{ Params: { id: string } }>) => {
     const id = parse(Uuid, req.params.id);
-    await db.query('UPDATE notifications SET read_at = now() WHERE id = $1 AND recipient_id = $2 AND read_at IS NULL', [id, req.actor.id]);
+    await req.db.query('UPDATE notifications SET read_at = now() WHERE id = $1 AND recipient_id = $2 AND read_at IS NULL', [id, req.actor.id]);
     return { ok: true };
   });
 
@@ -153,7 +153,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
       reasonNote: z.string().max(500).optional(),
     }), req.body);
     const me = req.actor.id;
-    return tx(db, async c => {
+    return tx(req.db, async c => {
       const v = (await c.query('SELECT id, registration, active FROM vehicles WHERE barcode = $1', [b.barcode])).rows[0];
       if (!v || !v.active) throw new Refused(404, ['unknown vehicle barcode']);
       const usual = (await c.query('SELECT usual_vehicle_id FROM technician_settings WHERE user_id = $1', [me])).rows[0]?.usual_vehicle_id ?? null;
@@ -194,7 +194,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
 
   app.post('/vehicles/dropped-off', async req => {
     const b = parse(z.object({ at: Iso, position: Point.optional() }), req.body);
-    const { rows } = await db.query(
+    const { rows } = await req.db.query(
       `UPDATE vehicle_scans SET dropped_off_at = $2
         WHERE user_id = $1 AND released_at IS NULL AND mode = 'riding_along' AND dropped_off_at IS NULL RETURNING id`,
       [req.actor.id, b.at],
@@ -205,7 +205,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
 
   app.post('/vehicles/picked-up', async req => {
     const b = parse(z.object({ at: Iso }), req.body);
-    const { rows } = await db.query(
+    const { rows } = await req.db.query(
       `UPDATE vehicle_scans SET dropped_off_at = NULL
         WHERE user_id = $1 AND released_at IS NULL AND dropped_off_at IS NOT NULL RETURNING id`,
       [req.actor.id],
@@ -228,7 +228,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
       position: Point.optional(),
     }), req.body);
     const me = req.actor.id;
-    const out = await tx(db, async c => {
+    const out = await tx(req.db, async c => {
       let vehicleId = b.vehicleId;
       if (!vehicleId) {
         vehicleId = (await c.query('SELECT vehicle_id FROM vehicle_scans WHERE user_id = $1 AND released_at IS NULL ORDER BY scanned_at DESC LIMIT 1', [me])).rows[0]?.vehicle_id;

@@ -23,7 +23,10 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://realsandbox:${DB_PASSWORD}@db:5432/realsandbox
+      # Migrations run as the database owner; the app runs as its own restricted user, so
+      # row-level security keeps every company's data separate.
+      MIGRATION_DATABASE_URL: postgres://realsandbox:${DB_PASSWORD}@db:5432/realsandbox
+      DATABASE_URL: postgres://rs_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}@db:5432/realsandbox
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
     volumes:
