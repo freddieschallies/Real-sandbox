@@ -35,3 +35,27 @@ export async function stockroomQty(c: Q, stockItemId: string): Promise<number> {
   const { rows } = await c.query('SELECT qty FROM stockroom_stock WHERE stock_item_id = $1', [stockItemId]);
   return Number(rows[0]?.qty ?? 0);
 }
+
+/** How much of an item is in the mechanic's workshop. */
+export async function workshopQty(c: Q, stockItemId: string): Promise<number> {
+  const { rows } = await c.query('SELECT qty FROM workshop_stock WHERE stock_item_id = $1', [stockItemId]);
+  return Number(rows[0]?.qty ?? 0);
+}
+
+/**
+ * Takes stock out of the workshop for a mechanic job card or a daily check. Counted items must be
+ * there; poured items (oil) are taken even if the system shows less, since the top-up was needed,
+ * and the shortfall is returned so the mechanic is told to count the drum.
+ */
+export async function useFromWorkshop(c: Q, o: { stockItemId: string; qty: number; by: string; fleetJobPartId?: string; dailyCheckId?: string; note?: string }) {
+  await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['workshop']);
+  const item = (await c.query('SELECT description, unit, measured FROM stock_items WHERE id = $1', [o.stockItemId])).rows[0];
+  if (!item) throw new Refused(404, ['no such stock item']);
+  const have = await workshopQty(c, o.stockItemId);
+  if (!item.measured && have < o.qty) throw new Refused(409, [`only ${have} ${item.unit} of ${item.description} in the workshop`]);
+  await c.query(
+    `INSERT INTO stock_movements (stock_item_id, qty, kind, from_workshop, fleet_job_part_id, daily_check_id, note, created_by)
+     VALUES ($1, $2, 'use_on_fleet', true, $3, $4, $5, $6)`,
+    [o.stockItemId, o.qty, o.fleetJobPartId ?? null, o.dailyCheckId ?? null, o.note ?? null, o.by]);
+  return { left: Math.round((have - o.qty) * 100) / 100, short: have < o.qty, item };
+}

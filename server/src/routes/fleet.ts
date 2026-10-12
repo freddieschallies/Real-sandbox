@@ -8,6 +8,7 @@ import { can } from '../core/permissions.ts';
 import * as F from '../core/fleet.ts';
 import { DateOnly, Iso, Refused, Uuid, parse } from '../http.ts';
 import { managerOf, notify } from './field.ts';
+import { useFromWorkshop } from '../stockRepo.ts';
 
 const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
 
@@ -36,7 +37,7 @@ export async function faultsFromHandover(c: Q, vehicleId: string, inspectionId: 
   }
 }
 
-async function mechanics(c: Q): Promise<string[]> {
+export async function mechanics(c: Q): Promise<string[]> {
   // Everyone doing the mechanic's work: by position, or given it on top of their own position.
   return (await c.query(
     `SELECT id FROM users u WHERE status <> 'left' AND (login_level = 'mechanic'
@@ -286,9 +287,10 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
     const jobId = parse(Uuid, req.params.id);
     const b = parse(z.object({
       id: Uuid.optional(), description: z.string().trim().min(2).max(300), qty: z.number().positive(), unitCostCents: z.number().int().min(0).nullish(),
-      source: z.enum(['stockroom', 'bought', 'other']), slipPhotoId: Uuid.optional(),
+      source: z.enum(['stockroom', 'bought', 'other', 'workshop']), slipPhotoId: Uuid.optional(), stockItemId: Uuid.optional(),
     }), req.body);
     if (b.source === 'bought' && !b.slipPhotoId) throw new Refused(400, ['a photo of the slip for anything bought']);
+    if (b.source === 'workshop' && !b.stockItemId) throw new Refused(400, ['which workshop stock item']);
     const out = await tx(req.db, async c => {
       const j = (await c.query('SELECT status FROM fleet_jobs WHERE id = $1', [jobId])).rows[0];
       if (!j) throw new Refused(404, ['no such job card']);
@@ -297,8 +299,13 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
         throw new Refused(409, ['upload the slip photo first']);
       }
       const id = b.id ?? randomUUID();
-      await c.query('INSERT INTO fleet_job_parts (id, job_id, description, qty, unit_cost_cents, source, slip_photo_id, added_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        [id, jobId, b.description, b.qty, b.unitCostCents ?? null, b.source, b.slipPhotoId ?? null, req.actor.id]);
+      await c.query('INSERT INTO fleet_job_parts (id, job_id, description, qty, unit_cost_cents, source, slip_photo_id, added_by, stock_item_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+        [id, jobId, b.description, b.qty, b.unitCostCents ?? null, b.source, b.slipPhotoId ?? null, req.actor.id, b.source === 'workshop' ? b.stockItemId : null]);
+      // From his own workshop stock: it comes off the workshop at once.
+      if (b.source === 'workshop') {
+        const u = await useFromWorkshop(c, { stockItemId: b.stockItemId!, qty: b.qty, by: req.actor.id, fleetJobPartId: id });
+        return { id, workshopLeft: u.left, countTheStock: u.short };
+      }
       return { id };
     });
     return reply.code(201).send(out);
@@ -390,6 +397,15 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
         [id, vehicleId, date, b.at, me, b.odometerKm, b.oil, b.oil === 'topped_up' ? b.oilLitres : null, b.water,
          b.water === 'topped_up' ? (b.waterLitres ?? null) : null, b.tyres, b.notes?.trim() || null, b.photoIds]);
       await recordKm(c, vehicleId, b.odometerKm, b.at, 'daily_check', id, me);
+      // Oil and coolant poured come off the workshop stock the office set for daily checks.
+      const stockNotes: string[] = [];
+      for (const [use, litres] of [['oil', b.oil === 'topped_up' ? b.oilLitres : null], ['water', b.water === 'topped_up' ? b.waterLitres : null]] as const) {
+        if (!litres) continue;
+        const wi = (await c.query('SELECT stock_item_id FROM workshop_items WHERE daily_check_use = $1', [use])).rows[0];
+        if (!wi) continue;
+        const u = await useFromWorkshop(c, { stockItemId: wi.stock_item_id, qty: litres, by: me, dailyCheckId: id, note: `Daily check ${v.registration}` });
+        if (u.short) stockNotes.push(`The workshop shows less ${u.item.description} than you poured: count (dip) it.`);
+      }
       const faults: string[] = [];
       for (const f of F.faultsFromDailyCheck(b)) {
         await c.query(
@@ -414,7 +430,7 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
         }
       }
       await audit(c, me, 'daily_check', 'vehicle', vehicleId, { oil: b.oil, oilLitres: b.oilLitres ?? null, water: b.water, tyres: b.tyres });
-      return { id, faults, oilWarning };
+      return { id, faults, oilWarning, stockNotes };
     });
     return reply.code(201).send(out);
   });

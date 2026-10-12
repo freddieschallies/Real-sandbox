@@ -327,3 +327,16 @@ test('fleet: service and licence due, next service, what a mechanic job card nee
   assert.deepEqual(Fl.missingToComplete({ ...base, faults: [{ id: 'f', severity: 'safety', outcome: 'deferred', note: 'no parts yet' }], vehicleStatusAfter: 'off_road' }), []);
   assert.equal(Fl.canDrive('off_road').ok, false);
 });
+
+test('workshop counts: pouring losses within the allowance are noted, bigger ones are short', async () => {
+  const W = await import('../src/core/workshop.ts');
+  assert.equal(W.allowance(10, true), 0.5, '5 % of what was poured');
+  assert.equal(W.allowance(1, true), 0.25, 'at least a quarter litre');
+  assert.equal(W.allowance(10, false), 0, 'counted items must match');
+  assert.deepEqual(W.countResult(24, 24, 3, true), { loss: 0, allowance: 0.25, result: 'ok' });
+  assert.equal(W.countResult(24, 23.8, 3, true).result, 'within_allowance');
+  assert.equal(W.countResult(24, 23, 3, true).result, 'short');
+  assert.equal(W.countResult(5, 4, 0, false).result, 'short');
+  assert.equal(W.countResult(24, 25, 3, true).result, 'over');
+  assert.deepEqual(W.missingOnCount(23, '', { result: 'short' }), ['what happened (a short note)']);
+});

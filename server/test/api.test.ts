@@ -755,6 +755,67 @@ test('daily checks: oil, water and tyres every day; oil added is always noted, a
   await assert.rejects(db.query('UPDATE daily_checks SET oil = $2 WHERE id = $1', [ok.body.id, 'ok']), /locked/);
 });
 
+test('workshop stock: set by the stock controller, used on job cards and daily checks, small pouring losses allowed but recorded', async () => {
+  const company = (await db.query('SELECT company_id FROM vehicles WHERE id = $1', [ids.v1])).rows[0].company_id;
+  const oil = (await db.query("INSERT INTO stock_items (company_id, code, description, unit, measured) VALUES ($1, 'OIL-1540', 'Engine oil 15W-40', 'L', true) RETURNING id", [company])).rows[0].id;
+  const filter = (await db.query("INSERT INTO stock_items (company_id, code, description) VALUES ($1, 'OF-HILUX', 'Oil filter Hilux') RETURNING id", [company])).rows[0].id;
+  for (const [it, qty] of [[oil, 60], [filter, 4]]) {
+    await db.query("INSERT INTO stock_movements (stock_item_id, qty, kind, to_stockroom, created_by) VALUES ($1, $2, 'receive', true, $3)", [it, qty, ids.stock]);
+  }
+  const at = '2026-10-17T08:00:00+02:00';
+  // The stock controller decides what the workshop keeps; the mechanic cannot.
+  assert.equal((await call('mech', 'PUT', `/fleet/workshop/items/${oil}`, { minQty: 20, dailyCheckUse: 'oil' })).status, 403);
+  assert.equal((await call('stock', 'PUT', `/fleet/workshop/items/${oil}`, { minQty: 20, dailyCheckUse: 'oil' })).status, 200);
+  assert.equal((await call('stock', 'PUT', `/fleet/workshop/items/${filter}`, { minQty: 2 })).status, 200);
+  let ws = (await call('mech', 'GET', '/fleet/workshop')).body;
+  assert.equal(ws.belowMin, 2, 'nothing in the workshop yet');
+
+  assert.match((await call('stock', 'POST', '/fleet/workshop/issue', { lines: [{ itemId: oil, qty: 100 }], at })).body.reasons[0], /only 60 L in the stockroom/);
+  assert.equal((await call('mech', 'POST', '/fleet/workshop/issue', { lines: [{ itemId: oil, qty: 25 }], at })).status, 403, 'the mechanic does not issue to himself');
+  assert.equal((await call('stock', 'POST', '/fleet/workshop/issue', { lines: [{ itemId: oil, qty: 25 }, { itemId: filter, qty: 2 }], at })).status, 200);
+  assert.ok((await call('mech', 'GET', '/me/notifications')).body.some((n: { message: string }) => /Stock issued to the workshop: 25 L Engine oil/.test(n.message)));
+
+  // A daily check top-up comes off the workshop oil.
+  const km1 = Number((await db.query('SELECT max(km) AS km FROM odometer_readings WHERE vehicle_id = $1', [ids.v1])).rows[0].km);
+  const dc = await call('mech', 'POST', `/fleet/vehicles/${ids.v1}/daily-check`, { odometerKm: km1 + 5, oil: 'topped_up', oilLitres: 1, water: 'ok', tyres: 'ok', at });
+  assert.equal(dc.status, 201, JSON.stringify(dc.body));
+  // A part from the workshop on a job card.
+  const km2 = Number((await db.query('SELECT max(km) AS km FROM odometer_readings WHERE vehicle_id = $1', [ids.v2])).rows[0].km);
+  const job = await call('mech', 'POST', `/fleet/vehicles/${ids.v2}/jobs`, { jobType: 'service', reason: 'Oil and filter change', odometerIn: km2, vehicleStatus: 'in_service', at });
+  assert.equal(job.status, 201, JSON.stringify(job.body));
+  assert.equal((await call('mech', 'POST', `/fleet/jobs/${job.body.id}/parts`, { description: 'Oil filter Hilux', qty: 1, source: 'workshop' })).status, 400, 'which item');
+  assert.equal((await call('mech', 'POST', `/fleet/jobs/${job.body.id}/parts`, { description: 'Oil filter Hilux', qty: 1, source: 'workshop', stockItemId: filter })).status, 201);
+  assert.match((await call('mech', 'POST', `/fleet/jobs/${job.body.id}/parts`, { description: 'Oil filter Hilux', qty: 5, source: 'workshop', stockItemId: filter })).body.reasons[0], /only 1 each/);
+  ws = (await call('mech', 'GET', '/fleet/workshop')).body;
+  const line = (id: string) => ws.lines.find((l: { id: string }) => l.id === id);
+  assert.equal(line(oil).qty, 24);
+  assert.equal(line(filter).qty, 1);
+  assert.equal(line(filter).belowMin, true);
+
+  // A spill is noted straight away.
+  assert.equal((await call('mech', 'POST', '/fleet/workshop/loss', { itemId: oil, qty: 0.2, reason: 'x', at })).status, 400);
+  assert.equal((await call('mech', 'POST', '/fleet/workshop/loss', { itemId: oil, qty: 0.2, reason: 'Spilt while pouring into ND 412-778', at })).status, 201);
+  // A dip a little short: within the pouring allowance, recorded as a small loss, no flag.
+  const c1 = await call('mech', 'POST', '/fleet/workshop/count', { itemId: oil, counted: 23.7, at: '2026-10-17T16:00:00+02:00' });
+  assert.equal(c1.status, 201, JSON.stringify(c1.body));
+  assert.equal(c1.body.result, 'within_allowance');
+  assert.equal(c1.body.loss, 0.1);
+  assert.equal(c1.body.allowance, 0.25);
+  // A big shortfall needs a note and goes to the office.
+  const c2 = await call('mech', 'POST', '/fleet/workshop/count', { itemId: oil, counted: 22, at: '2026-10-17T17:00:00+02:00' });
+  assert.equal(c2.status, 409);
+  assert.deepEqual(c2.body.reasons, ['what happened (a short note)']);
+  assert.equal((await call('mech', 'POST', '/fleet/workshop/count', { itemId: oil, counted: 22, note: 'Drum tap was dripping overnight', at: '2026-10-17T17:00:00+02:00' })).body.result, 'short');
+  assert.ok((await db.query("SELECT 1 FROM flags WHERE flag_type = 'workshop_stock_short'")).rowCount, 'the office is asked');
+  ws = (await call('stock', 'GET', '/fleet/workshop')).body;
+  assert.equal(ws.lines.find((l: { id: string }) => l.id === oil).qty, 22);
+  const moves = (await call('mech', 'GET', `/fleet/workshop/movements?itemId=${oil}`)).body;
+  assert.deepEqual(moves.map((m: { kind: string }) => m.kind), ['workshop_loss', 'workshop_loss', 'workshop_loss', 'use_on_fleet', 'assign']);
+  assert.equal(moves[3].registration, 'ND 412-778', 'which vehicle the oil went into');
+  assert.equal((await call('stock', 'GET', '/fleet/workshop/movements')).status, 200);
+  assert.equal((await call('tech', 'GET', '/fleet/workshop')).status, 403);
+});
+
 test('the CEO assigns each person a position; it takes effect at once and is logged', async () => {
   assert.equal((await call('manager', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'mechanic' })).status, 403, 'only whoever manages access');
   const list = (await call('director', 'GET', '/access/positions')).body;
