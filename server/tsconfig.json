@@ -4,9 +4,10 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
+    "skipLibCheck": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    "types": []
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"]
 }

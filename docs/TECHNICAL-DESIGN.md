@@ -28,3 +28,5 @@
 
 - `server/db/001_init.sql`: full schema (47 tables and views); `db/test_rules.sql` checks 9 hard rules: all pass.
 - `server/src/core`: permissions, job card forced path, monitoring thresholds; `test/core.test.ts`: 22 tests, all pass.
+- `server/src`: API server (Fastify). Logins, monitoring-policy gate, job creation, the full job card flow (go, arrive with geofence, start, pause, work items, photos, van stock materials, done, continue later, close with signature or manager unavailable). `test/api.test.ts`: 8 end-to-end tests against a real database, all pass.
+- Run tests: `npm test` in `server/` (needs a local PostgreSQL; see `TEST_DATABASE_ADMIN_URL`).
