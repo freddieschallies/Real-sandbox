@@ -3,6 +3,7 @@
 // feel in demo mode is what the technicians will get. Data is invented.
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
+import { DemoStock, seedStock, type DemoStockState } from './demoStock.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
 import type { CardView, Flag, StockLine, Today, TodayJob } from './types.ts';
 
@@ -21,6 +22,7 @@ export interface DemoState {
   photos: number;
   /** The demo van: who drove it last and what the last handover recorded. */
   van?: { lastDriverMe: boolean; odometerKm: number; problems: H.CheckKey[] };
+  stockControl?: DemoStockState;
   fuel: { litres: number; at: string }[];
 }
 
@@ -92,6 +94,7 @@ export function seedDemo(): DemoState {
     }],
     vehicle: null,
     photos: 0,
+    stockControl: seedStock(),
     van: { lastDriverMe: false, odometerKm: 87450, problems: ['windscreen_mirrors'] },
     fuel: [],
   };
@@ -118,8 +121,24 @@ export class DemoTransport implements Transport {
     };
   }
 
+  private stock(): DemoStock {
+    const st = this.state.stockControl ?? (this.state.stockControl = seedStock());
+    const ds = new DemoStock(st, jobId => {
+      if (jobId === 'job-10190') return { number: 10190, status: 'closed', store: 'Spar Arboretum' };
+      const j = this.findJob(jobId);
+      return j ? { number: j.meta.job_number, status: j.card.status, store: j.meta.store } : null;
+    });
+    ds.tick();
+    return ds;
+  }
+
   private van() {
     return this.state.van ?? (this.state.van = { lastDriverMe: false, odometerKm: 87450, problems: ['windscreen_mirrors'] });
+  }
+
+  private stockResult(r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }, status = 200): Response {
+    this.persist(this.state);
+    return r.ok ? ok(r.body, status) : refuse(r.status, ...r.reasons);
   }
 
   private findJob(jobId: string) { return this.state.jobs.find(j => j.meta.id === jobId); }
@@ -159,7 +178,21 @@ export class DemoTransport implements Transport {
       }));
       return ok({ date: today(), jobs, vehicle: this.state.vehicle, flagsToAnswer: this.state.flags.filter(f => f.status === 'open').length, unreadNotices: 0 });
     }
-    if (p === '/me/stock') return ok(this.state.stock.filter(s => s.qty > 0));
+    if (p === '/me/stock') return ok(this.stock().totals());
+    if (p === '/me/inventory') { const r = this.stock().inventory(); this.persist(this.state); return ok(r); }
+    if (p === '/stock/catalogue') return ok(this.stock().catalogue());
+    if (p === '/me/supplier-invoices' && req.method === 'GET') { this.stock(); this.persist(this.state); return ok(this.state.stockControl!.invoices); }
+    if (p === '/me/returns' && req.method === 'GET') { this.stock(); this.persist(this.state); return ok(this.state.stockControl!.returns); }
+    if (p === '/supplier-invoices') return this.stockResult(this.stock().scanInvoice(b), 201);
+    if ((m = p.match(/^\/supplier-invoices\/([^/]+)\/confirm$/))) return this.stockResult(this.stock().confirmInvoice(m[1], b));
+    if (p === '/me/returns') return this.stockResult(this.stock().sendReturn(b), 201);
+    if ((m = p.match(/^\/jobs\/([^/]+)\/stock$/))) return ok(this.stock().jobStock(m[1]));
+    if ((m = p.match(/^\/jobs\/([^/]+)\/stock-out$/))) {
+      const j = this.findJob(m[1]);
+      if (!j) return refuse(404, 'no such job');
+      if (j.card.status === 'closed') return refuse(409, 'job is closed');
+      return this.stockResult(this.stock().bookOut(m[1], b.lines));
+    }
     if (p === '/me/flags') return ok(this.state.flags.filter(f => f.status === 'open' || f.status === 'explained'));
     if ((m = p.match(/^\/flags\/([^/]+)\/explain$/))) {
       const f = this.state.flags.find(x => x.id === m![1]);
@@ -236,12 +269,14 @@ export class DemoTransport implements Transport {
       });
     }
     if ((m = p.match(/^\/jobs\/([^/]+)\/items\/([^/]+)\/materials$/))) {
-      const s = this.state.stock.find(x => x.id === b.stockItemId);
-      if (!s || s.qty < b.qty) return refuse(409, `only ${s?.qty ?? 0} in your van stock; add it under Bought out if it was bought for this job`);
-      return this.rule(m[1], c => {
+      const ds = this.stock();
+      const jobId = m[1];
+      const check = ds.use(jobId, b.stockItemId, b.qty);
+      if (!check.ok) return refuse(check.status, ...check.reasons);
+      return this.rule(jobId, c => {
         const it = c.items.find(i => i.id === m![2]);
         return it ? J.updateItem(c, it.id, { vanStockLines: it.vanStockLines + 1 }) : { ok: false, reasons: ['no such item'] };
-      }, () => { s.qty -= b.qty; });
+      });
     }
     if ((m = p.match(/^\/jobs\/([^/]+)\/items\/([^/]+)\/bought-out$/))) {
       return this.rule(m[1], c => {

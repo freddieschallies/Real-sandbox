@@ -6,6 +6,7 @@ import { audit, raiseFlag, tx } from '../db.ts';
 import { can } from '../core/permissions.ts';
 import * as J from '../core/jobCard.ts';
 import { isOnJob, loadCard, type JobRow } from '../jobsRepo.ts';
+import { useOnJob } from '../stockRepo.ts';
 import { Iso, Point, Refused, Uuid, DateOnly, parse } from '../http.ts';
 import { readUpload, saveFile, removeFile } from '../uploads.ts';
 
@@ -220,20 +221,13 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     }
   });
 
-  // Materials from the technician's own van stock.
+  // Materials from stock on the technician's name (booked for this job, van stock, or other jobs).
   app.post('/jobs/:id/items/:itemId/materials', async (req: FastifyRequest<{ Params: { id: string; itemId: string } }>) => {
     const itemId = parse(Uuid, req.params.itemId);
     const b = parse(z.object({ stockItemId: Uuid, qty: z.number().positive() }), req.body);
     return act(req, card => (card.status === 'closed' ? { ok: false, reasons: ['job is closed'] } : card.items.some(i => i.id === itemId) ? { ok: true, card } : { ok: false, reasons: ['no such item'] }),
       async ({ c, row, actorId }) => {
-        const held = await c.query('SELECT COALESCE(qty, 0) AS qty FROM technician_stock WHERE technician_id = $1 AND stock_item_id = $2', [actorId, b.stockItemId]);
-        const have = Number(held.rows[0]?.qty ?? 0);
-        if (have < b.qty) throw new Refused(409, [`only ${have} in your van stock; add it under Bought out if it was bought for this job`]);
-        await c.query(
-          `INSERT INTO stock_movements (stock_item_id, qty, kind, from_technician_id, job_id, work_item_id, created_by)
-           VALUES ($1, $2, 'use_on_job', $3, $4, $5, $3)`,
-          [b.stockItemId, b.qty, actorId, row.id, itemId],
-        );
+        await useOnJob(c, actorId, b.stockItemId, b.qty, row.id, itemId);
       });
   });
 

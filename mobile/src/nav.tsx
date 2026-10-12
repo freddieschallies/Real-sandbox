@@ -11,9 +11,13 @@ export type Route =
   | { name: 'scan' }
   | { name: 'fuel' }
   | { name: 'flags' }
-  | { name: 'sync' };
+  | { name: 'sync' }
+  | { name: 'stock' }
+  | { name: 'invoice'; invoiceId?: string; jobId?: string }
+  | { name: 'bookout'; jobId: string }
+  | { name: 'return' };
 
-interface Nav { route: Route; push(r: Route): void; back(): void; reset(): void }
+interface Nav { route: Route; push(r: Route): void; back(): void; reset(): void; replace(r: Route): void }
 const Ctx = createContext<Nav | null>(null);
 
 export function NavProvider({ children }: { children: React.ReactNode }) {
@@ -21,6 +25,7 @@ export function NavProvider({ children }: { children: React.ReactNode }) {
   const push = useCallback((r: Route) => setStack(s => [...s, r]), []);
   const back = useCallback(() => setStack(s => (s.length > 1 ? s.slice(0, -1) : s)), []);
   const reset = useCallback(() => setStack([{ name: 'day' }]), []);
+  const replace = useCallback((r: Route) => setStack(s => [...s.slice(0, -1), r]), []);
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (stack.length > 1) { back(); return true; }
@@ -28,7 +33,7 @@ export function NavProvider({ children }: { children: React.ReactNode }) {
     });
     return () => sub.remove();
   }, [stack, back]);
-  return <Ctx.Provider value={{ route: stack[stack.length - 1], push, back, reset }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ route: stack[stack.length - 1], push, back, reset, replace }}>{children}</Ctx.Provider>;
 }
 
 export const useNav = () => {

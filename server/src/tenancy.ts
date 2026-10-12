@@ -5,7 +5,15 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Client, Db, Q } from './db.ts';
 
 declare module 'fastify' {
-  interface FastifyRequest { db: Q; companyId: string; pgClient?: Client }
+  interface FastifyRequest { db: Q; companyId: string; pgClient?: Client; keepIfRefused?: ((c: Q) => Promise<void>)[] }
+}
+
+/**
+ * A record that must be kept even though the request is refused and everything else is undone,
+ * e.g. the flag raised when someone tries to book an invoice that was already booked.
+ */
+export function keepIfRefused(req: FastifyRequest, fn: (c: Q) => Promise<void>) {
+  (req.keepIfRefused ??= []).push(fn);
 }
 
 /** Opens the company-scoped connection for this request. */
@@ -28,6 +36,11 @@ export function registerTenancy(app: FastifyInstance) {
     if (!c) return payload;
     const ok = reply.statusCode < 400;
     await c.query(ok ? 'COMMIT' : 'ROLLBACK');
+    if (!ok && req.keepIfRefused?.length) {
+      await c.query('BEGIN');
+      for (const fn of req.keepIfRefused) await fn(c);
+      await c.query('COMMIT');
+    }
     if (req.idemKey && !req.idemReplayed && reply.statusCode < 500 && typeof payload === 'string') {
       await c.query(
         `INSERT INTO sync_requests (user_id, idem_key, method, url, status_code, response)

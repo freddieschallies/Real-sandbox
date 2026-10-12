@@ -275,3 +275,24 @@ test('handover: everything recorded and signed before it counts', () => {
   assert.deepEqual(H.newProblems(dented, { odometerKm: 900, problems: [] }), ['bodywork']);
   assert.deepEqual(H.newProblems(dented, { odometerKm: 900, problems: ['bodywork'] }), []);
 });
+
+import * as St from '../src/core/stock.ts';
+
+test('stock: using on a job draws this job first, then van stock, then other jobs; pending returns are off limits', () => {
+  const h = [{ holdingJobId: 'other', qty: 5 }, { holdingJobId: null, qty: 2 }, { holdingJobId: 'this', qty: 1, pendingReturn: 0 }];
+  assert.deepEqual(St.drawPlan(h, 2, 'this'), { ok: true, take: [{ holdingJobId: 'this', qty: 1 }, { holdingJobId: null, qty: 1 }] });
+  assert.deepEqual(St.drawPlan(h, 4, 'this'), { ok: true, take: [{ holdingJobId: 'this', qty: 1 }, { holdingJobId: null, qty: 2 }, { holdingJobId: 'other', qty: 1 }] });
+  assert.deepEqual(St.drawPlan([{ holdingJobId: null, qty: 3, pendingReturn: 2 }], 2, 'x'), { ok: false, have: 1 });
+  assert.equal(St.mustReturn('job', 'closed'), true);
+  assert.equal(St.mustReturn('job', 'in_progress'), false);
+  assert.equal(St.mustReturn(null, null), false);
+});
+
+test('stock: invoice lines matched by code or description', () => {
+  const items = [{ id: '1', code: 'VALVE-01', description: 'Water inlet valve 24V', supplierCode: 'WV-24' }, { id: '2', code: 'FUSE-10A', description: 'Fuse 10A' }];
+  assert.equal(St.matchItem({ description: 'anything', supplierCode: 'wv-24', qty: 1 }, items)?.id, '1');
+  assert.equal(St.matchItem({ description: 'FUSE 10a', qty: 1 }, items)?.id, '2');
+  assert.equal(St.matchItem({ description: 'Cable ties', qty: 1 }, items), null);
+  assert.deepEqual(St.invoiceProblems({ supplierName: '', invoiceNumber: 'A1', lines: [{ description: 'x', qty: 0 }] }), ['supplier name', 'line 1: quantity']);
+  assert.equal(St.linesTotalCents([{ description: 'a', qty: 2, unitPriceCents: 150 }, { description: 'b', qty: 1, unitPriceCents: 100 }]), 400);
+});

@@ -30,6 +30,8 @@ export function Day() {
   const t = s.cache.today;
   const jobs = [...(t?.jobs ?? [])].sort((a, b) => rank(a) - rank(b));
   const open = s.cache.flags.filter(f => f.status === 'open');
+  const mustReturn = (s.cache.inventory ?? []).filter(l => l.mustReturn && l.qty > l.pendingReturn).length;
+  const toCheck = (s.cache.invoices ?? []).filter(i => i.status === 'to_confirm' || i.status === 'unreadable').length;
   const dateText = new Date().toLocaleDateString('en-ZA', { weekday: 'long', day: 'numeric', month: 'long' });
 
   return (
@@ -95,6 +97,14 @@ export function Day() {
         ))}
 
         <Text style={st.heading}>Other</Text>
+        <Card onPress={() => nav.push({ name: 'stock' })} accessibilityLabel="My stock">
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={[st.body, { fontWeight: '700', flex: 1 }]}>My stock</Text>
+            {mustReturn ? <Pill text={`${mustReturn} to return`} tone="bad" /> : null}
+            {toCheck ? <Pill text={`${toCheck} invoice${toCheck > 1 ? 's' : ''} to check`} tone="warn" /> : null}
+          </View>
+          <Text style={st.small}>Everything on your name, supplier invoices, returns</Text>
+        </Card>
         <View style={{ flexDirection: 'row', gap: 10 }}>
           <Button label="Fuel" kind="secondary" onPress={() => nav.push({ name: 'fuel' })} style={{ flex: 1 }} />
           <Button label="Questions" kind="secondary" onPress={() => nav.push({ name: 'flags' })} style={{ flex: 1 }} />

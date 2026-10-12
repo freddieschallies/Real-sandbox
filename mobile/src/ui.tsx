@@ -133,6 +133,27 @@ export function Notice({ tone = 'warn', title, lines }: { tone?: 'warn' | 'bad' 
   );
 }
 
+/** − 3 + : big buttons for gloved hands. */
+export function Stepper({ value, onChange, max, step = 1, label }: { value: number; onChange: (n: number) => void; max?: number; step?: number; label?: string }) {
+  const set = (n: number) => onChange(Math.max(0, Math.min(max ?? Infinity, Math.round(n * 100) / 100)));
+  const btn = (t: string, on: () => void, disabled: boolean) => (
+    <Pressable onPress={on} disabled={disabled} accessibilityRole="button" accessibilityLabel={`${t === '−' ? 'Less' : 'More'}${label ? ` ${label}` : ''}`}
+      style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: C.panel2, alignItems: 'center', justifyContent: 'center', opacity: disabled ? 0.4 : 1 }}>
+      <Text style={{ color: C.text, fontSize: 24, fontWeight: '700' }}>{t}</Text>
+    </Pressable>
+  );
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+      {btn('−', () => set(value - step), value <= 0)}
+      <Text style={{ color: C.text, fontSize: 20, fontWeight: '700', minWidth: 40, textAlign: 'center' }}>{value}</Text>
+      {btn('+', () => set(value + step), max !== undefined && value >= max)}
+    </View>
+  );
+}
+
+export const rand = (cents: number | null | undefined) =>
+  cents == null ? '–' : `R ${(cents / 100).toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
 export const st = StyleSheet.create({
   screen: { flex: 1, backgroundColor: C.bg },
   header: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: S.pad, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.line, minHeight: 64 },

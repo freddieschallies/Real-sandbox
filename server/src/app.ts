@@ -12,9 +12,11 @@ import { registerFieldRoutes } from './routes/field.ts';
 import { registerOfficeRoutes } from './routes/office.ts';
 import { registerAccessRoutes } from './routes/access.ts';
 import { registerPlatformRoutes } from './routes/platform.ts';
+import { registerStockRoutes } from './routes/stock.ts';
+import type { InvoiceReader } from './invoiceReader.ts';
 
 /** db must connect as the app's own database role (no superuser, no row-level-security bypass). */
-export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boolean; corsOrigins?: string[] }) {
+export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boolean; corsOrigins?: string[]; invoiceReader?: InvoiceReader | null }) {
   if (!opts.jwtSecret || opts.jwtSecret.length < 32) throw new Error('JWT secret must be at least 32 characters');
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 1_000_000, trustProxy: true });
   registerErrors(app);
@@ -30,5 +32,6 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerOfficeRoutes(app, db);
   registerAccessRoutes(app, db);
   registerPlatformRoutes(app, db);
+  registerStockRoutes(app, db, opts.invoiceReader ?? null);
   return app;
 }

@@ -29,6 +29,8 @@ services:
       DATABASE_URL: postgres://rs_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}@db:5432/realsandbox
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      INVOICE_MODEL: ${INVOICE_MODEL:-claude-sonnet-5-5}
     volumes:
       - uploads:/data/uploads
     ports:

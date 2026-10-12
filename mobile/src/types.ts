@@ -80,3 +80,38 @@ export interface Flag {
 }
 
 export interface Policy { id: string; version: string; body: string }
+
+/** One holding on my name: van stock (holdingJobId null) or stock for a job. */
+export interface InventoryLine {
+  stockItemId: string; code: string; description: string; unit: string; needsReview: boolean;
+  holdingJobId: string | null; jobNumber: number | null; jobStatus: string | null; store: string | null;
+  qty: number; pendingReturn: number; mustReturn: boolean;
+}
+
+export interface CatalogueLine { id: string; code: string; description: string; unit: string; inStockroom: number }
+
+export interface JobStockLine { stockItemId: string; code: string; description: string; unit: string; booked: number; used: number; returned: number; onTechnician: number }
+
+export interface ReadLine { description: string; supplierCode: string | null; qty: number; unitPriceCents: number | null }
+
+export interface SupplierInvoice {
+  id: string;
+  status: 'reading' | 'to_confirm' | 'confirmed' | 'unreadable';
+  job_id: string | null;
+  photo_id?: string;
+  supplier_name: string | null;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  total_cents: number | null;
+  scanned_at: string;
+  confirmed_at: string | null;
+  read_result: { supplierName: string | null; invoiceNumber: string | null; invoiceDate: string | null; totalCents: number | null; vatCents: number | null; lines: ReadLine[] } | null;
+  read_error: string | null;
+  /** Phone only: the photo as taken, until the office has it. */
+  localPhotoUri?: string;
+}
+
+export interface StockReturn {
+  id: string; status: 'pending' | 'received'; requested_at: string; received_at: string | null; note: string | null;
+  lines: { lineId: string; stockItemId: string; code: string; description: string; holdingJobId: string | null; jobNumber: number | null; qty: number; qtyReceived: number | null }[];
+}

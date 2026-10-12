@@ -196,9 +196,10 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
 
   app.get('/me/stock', async req => {
     const { rows } = await req.db.query(
-      `SELECT i.id, i.code, i.description, i.unit, ts.qty
-         FROM technician_stock ts JOIN stock_items i ON i.id = ts.stock_item_id
-        WHERE ts.technician_id = $1 AND ts.qty <> 0 ORDER BY i.code`,
+      `SELECT i.id, i.code, i.description, i.unit,
+              SUM(h.qty) - COALESCE((SELECT SUM(p.qty) FROM pending_returns p WHERE p.technician_id = $1 AND p.stock_item_id = i.id), 0) AS qty
+         FROM technician_holdings h JOIN stock_items i ON i.id = h.stock_item_id
+        WHERE h.technician_id = $1 GROUP BY i.id HAVING SUM(h.qty) > 0 ORDER BY i.code`,
       [req.actor.id],
     );
     return rows.map(r => ({ ...r, qty: Number(r.qty) }));

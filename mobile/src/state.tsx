@@ -10,13 +10,18 @@ import { DemoTransport, seedDemo, type DemoState } from './demo.ts';
 import { Outbox, type Blocked, type Entry } from './outbox.ts';
 import { Offline, reasonsOf, type Request, type Transport, type Upload } from './transport.ts';
 import { apply, J } from './local.ts';
-import type { CardView, Flag, Policy, Session, StockLine, Today } from './types.ts';
+import type { CardView, CatalogueLine, Flag, InventoryLine, JobStockLine, Policy, Session, StockLine, StockReturn, SupplierInvoice, Today } from './types.ts';
 
 const K = { session: 'rs.session', cache: 'rs.cache', outbox: 'rs.outbox', demo: 'rs.demo' };
 
-interface Cache { today: Today | null; cards: Record<string, CardView>; stock: StockLine[]; flags: Flag[]; refreshedAt: string | null }
-const EMPTY: Cache = { today: null, cards: {}, stock: [], flags: [], refreshedAt: null };
+interface Cache {
+  today: Today | null; cards: Record<string, CardView>; stock: StockLine[]; flags: Flag[]; refreshedAt: string | null;
+  inventory?: InventoryLine[]; invoices?: SupplierInvoice[]; returns?: StockReturn[]; catalogue?: CatalogueLine[];
+  jobStock?: Record<string, JobStockLine[]>;
+}
+const EMPTY: Cache = { today: null, cards: {}, stock: [], flags: [], refreshedAt: null, inventory: [], invoices: [], returns: [], catalogue: [], jobStock: {} };
 
+export type { Cache };
 export type ActionResult = { ok: true } | { ok: false; reasons: string[] };
 
 export interface Store {
@@ -45,6 +50,8 @@ export interface Store {
   ask(req: Omit<Request, 'idemKey'>): Promise<{ status: number; body: any } | null>;
   /** Updates the day on the phone straight away (e.g. the vehicle he just scanned into). */
   patchToday(fn: (t: Today) => Today): void;
+  /** Changes what the phone holds straight away (an invoice just scanned, a return just sent). */
+  patchCache(fn: (c: Cache) => Cache): void;
   /** Keeps the van stock on the phone honest after materials are used offline. */
   adjustStock(stockItemId: string, delta: number): void;
   syncNow(): Promise<void>;
@@ -125,12 +132,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         const r = await call({ method: 'GET', path: `/jobs/${j.id}` });
         if (r.status === 200) cards[j.id] = r.body;
       }
-      const stock = await call({ method: 'GET', path: '/me/stock' });
-      const flags = await call({ method: 'GET', path: '/me/flags' });
+      const get = async <T,>(path: string, keep: T): Promise<T> => { const r = await call({ method: 'GET', path }); return r.status === 200 ? r.body as T : keep; };
+      const prev = cacheRef.current;
+      const jobStock: Record<string, JobStockLine[]> = {};
+      for (const j of today.jobs) jobStock[j.id] = await get(`/jobs/${j.id}/stock`, prev.jobStock?.[j.id] ?? []);
+      const stock = await get('/me/stock', prev.stock);
+      const flags = await get('/me/flags', prev.flags);
+      const inventory = await get('/me/inventory', prev.inventory ?? []);
+      const invoices = await get<SupplierInvoice[]>('/me/supplier-invoices', prev.invoices ?? []);
+      const returns = await get('/me/returns', prev.returns ?? []);
+      const catalogue = await get('/stock/catalogue', prev.catalogue ?? []);
       setCacheAndSave(() => ({
-        today, cards,
-        stock: stock.status === 200 ? stock.body : cacheRef.current.stock,
-        flags: flags.status === 200 ? flags.body : cacheRef.current.flags,
+        today, cards, stock, flags, inventory, returns, catalogue, jobStock,
+        invoices: invoices.map(i => ({ ...i, localPhotoUri: prev.invoices?.find(x => x.id === i.id)?.localPhotoUri })),
         refreshedAt: new Date().toISOString(),
       }));
     } catch (e) {
@@ -245,6 +259,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setCacheAndSave(c => ({ ...c, today: c.today ? fn(c.today) : c.today }));
   }, [setCacheAndSave]);
 
+  const patchCache = useCallback((fn: (c: Cache) => Cache) => setCacheAndSave(fn), [setCacheAndSave]);
+
   const adjustStock = useCallback((stockItemId: string, delta: number) => {
     setCacheAndSave(c => ({ ...c, stock: c.stock.map(l => (l.id === stockItemId ? { ...l, qty: l.qty + delta } : l)) }));
   }, [setCacheAndSave]);
@@ -269,7 +285,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     online: session?.mode === 'demo' ? !demoNoSignal : net.isConnected !== false,
     syncing, demoNoSignal,
     signIn, signOut, policy, acknowledge, refresh, loadCard, jobAction, queue,
-    newId: randomUUID, ask, patchToday, adjustStock, syncNow, discardBlocked, setDemoNoSignal,
+    newId: randomUUID, ask, patchToday, patchCache, adjustStock, syncNow, discardBlocked, setDemoNoSignal,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

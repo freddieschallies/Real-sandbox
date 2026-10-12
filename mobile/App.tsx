@@ -15,6 +15,10 @@ import { Scan } from './src/screens/Scan.tsx';
 import { Fuel } from './src/screens/Fuel.tsx';
 import { Flags } from './src/screens/Flags.tsx';
 import { Sync } from './src/screens/Sync.tsx';
+import { MyStock } from './src/screens/MyStock.tsx';
+import { Invoice } from './src/screens/Invoice.tsx';
+import { BookOut } from './src/screens/BookOut.tsx';
+import { Return } from './src/screens/Return.tsx';
 import { C } from './src/theme.ts';
 
 function Current() {
@@ -29,6 +33,10 @@ function Current() {
     case 'fuel': return <Fuel />;
     case 'flags': return <Flags />;
     case 'sync': return <Sync />;
+    case 'stock': return <MyStock />;
+    case 'invoice': return <Invoice key={route.invoiceId ?? 'new'} invoiceId={route.invoiceId} jobId={route.jobId} />;
+    case 'bookout': return <BookOut jobId={route.jobId} />;
+    case 'return': return <Return />;
   }
 }
 

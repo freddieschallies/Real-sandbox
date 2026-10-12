@@ -100,8 +100,8 @@ export function registerOfficeRoutes(app: FastifyInstance, db: Db) {
       if (!slip.rowCount) throw new Refused(409, ['upload the supplier slip photo first']);
       for (const l of b.stock) {
         await c.query(
-          `INSERT INTO stock_movements (stock_item_id, qty, kind, to_technician_id, job_id, supply_run_id, created_by)
-           VALUES ($1, $2, 'supply_run', $3, $4, $5, $3)`,
+          `INSERT INTO stock_movements (stock_item_id, qty, kind, to_technician_id, job_id, holding_job_id, supply_run_id, created_by)
+           VALUES ($1, $2, 'supply_run', $3, $4, $4, $5, $3)`,
           [l.stockItemId, l.qty, me, r.job_id, id],
         );
       }

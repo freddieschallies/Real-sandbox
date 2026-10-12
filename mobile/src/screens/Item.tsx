@@ -5,6 +5,7 @@ import { useStore } from '../state.tsx';
 import { useNav } from '../nav.tsx';
 import { takePhoto, nowIso, type Photo } from '../device.ts';
 import { J } from '../local.ts';
+import * as St from '../../../server/src/core/stock.ts';
 import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, Screen, Toggle, st } from '../ui.tsx';
 import { SyncPill } from './SyncPill.tsx';
 import { C } from '../theme.ts';
@@ -130,10 +131,21 @@ function Materials({ jobId, itemId, editable, lines, onRefused }: { jobId: strin
   const useVan = (stockItemId: string, label: string, onVan: number) => {
     const n = Number(qty.replace(',', '.'));
     if (!(n > 0)) { onRefused(['a quantity above 0']); return; }
-    if (n > onVan) { onRefused([`only ${onVan} in your van stock; add it under Bought out if it was bought for this job`]); return; }
+    if (n > onVan) { onRefused([`only ${onVan} on your name; book it out from the stockroom, or add it under Bought out if you bought it`]); return; }
     const r = s.jobAction(jobId, `Used ${n} × ${label}`, bump('vanStockLines'), { method: 'POST', path: `/jobs/${jobId}/items/${itemId}/materials`, json: { stockItemId, qty: n } });
     onRefused(r.ok ? null : r.reasons);
-    if (r.ok) { s.adjustStock(stockItemId, -n); setMode('none'); setQty('1'); }
+    if (r.ok) {
+      s.adjustStock(stockItemId, -n);
+      // Same order as the office: this job's stock first, then van stock, then other jobs.
+      s.patchCache(c => {
+        const inv = (c.inventory ?? []).map(x => ({ ...x }));
+        const plan = St.drawPlan(inv.filter(x => x.stockItemId === stockItemId), n, jobId);
+        if (plan.ok) for (const t of plan.take) { const h = inv.find(x => x.stockItemId === stockItemId && x.holdingJobId === t.holdingJobId); if (h) h.qty -= t.qty; }
+        const js = (c.jobStock?.[jobId] ?? []).map(x => (x.stockItemId === stockItemId ? { ...x, used: x.used + n, onTechnician: Math.max(0, x.onTechnician - n) } : x));
+        return { ...c, inventory: inv.filter(x => x.qty > 0), jobStock: { ...c.jobStock, [jobId]: js } };
+      });
+      setMode('none'); setQty('1');
+    }
   };
 
   const addBought = () => {
@@ -160,7 +172,7 @@ function Materials({ jobId, itemId, editable, lines, onRefused }: { jobId: strin
       <Body quiet>{lines ? `${lines} material line${lines > 1 ? 's' : ''} on this item` : 'No materials added yet'}</Body>
       {editable && mode === 'none' ? (
         <View style={{ flexDirection: 'row', gap: 10 }}>
-          <Button label="From my van" kind="secondary" onPress={() => setMode('van')} style={{ flex: 1 }} />
+          <Button label="From my stock" kind="secondary" onPress={() => setMode('van')} style={{ flex: 1 }} />
           <Button label="Bought out" kind="secondary" onPress={() => setMode('bought')} style={{ flex: 1 }} />
         </View>
       ) : null}
@@ -168,11 +180,11 @@ function Materials({ jobId, itemId, editable, lines, onRefused }: { jobId: strin
         <Card>
           <Field label="Quantity" value={qty} onChangeText={setQty} keyboardType="decimal-pad" />
           <Label>Tap the item you used</Label>
-          {s.cache.stock.length === 0 ? <Body quiet>Your van stock is empty on the phone.</Body> : null}
+          {s.cache.stock.length === 0 ? <Body quiet>Nothing on your name. Book it out from the stockroom on the job card.</Body> : null}
           {s.cache.stock.map(l => (
             <Card key={l.id} onPress={() => useVan(l.id, l.description, l.qty)} style={{ backgroundColor: C.panel2 }}>
               <Text style={[st.body, { fontWeight: '700' }]}>{l.description}</Text>
-              <Text style={st.small}>{l.code} · {l.qty} {l.unit} in van</Text>
+              <Text style={st.small}>{l.code} · {l.qty} {l.unit} on your name</Text>
             </Card>
           ))}
           <Button label="Cancel" kind="quiet" onPress={() => setMode('none')} />

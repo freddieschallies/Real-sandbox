@@ -109,6 +109,8 @@ export function Job({ jobId }: { jobId: string }) {
         </>
       ) : null}
 
+      <JobStock jobId={jobId} closed={state === 'closed'} />
+
       {state === 'working' ? (
         <>
           <Button label="Done – all work finished" onPress={() => run('Job done', c => J.done(c, nowIso()), 'done', { at: nowIso() })} />
@@ -219,5 +221,44 @@ function PauseBox({ onPause }: { onPause: (r: J.PauseReason) => boolean }) {
         <Button label="Pause now" disabled={!reason} onPress={() => { if (reason && onPause(reason)) setOpen(false); }} style={{ flex: 1 }} />
       </View>
     </Card>
+  );
+}
+
+/** Stock for this job: booked out, used on the card, and still on the technician's name. */
+function JobStock({ jobId, closed }: { jobId: string; closed: boolean }) {
+  const s = useStore();
+  const nav = useNav();
+  const lines = s.cache.jobStock?.[jobId] ?? [];
+  const left = lines.filter(l => l.onTechnician > 0);
+  const invoices = (s.cache.invoices ?? []).filter(i => i.job_id === jobId && i.status !== 'confirmed');
+  return (
+    <>
+      <Heading>Stock for this job</Heading>
+      {invoices.map(i => (
+        <Card key={i.id} onPress={i.status === 'reading' ? undefined : () => nav.push({ name: 'invoice', invoiceId: i.id })} style={{ borderColor: C.warn }}>
+          <Text style={[st.body, { color: C.warn, fontWeight: '700' }]}>{i.status === 'reading' ? 'Supplier invoice: reading…' : 'Supplier invoice read: tap to check and confirm'}</Text>
+        </Card>
+      ))}
+      {lines.length ? (
+        <Card>
+          {lines.map(l => (
+            <View key={l.stockItemId} style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+              <Text style={[st.body, { flex: 1 }]} numberOfLines={1}>{l.description}</Text>
+              <Text style={st.small}>out {l.booked} · used {l.used}{l.returned ? ` · back ${l.returned}` : ''}</Text>
+              <Text style={{ color: l.onTechnician > 0 ? (closed ? C.bad : C.warn) : C.good, fontWeight: '700', minWidth: 28, textAlign: 'right' }}>{l.onTechnician}</Text>
+            </View>
+          ))}
+          <Text style={st.small}>Last column: still on your name for this job.</Text>
+        </Card>
+      ) : <Body quiet>Nothing booked out for this job yet.</Body>}
+      {closed && left.length ? <Notice tone="bad" title="Return what was not used" lines={left.map(l => `${l.onTechnician} × ${l.description}`)} /> : null}
+      {closed && left.length ? <Button label="Return to stockroom" kind="secondary" onPress={() => nav.push({ name: 'return' })} /> : null}
+      {!closed ? (
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <Button label="Book out" kind="secondary" onPress={() => nav.push({ name: 'bookout', jobId })} style={{ flex: 1 }} />
+          <Button label="Scan invoice" kind="secondary" onPress={() => nav.push({ name: 'invoice', jobId })} style={{ flex: 1 }} />
+        </View>
+      ) : null}
+    </>
   );
 }
