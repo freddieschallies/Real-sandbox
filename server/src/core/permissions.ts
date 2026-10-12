@@ -10,7 +10,7 @@ export const LEVELS: LoginLevel[] = ['technician', 'mechanic', 'admin', 'stockro
 /** What each position is called on screen. The CEO assigns one position to each person. */
 export const POSITION_LABEL: Record<LoginLevel, string> = {
   technician: 'Technician', mechanic: 'Mechanic (fleet)', admin: 'Admin', stockroom: 'Stock controller',
-  management: 'Manager', director: 'Director / CEO', creator: 'Creator (system owner)',
+  management: 'Department manager', director: 'Director / CEO', creator: 'Creator (system owner)',
 };
 
 /** For actions about employees: which employees' departments it covers. */
@@ -53,6 +53,7 @@ export const CATALOGUE = {
   manage_stockroom:           { group: 'Stock', label: 'Receive stock into the stockroom', scoped: false },
   assign_stock:               { group: 'Stock', label: 'Assign stock to technicians', scoped: false },
   run_stocktake:              { group: 'Stock', label: 'Run stock takes', scoped: false },
+  set_van_stock:              { group: 'Stock', label: 'Set the van stock list (bill of quantities) for a department', scoped: true },
 
   view_flags:                 { group: 'People', label: 'See flags and explanations', scoped: true },
   resolve_flags:              { group: 'People', label: 'Resolve flags, approve top-up runs', scoped: true },
@@ -90,14 +91,17 @@ const admin: Permissions = {
   view_quotes_invoices_stock: true, prepare_quotes_invoices: true,
 };
 const stockroom: Permissions = { ...admin, manage_stockroom: true, assign_stock: true, run_stocktake: true };
-// Staff records are for the CEO and whoever the CEO gives HR work, not managers by default.
+// A department manager runs his technicians: monitors them, assigns jobs, checks job cards and sets
+// his department's van stock list. Quotes, invoices and the stockroom are not part of it unless the
+// CEO switches them on. Staff records are for the CEO and HR, not managers by default.
 const management: Permissions = {
-  ...stockroom, view_fleet: true,
-  view_live_driving_markers: OWN, view_flags: OWN, resolve_flags: OWN,
+  ...technician,
+  assign_jobs: true, view_all_job_cards: true, view_live_map_positions: true, view_all_fuel: true, view_fleet: true,
+  view_live_driving_markers: OWN, view_flags: OWN, resolve_flags: OWN, set_van_stock: OWN,
   edit_technician_settings: OWN, mark_technician_left: OWN, view_former_technicians: OWN,
 };
 const director: Permissions = {
-  ...management,
+  ...stockroom, ...management, set_van_stock: ALL,
   view_live_driving_markers: ALL, view_flags: ALL, resolve_flags: ALL, view_employee_log: ALL, write_employee_log: ALL,
   edit_technician_settings: ALL, mark_technician_left: ALL, view_former_technicians: ALL,
   set_prices: true, view_director_digest: true, view_company_reports: true, manage_access: true, manage_fleet: true,
@@ -179,6 +183,7 @@ export const WORK_AREAS = {
   prices:    { label: 'Prices and rates', actions: ['set_prices'] },
   access:    { label: 'Positions and access (People)', actions: ['manage_access'] },
   hr:        { label: 'Staff records (HR): issues and warnings', actions: ['view_employee_log', 'write_employee_log'] },
+  vanstock:  { label: 'Van stock lists (bill of quantities)', actions: ['set_van_stock'] },
 } as const satisfies Record<string, { label: string; actions: readonly Action[] }>;
 export type WorkArea = keyof typeof WORK_AREAS;
 

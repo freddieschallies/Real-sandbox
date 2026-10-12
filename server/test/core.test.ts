@@ -44,6 +44,10 @@ test('management is limited to its own department', () => {
   assert.ok(can(mgrD1, 'mark_technician_left', techInD1));
   assert.ok(!can(mgrD1, 'view_employee_log', techInD1), 'staff records are CEO and HR only');
   assert.ok(!can(mgrD2, 'mark_technician_left', techInD1));
+  assert.ok(can(mgrD1, 'set_van_stock', techInD1), 'sets the van stock list for his own department');
+  assert.ok(!can(mgrD2, 'set_van_stock', techInD1));
+  assert.ok(can(mgrD1, 'assign_jobs') && can(mgrD1, 'view_all_job_cards'), 'assigns jobs and checks job cards');
+  assert.ok(!can(mgrD1, 'prepare_quotes_invoices') && !can(mgrD1, 'assign_stock'), 'quotes and the stockroom only if the CEO adds them');
   assert.ok(!can(mgrD2, 'resolve_flags', techInD1));
   assert.ok(!can(mgrD1, 'view_director_digest'));
 });
@@ -388,4 +392,12 @@ test('Pastel Partner import file: header and detail rows, periods, codes', async
   assert.equal(f[3], 'Detail,0,1,320.00,368.00,each,01,0,0,VALVE-01,Water inlet valve 24V,4,,001');
   assert.deepEqual(P.missingForPastel({ ...doc, customerCode: null, lines: [...doc.lines, { kind: 'travel' as const, description: 'Travel', qty: 40, unitPriceCents: 900 }] }, s),
     ["the client's Pastel customer code", 'a Pastel code for travel lines (Accounts, Pastel codes)']);
+});
+
+test('van check: each line of the list against the van', () => {
+  const r = St.vanCheck([{ stockItemId: 'a', qty: 5 }, { stockItemId: 'b', qty: 2 }], new Map([['a', 5], ['b', 0.5], ['c', 9]]));
+  assert.equal(r.complete, false);
+  assert.equal(r.shortLines, 1);
+  assert.deepEqual(r.lines.map(l => l.short), [0, 1.5]);
+  assert.equal(St.vanCheck([], new Map()).complete, true, 'no list: nothing short');
 });

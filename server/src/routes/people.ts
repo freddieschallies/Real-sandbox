@@ -20,6 +20,13 @@ export function registerPeopleRoutes(app: FastifyInstance) {
       `SELECT u.id, u.full_name, u.email, u.phone, u.login_level, u.trade, u.status, u.department_id, d.name AS department, p.photo_id, p.emergency_name, p.emergency_phone,
               p.id_number, to_char(p.date_of_birth, 'YYYY-MM-DD') AS date_of_birth, p.home_address, to_char(p.start_date, 'YYYY-MM-DD') AS start_date, p.notes
          FROM users u LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.id = $1`, [id])).rows[0];
+    if (u) {
+      u.manager = (await db.query('SELECT m.full_name FROM departments d JOIN users m ON m.id = d.manager_id WHERE d.id = $1', [u.department_id])).rows[0]?.full_name ?? null;
+      // A department manager: the technicians who work under him.
+      u.team = (await db.query(
+        `SELECT t.id, t.full_name, d.name AS department FROM departments d JOIN users t ON t.department_id = d.id
+          WHERE d.manager_id = $1 AND t.login_level = 'technician' AND t.status <> 'left' ORDER BY d.name, t.full_name`, [id])).rows;
+    }
     if (!u) throw new Refused(404, ['no such person']);
 
     // Right now: the vehicle on their name, who else is in it, the job they are busy with, where they are.
@@ -48,7 +55,7 @@ export function registerPeopleRoutes(app: FastifyInstance) {
     const personal = can(req.actor, 'manage_access');
     return {
       id: u.id, full_name: u.full_name, position: POSITION_LABEL[u.login_level as LoginLevel], login_level: u.login_level, trade: u.trade,
-      tradeLabel: u.trade ? TRADES[u.trade as Trade] : null, department: u.department, status: u.status, photo_id: u.photo_id,
+      tradeLabel: u.trade ? TRADES[u.trade as Trade] : null, department: u.department, departmentId: u.department_id, manager: u.manager, team: u.team, status: u.status, photo_id: u.photo_id,
       now: {
         vehicle: scan ? { id: scan.vehicle_id, registration: scan.registration, mode: scan.mode, since: scan.scanned_at } : null,
         job: job ? { id: job.id, number: job.job_number, status: job.status, store: job.store, fault: job.fault_reported, lead: job.lead, startedAt: job.started_at } : null,

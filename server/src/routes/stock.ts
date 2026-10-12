@@ -11,6 +11,7 @@ import { can } from '../core/permissions.ts';
 import * as S from '../core/stock.ts';
 import { isOnJob } from '../jobsRepo.ts';
 import { holdingsOf, stockroomQty } from '../stockRepo.ts';
+import { checkVan } from '../vanRepo.ts';
 import { DateOnly, Iso, Refused, Uuid, parse } from '../http.ts';
 import type { InvoiceReader, ReadInvoice } from '../invoiceReader.ts';
 import { managerOf, notify } from './field.ts';
@@ -306,6 +307,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
         if (got < Number(l.qty)) short.push({ code: l.code, expected: Number(l.qty), received: got });
       }
       await c.query("UPDATE stock_returns SET status = 'received', received_by = $2, received_at = now(), note = $3 WHERE id = $1", [id, me, b.note ?? null]);
+      if (lines.some(l => l.holding_job_id === null)) await checkVan(c, r.technician_id, me);
       if (short.length) {
         // Whatever didn't arrive stays on his name, and he is asked about it.
         await raiseFlag(c, {

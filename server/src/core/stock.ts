@@ -80,3 +80,17 @@ export function orderQty(inStock: number, minQty: number, reorderQty: number | n
   if (short === 0) return 0;
   return reorderQty && reorderQty >= short ? reorderQty : Math.ceil(short);
 }
+
+/**
+ * A technician's van against his department's van stock list (bill of quantities): each line with
+ * what he must have, what is on his van, and how many are short. Complete when nothing is short.
+ */
+export interface VanLine { stockItemId: string; need: number; have: number; short: number }
+export function vanCheck(list: { stockItemId: string; qty: number }[], van: Map<string, number>): { lines: VanLine[]; complete: boolean; shortLines: number } {
+  const lines = list.map(l => {
+    const have = round(van.get(l.stockItemId) ?? 0);
+    return { stockItemId: l.stockItemId, need: l.qty, have, short: round(Math.max(0, l.qty - have)) };
+  });
+  const shortLines = lines.filter(l => l.short > 0).length;
+  return { lines, complete: shortLines === 0, shortLines };
+}

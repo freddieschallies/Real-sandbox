@@ -1193,6 +1193,64 @@ test('tools and PPE: the stockroom keeps each person\'s list; stock goes out and
   await assert.rejects(db.query('DELETE FROM person_kit WHERE id = $1', [meter.body.id]));
 });
 
+test('department managers: techs under them, the van stock list they set, vans short of it flagged and topped up', async () => {
+  const fuse = (await db.query("INSERT INTO stock_items (code, description) VALUES ('FUSE-20A', 'Fuse 20A') RETURNING id")).rows[0].id;
+  await db.query("INSERT INTO stock_movements (stock_item_id, qty, kind, to_stockroom, created_by) VALUES ($1, 30, 'receive', true, $2)", [fuse, ids.stock]);
+  const boots = (await db.query("SELECT id FROM stock_items WHERE code = 'PPE-BOOT'")).rows[0].id;
+  const openFlag = async (who: string) => (await db.query("SELECT details FROM flags WHERE technician_id = $1 AND flag_type = 'van_stock_short' AND status <> 'resolved'", [who])).rows;
+
+  // The manager sees his department and sets its list; the admin cannot.
+  const mine = (await call('manager', 'GET', '/van-stock')).body.departments;
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].canEdit, true);
+  assert.equal((await call('admin', 'PUT', `/van-stock/departments/${ids.dept}/items/${fuse}`, { qty: 5 })).status, 403);
+  assert.equal((await call('manager', 'PUT', `/van-stock/departments/${ids.dept}/items/${boots}`, { qty: 1 })).status, 409, 'PPE is not van stock');
+  const set = await call('manager', 'PUT', `/van-stock/departments/${ids.dept}/items/${fuse}`, { qty: 5 });
+  assert.equal(set.status, 200);
+  assert.ok(set.body.techs.every((t: { complete: boolean }) => !t.complete), 'every van is now short');
+  assert.equal((await openFlag(ids.tech)).length, 1, 'flagged');
+  const me = (await call('tech', 'GET', '/me/van')).body;
+  assert.equal(me.complete, false);
+  assert.equal(me.lines.find((l: { code: string }) => l.code === 'FUSE-20A').short, 5);
+  assert.ok((await call('stock', 'GET', '/kit/people')).body.find((x: { id: string }) => x.id === ids.tech).van_short >= 1, 'the stockroom sees it');
+
+  // The stockroom tops him up: the flag closes itself.
+  assert.equal((await call('manager', 'POST', `/van-stock/technicians/${ids.tech}/issue`, { lines: [{ stockItemId: fuse, qty: 5 }] })).status, 403);
+  assert.equal((await call('stock', 'POST', `/van-stock/technicians/${ids.tech}/issue`, { lines: [{ stockItemId: fuse, qty: 500 }] })).status, 409, 'not more than the stockroom has');
+  const top = await call('stock', 'POST', `/van-stock/technicians/${ids.tech}/issue`, { lines: [{ stockItemId: fuse, qty: 5 }] });
+  assert.equal(top.status, 200);
+  const shortElse = top.body.lines.filter((l: { short: number }) => l.short > 0);
+  assert.equal(shortElse.length, 0, JSON.stringify(shortElse));
+  assert.equal((await openFlag(ids.tech)).length, 0, 'complete again: the flag is closed');
+  const closed = (await db.query("SELECT resolution_note FROM flags WHERE technician_id = $1 AND flag_type = 'van_stock_short' ORDER BY raised_at DESC LIMIT 1", [ids.tech])).rows[0];
+  assert.equal(closed.resolution_note, 'Van stock complete again');
+
+  // The list goes up: short again, one flag at a time.
+  await call('manager', 'PUT', `/van-stock/departments/${ids.dept}/items/${fuse}`, { qty: 6 });
+  await call('manager', 'PUT', `/van-stock/departments/${ids.dept}/items/${fuse}`, { qty: 7 });
+  const again = await openFlag(ids.tech);
+  assert.equal(again.length, 1);
+  assert.equal(again[0].details.short[0].short, 2);
+  assert.equal((await call('manager', 'GET', `/van-stock/departments/${ids.dept}/changes`)).body.length, 3, 'every change is kept');
+
+  // Departments: the CEO sets them up and puts technicians under a manager.
+  assert.equal((await call('admin', 'POST', '/departments', { name: 'Plumbing' })).status, 403);
+  assert.equal((await call('director', 'POST', '/departments', { name: 'Plumbing', managerId: ids.tech })).status, 409, 'a technician cannot manage a department');
+  const plumbing = await call('director', 'POST', '/departments', { name: 'Plumbing' });
+  assert.equal(plumbing.status, 200);
+  assert.equal((await call('manager', 'PUT', `/van-stock/departments/${plumbing.body.id}/items/${fuse}`, { qty: 1 })).status, 403, 'not his department');
+  const moved = await call('director', 'PUT', `/access/users/${ids.tech}/department`, { departmentId: plumbing.body.id });
+  assert.equal(moved.status, 200);
+  assert.equal((await openFlag(ids.tech)).length, 0, 'no list in Plumbing yet: nothing short');
+  assert.ok(!(await call('director', 'GET', `/people/${ids.manager}`)).body.team.some((t: { id: string }) => t.id === ids.tech), 'no longer under him');
+  await call('director', 'PUT', `/access/users/${ids.tech}/department`, { departmentId: ids.dept });
+  assert.ok((await call('director', 'GET', `/people/${ids.manager}`)).body.team.some((t: { id: string }) => t.id === ids.tech), 'back under him');
+  assert.equal((await openFlag(ids.tech)).length, 1, 'back in Refrigeration: short again');
+  assert.equal((await call('director', 'GET', `/people/${ids.tech}`)).body.manager, 'manager');
+  await call('manager', 'PUT', `/van-stock/departments/${ids.dept}/items/${fuse}`, { qty: 0 });
+  assert.equal((await openFlag(ids.tech)).length, 0, 'off the list: complete');
+});
+
 test('fuel: slip required, logged against the vehicle, impossible litres flagged', async () => {
   // He released ND 412-778 in the test before; he drove it last, so he scans back in without an inspection.
   assert.equal((await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V1', mode: 'driving', at: '2026-10-16T17:30:00+02:00' })).status, 200);
@@ -1285,7 +1343,7 @@ test('the CEO decides access: changes apply at once, are logged, and nobody can 
   assert.equal(lock.status, 409);
   assert.equal((await call('creator', 'PUT', '/access/levels/director/manage_access', { effect: 'default' })).status, 200);
   assert.equal((await call('director', 'GET', '/access/catalogue')).status, 200);
-  const log = { body: (await call('director', 'GET', '/access/changes')).body.filter((c: { action: string }) => !c.action.startsWith('work:') && !['position', 'fleet_duty', 'stock_duty', 'trade'].includes(c.action)) };
+  const log = { body: (await call('director', 'GET', '/access/changes')).body.filter((c: { action: string }) => !c.action.startsWith('work:') && !['position', 'fleet_duty', 'stock_duty', 'trade', 'department'].includes(c.action)) };
   assert.equal(log.body.length, 3, 'every change is in the history');
   assert.equal(log.body[2].change, 'granted (all departments)');
 });

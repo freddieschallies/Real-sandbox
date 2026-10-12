@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../db.ts';
+import { checkVan } from '../vanRepo.ts';
 import { audit, raiseFlag, tx } from '../db.ts';
 import { can, departmentsFor } from '../core/permissions.ts';
 import { DateOnly, Iso, Refused, Uuid, parse } from '../http.ts';
@@ -109,6 +110,7 @@ export function registerOfficeRoutes(app: FastifyInstance, db: Db) {
         "UPDATE supply_runs SET status = 'collected', collected_at = $2, slip_photo_id = $3, slip_amount_cents = $4 WHERE id = $1",
         [id, b.at, b.slipPhotoId, b.slipAmountCents ?? null],
       );
+      if (!r.job_id && b.stock.length) await checkVan(c, me, me);
       return { id, status: 'collected', stockAdded: b.stock.length };
     });
   });

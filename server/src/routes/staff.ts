@@ -128,7 +128,8 @@ export function registerStaffRoutes(app: FastifyInstance) {
               count(k.id) FILTER (WHERE k.status = 'issued' AND k.kind = 'tool')::int AS tools,
               count(k.id) FILTER (WHERE k.status = 'issued' AND k.kind = 'ppe')::int AS ppe,
               count(k.id) FILTER (WHERE k.status = 'issued' AND k.replace_by <= $1::date)::int AS due,
-              COALESCE((SELECT SUM(h.qty) FROM technician_holdings h WHERE h.technician_id = u.id AND h.qty > 0), 0)::float AS stock
+              COALESCE((SELECT SUM(h.qty) FROM technician_holdings h WHERE h.technician_id = u.id AND h.qty > 0), 0)::float AS stock,
+              COALESCE((SELECT jsonb_array_length(f.details->'short') FROM flags f WHERE f.technician_id = u.id AND f.flag_type = 'van_stock_short' AND f.status <> 'resolved'), 0)::int AS van_short
          FROM users u LEFT JOIN person_kit k ON k.user_id = u.id LEFT JOIN user_profiles p ON p.user_id = u.id
         WHERE u.status <> 'left' GROUP BY u.id, p.photo_id ORDER BY (u.login_level = 'technician') DESC, u.full_name`, [today])).rows;
     return rows.map(r => ({ ...r, position: POSITION_LABEL[r.login_level as LoginLevel], tradeLabel: r.trade ? TRADES[r.trade as Trade] : null }));

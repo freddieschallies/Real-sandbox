@@ -2,6 +2,7 @@
 import type { Q } from './db.ts';
 import * as S from './core/stock.ts';
 import { Refused } from './http.ts';
+import { checkVan } from './vanRepo.ts';
 
 /** His holdings of one item, with what is already on its way back to the stockroom. */
 export async function holdingsOf(c: Q, technicianId: string, stockItemId: string): Promise<S.Holding[]> {
@@ -29,6 +30,8 @@ export async function useOnJob(c: Q, technicianId: string, stockItemId: string, 
       [stockItemId, t.qty, technicianId, t.holdingJobId, jobId, workItemId],
     );
   }
+  // Van stock used: is his van still complete against his department's list?
+  if (plan.take.some(t => t.holdingJobId === null)) await checkVan(c, technicianId, technicianId);
 }
 
 export async function stockroomQty(c: Q, stockItemId: string): Promise<number> {
