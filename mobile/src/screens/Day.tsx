@@ -1,4 +1,5 @@
 // My day: the vehicle he's in, flags to answer, and today's jobs in the order they matter.
+import { ModeToggle } from '../appearance.tsx';
 import { BrandLogo } from '../brand.tsx';
 import React, { useEffect, useState } from 'react';
 import { RefreshControl, ScrollView, Text, View } from 'react-native';
@@ -48,6 +49,7 @@ export function Day() {
           <Text style={st.sub}>{dateText}</Text>
         </View>
         <SyncPill />
+        <ModeToggle color={C.text} />
       </View>
       <ScrollView
         contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: S.pad * 3 }}

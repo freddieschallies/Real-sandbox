@@ -1579,6 +1579,17 @@ test('phone menus: the CEO or an admin pins tabs per position; everyone gets the
   assert.equal((await call('stock', 'GET', '/me/phone-menu')).body.pinned, null);
 });
 
+test('colour theme: the director chooses one of three for the whole company', async () => {
+  assert.equal((await call('tech', 'GET', '/company/brand')).body.accent, 'orange', 'orange to start');
+  assert.equal((await call('tech', 'GET', '/company/brand')).body.canTheme, false);
+  assert.equal((await call('admin', 'PUT' as 'POST', '/company/theme', { accent: 'blue' })).status, 403, 'not the admin');
+  assert.equal((await call('hr', 'PUT' as 'POST', '/company/theme', { accent: 'blue' })).status, 403, 'not HR');
+  assert.equal((await call('director', 'PUT' as 'POST', '/company/theme', { accent: 'pink' })).status, 400, 'one of the three');
+  assert.equal((await call('director', 'PUT' as 'POST', '/company/theme', { accent: 'green' })).status, 200);
+  assert.equal((await call('tech', 'GET', '/company/brand')).body.accent, 'green', 'everyone gets it');
+  await call('creator', 'PUT' as 'POST', '/company/theme', { accent: 'orange' });
+});
+
 test('estimates: prices only from the price list, always marked not official', async () => {
   const J = `/jobs/${ids.job3}`;
   const item = (await call('tech', 'GET', J)).body.items[0].id;

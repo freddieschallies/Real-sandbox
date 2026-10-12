@@ -3,6 +3,8 @@
 import { BottomTabs } from '../BottomTabs.tsx';
 import { BrandLogo } from '../brand.tsx';
 import { usePhoneMenu } from '../menu.tsx';
+import { ModeToggle, ThemeSettings } from '../appearance.tsx';
+import { useBrand } from '../brand.tsx';
 import { PhoneMenus } from '../menus/PhoneMenus.tsx';
 import { MENU_TABS, officeTabKeys } from '../../../server/src/core/phoneMenu.ts';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -25,7 +27,7 @@ import { Accounts, InvoiceDetail, InvoiceList, NewQuote, QuoteDetail, QuoteList,
 import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries.tsx';
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 
-const K = { band: '#121212', bandText: '#F7F3EC', stripe: '#E8701A' };
+const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
 type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'stores' | 'settings';
 type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | null;
 
@@ -90,7 +92,8 @@ export function OfficeApp() {
     { key: 'stores', label: 'Stores' },
     { key: 'settings', label: 'Settings' },
   ];
-  const mine = officeTabKeys(level, work, { people: canPeople, settings: menu.canEdit });
+  const brand = useBrand();
+  const mine = officeTabKeys(level, work, { people: canPeople, settings: menu.canEdit || brand.canTheme });
   const tabs = allTabs.filter(t => mine.includes(t.key));
   const arrange = () => { setMenuStart(level); go('settings'); };
   // Until the person picks a tab, show their first one (their work may load after the screen does);
@@ -117,7 +120,7 @@ export function OfficeApp() {
       {tab === 'vans' ? <VanLists openTech={id => setSel({ kind: 'van', id })} /> : null}
       {tab === 'people' ? <PeopleList key={`people-${sel?.kind === 'leaver' ? sel.id : ''}`} o={o} open={id => setSel({ kind: 'person', id })} openLeaver={id => setSel({ kind: 'leaver', id })} /> : null}
       {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
-      {tab === 'settings' ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}
+      {tab === 'settings' ? <><ThemeSettings />{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
       <Text style={st.small}>{o.d.loadedAt ? `Updated ${when(o.d.loadedAt)}` : o.loading ? 'Loading…' : 'Needs signal to load.'}</Text>
     </ScrollView>
@@ -153,6 +156,7 @@ export function OfficeApp() {
           <Text style={{ color: K.bandText, fontSize: 22, fontWeight: '800' }}>Office</Text>
           <Text style={{ color: K.bandText, opacity: 0.75 }}>{s.session?.user.name} · {s.session?.user.level === 'creator' ? 'CEO' : s.session?.user.level === 'admin' ? 'Admin' : s.session?.user.level === 'director' ? 'Director' : s.session?.user.level === 'hr' ? 'HR' : 'Department manager'} · {s.session?.company.name}</Text>
         </View>
+        <ModeToggle color={K.bandText} />
         <Pressable onPress={o.load} accessibilityRole="button" accessibilityLabel="Refresh" hitSlop={8}
           style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: K.bandText }}>
           <Text style={{ color: K.bandText, fontWeight: '700' }}>{o.loading ? '…' : 'Refresh'}</Text>

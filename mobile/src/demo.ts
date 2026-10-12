@@ -40,6 +40,8 @@ export interface DemoState {
   logoPhotoId?: string;
   /** Tabs pinned to the bottom of the phone, per position (Settings → Phone menus). */
   phoneMenus?: Record<string, string[]>;
+  /** The company's colour theme (the director's choice). */
+  themeAccent?: 'orange' | 'blue' | 'green';
   fleet?: DemoFleetState;
   who?: { id: string; name: string; level: string };
   fuel: { litres: number; at: string }[];
@@ -780,7 +782,15 @@ export class DemoTransport implements Transport {
     if (mr) return mr;
     const tq = this.techQuoteRoute(p, req, b);
     if (tq) return tq;
-    if (p === '/company/brand') return ok({ name: 'ZSP (demo)', logoPhotoId: this.state.logoPhotoId ?? null, logoDataUri: this.state.logoPhotoId ? null : DEMO_LOGO });
+    const ceoLevel = ['director', 'creator'].includes(this.office().levelOf(this.who.id) ?? this.who.level);
+    if (p === '/company/brand') return ok({ name: 'ZSP (demo)', logoPhotoId: this.state.logoPhotoId ?? null, logoDataUri: this.state.logoPhotoId ? null : DEMO_LOGO,
+      accent: this.state.themeAccent ?? 'orange', canTheme: ceoLevel });
+    if (p === '/company/theme' && req.method === 'PUT') {
+      if (!ceoLevel) return refuse(403, 'only the director chooses the colour theme');
+      if (!['orange', 'blue', 'green'].includes(b.accent)) return refuse(400, 'one of the three colour themes');
+      this.state.themeAccent = b.accent; this.persist(this.state);
+      return ok({ accent: b.accent });
+    }
     const off = this.officeRoute(p, req, b);
     if (off) return off;
 

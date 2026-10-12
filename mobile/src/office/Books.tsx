@@ -20,7 +20,7 @@ const STATUS: Record<string, { t: string; tone: 'info' | 'good' | 'warn' | 'bad'
   draft: { t: 'Draft', tone: 'quiet' }, sent: { t: 'Sent', tone: 'info' }, accepted: { t: 'Accepted', tone: 'good' }, declined: { t: 'Declined', tone: 'bad' },
   paid: { t: 'Paid', tone: 'good' }, cancelled: { t: 'Cancelled', tone: 'quiet' },
 };
-const K = { stripe: '#E8701A' };
+const K = { get stripe() { return C.accent; } };
 
 export function useBooks() {
   const s = useStore();

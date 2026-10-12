@@ -2,6 +2,7 @@
 // the mechanic's own job cards. Phone: tabs at the bottom. Desktop: menu, list and detail side by side.
 import { BottomTabs } from '../BottomTabs.tsx';
 import { usePhoneMenu } from '../menu.tsx';
+import { ModeToggle } from '../appearance.tsx';
 import { BrandLogo } from '../brand.tsx';
 import React, { useEffect, useState } from 'react';
 import { Image, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
@@ -88,6 +89,7 @@ export function FleetApp() {
         <Text numberOfLines={1} style={{ color: K.bandText, opacity: 0.8 }}>{s.session?.user.name} · {s.session?.user.level === 'mechanic' ? 'Mechanic' : s.session?.user.level === 'creator' ? 'CEO' : 'Fleet'}</Text>
       </View>
       <SyncPill />
+      <ModeToggle color={K.bandText} />
       <Pressable onPress={f.load} accessibilityRole="button" accessibilityLabel="Refresh" hitSlop={8}
         style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: K.bandText }}>
         <Text style={{ color: K.bandText, fontWeight: '700' }}>{f.loading ? '…' : 'Refresh'}</Text>
@@ -165,7 +167,7 @@ function VehicleList({ vehicles, open }: { vehicles: FleetVehicle[]; open: (id: 
     </>
   );
 }
-const big = { color: C.text, fontSize: 26, fontWeight: '800' as const };
+const big = { get color() { return C.text; }, fontSize: 26, fontWeight: '800' as const };
 
 function FaultRow({ x, onPress }: { x: Fault; onPress?: () => void }) {
   return (

@@ -1,7 +1,7 @@
 import React from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { C, S } from './theme.ts';
+import { C, S, onThemeChange } from './theme.ts';
 
 export function Screen({ title, sub, onBack, right, children, footer }: {
   title: string; sub?: string; onBack?: () => void; right?: React.ReactNode; children: React.ReactNode; footer?: React.ReactNode;
@@ -154,7 +154,7 @@ export function Stepper({ value, onChange, max, step = 1, label }: { value: numb
 export const rand = (cents: number | null | undefined) =>
   cents == null ? '–' : `R ${(cents / 100).toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export const st = StyleSheet.create({
+const makeSt = () => StyleSheet.create({
   screen: { flex: 1, backgroundColor: C.bg },
   header: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: S.pad, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.line, minHeight: 64 },
   back: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -8 },
@@ -179,6 +179,9 @@ export const st = StyleSheet.create({
   pillText: { fontSize: 13, fontWeight: '700' },
   notice: { borderRadius: S.radius, padding: 14, gap: 4, borderLeftWidth: 4 },
 });
+/** The shared styles; rebuilt when the theme changes (dark/light, colour theme). */
+export const st = makeSt();
+onThemeChange(() => { Object.assign(st, makeSt()); });
 
 /** A simple dropdown: shows the choice; tap to open the list underneath. */
 export function Select<T extends string>({ label, value, options, onChange, placeholder = 'Choose…', disabled }: {

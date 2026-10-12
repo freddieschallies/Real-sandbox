@@ -138,7 +138,21 @@ export function registerDocumentRoutes(app: FastifyInstance) {
   app.get('/company/brand', async req => {
     const p = (await req.db.query('SELECT legal_name, trading_name, logo_photo_id FROM company_profile')).rows[0];
     const c = (await req.db.query('SELECT name FROM companies WHERE id = current_company()')).rows[0];
-    return { name: p?.trading_name || p?.legal_name || c?.name || '', logoPhotoId: p?.logo_photo_id ?? null };
+    const t = (await req.db.query('SELECT accent FROM company_theme')).rows[0];
+    return { name: p?.trading_name || p?.legal_name || c?.name || '', logoPhotoId: p?.logo_photo_id ?? null, accent: t?.accent ?? 'orange',
+      canTheme: ['director', 'creator'].includes(req.actor.level) };
+  });
+
+  // The director (CEO) picks the company's colour theme; everyone's app shows it.
+  app.put('/company/theme', async req => {
+    if (!['director', 'creator'].includes(req.actor.level)) throw new Refused(403, ['only the director chooses the colour theme']);
+    const b = parse(z.object({ accent: z.enum(['orange', 'blue', 'green']) }), req.body);
+    return tx(req.db, async c => {
+      await c.query(`INSERT INTO company_theme (accent, updated_by) VALUES ($1, $2)
+                     ON CONFLICT (company_id) DO UPDATE SET accent = EXCLUDED.accent, updated_by = EXCLUDED.updated_by, updated_at = now()`, [b.accent, req.actor.id]);
+      await audit(c, req.actor.id, 'theme_changed', 'company', null, b);
+      return b;
+    });
   });
 
   app.get('/office/company', async req => {

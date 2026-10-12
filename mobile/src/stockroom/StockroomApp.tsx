@@ -5,6 +5,7 @@ import { OrderList, PartDetail, Thumb, useOrderList } from './Parts.tsx';
 import { WorkshopAdd, WorkshopItem, WorkshopList, useWorkshop } from '../fleet/Workshop.tsx';
 import { BottomTabs } from '../BottomTabs.tsx';
 import { usePhoneMenu } from '../menu.tsx';
+import { ModeToggle } from '../appearance.tsx';
 import { BrandLogo } from '../brand.tsx';
 import React, { useState } from 'react';
 import { Image, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
@@ -104,6 +105,7 @@ export function StockroomApp() {
         <Text numberOfLines={1} style={{ color: K.bandText, opacity: 0.8 }}>{s.session?.user.name} · {s.session?.company.name}</Text>
       </View>
       <SyncPill />
+      <ModeToggle color={K.bandText} />
       <Pressable onPress={room.load} accessibilityRole="button" accessibilityLabel="Refresh" hitSlop={8}
         style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: K.bandText }}>
         <Text style={{ color: K.bandText, fontWeight: '700' }}>{room.loading ? '…' : 'Refresh'}</Text>
@@ -389,7 +391,7 @@ function RoomList({ items, holdings, onDelivery, onPart }: { items: RoomItem[]; 
   );
 }
 
-const big = { color: C.text, fontSize: 24, fontWeight: '800' as const };
+const big = { get color() { return C.text; }, fontSize: 24, fontWeight: '800' as const };
 
 function HoldingRow({ h, who }: { h: Holding; who?: boolean }) {
   return (

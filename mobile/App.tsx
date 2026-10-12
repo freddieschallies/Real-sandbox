@@ -1,3 +1,5 @@
+import { ThemeRoot } from './src/appearance.tsx';
+import { themeNow } from './src/theme.ts';
 import { MyQuotesScreen, TechQuoteScreen } from './src/screens/TechQuotes.tsx';
 import React from 'react';
 import { ActivityIndicator, Platform, Pressable, Text, View, useWindowDimensions } from 'react-native';
@@ -140,7 +142,7 @@ function Frame({ children }: { children: React.ReactNode }) {
   const narrow = Platform.OS === 'web' && width > 640 && !['stockroom', 'mechanic', 'admin', 'management', 'hr', 'director', 'creator'].includes(s.session?.user.level ?? '') && fv.on === 'main';
   if (!narrow) return <>{children}</>;
   return (
-    <View style={{ flex: 1, alignItems: 'center', backgroundColor: '#101214' }}>
+    <View style={{ flex: 1, alignItems: 'center', backgroundColor: themeNow().mode === 'light' ? '#DAD5CC' : '#101214' }}>
       <View style={{ flex: 1, width: 440, borderLeftWidth: 1, borderRightWidth: 1, borderColor: C.line, overflow: 'hidden' }}>{children}</View>
     </View>
   );
@@ -150,11 +152,15 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <StoreProvider>
-        <View style={{ flex: 1, backgroundColor: C.bg }}>
-          {TESTER ? <TesterBarSlot /> : null}
-          <ScreenGuard><FleetViewProvider><Frame><Switchable /></Frame></FleetViewProvider></ScreenGuard>
-        </View>
-        <StatusBar style="light" />
+        <ThemeRoot>{mode => (
+          <>
+            <View style={{ flex: 1, backgroundColor: C.bg }}>
+              {TESTER ? <TesterBarSlot /> : null}
+              <ScreenGuard><FleetViewProvider><Frame><Switchable /></Frame></FleetViewProvider></ScreenGuard>
+            </View>
+            <StatusBar style={mode === 'light' ? 'dark' : 'light'} />
+          </>
+        )}</ThemeRoot>
       </StoreProvider>
     </SafeAreaProvider>
   );
