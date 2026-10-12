@@ -417,12 +417,90 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
     controller(req);
     const { rows } = await req.db.query(
       `SELECT i.id, i.code, i.description, i.unit, i.needs_review, i.supplier_code, COALESCE(s.qty, 0) AS in_stockroom,
-              COALESCE((SELECT SUM(h.qty) FROM technician_holdings h WHERE h.stock_item_id = i.id), 0) AS with_technicians
+              COALESCE((SELECT SUM(h.qty) FROM technician_holdings h WHERE h.stock_item_id = i.id), 0) AS with_technicians,
+              i.min_qty, i.reorder_qty, i.photo_id, i.supplier_name, i.ordered_at, i.ordered_qty, i.ordered_note, i.selling_price_cents,
+              (SELECT json_build_object('at', m.created_at, 'kind', m.kind, 'qty', m.qty, 'jobNumber', j.job_number, 'store', st.name,
+                                        'technician', u.full_name, 'vehicle', v.registration)
+                 FROM stock_movements m LEFT JOIN jobs j ON j.id = m.job_id LEFT JOIN stores st ON st.id = j.store_id LEFT JOIN users u ON u.id = m.from_technician_id
+                 LEFT JOIN fleet_job_parts fp ON fp.id = m.fleet_job_part_id LEFT JOIN fleet_jobs fj ON fj.id = fp.job_id
+                 LEFT JOIN daily_checks dc ON dc.id = m.daily_check_id LEFT JOIN vehicles v ON v.id = coalesce(fj.vehicle_id, dc.vehicle_id)
+                WHERE m.stock_item_id = i.id AND m.kind IN ('use_on_job', 'use_on_fleet') ORDER BY m.created_at DESC LIMIT 1) AS last_used
          FROM stock_items i LEFT JOIN stockroom_stock s ON s.stock_item_id = i.id
         WHERE i.active ORDER BY i.needs_review DESC, i.code`,
     );
-    return rows.map(r => ({ id: r.id, code: r.code, description: r.description, unit: r.unit, needsReview: r.needs_review,
-      supplierCode: r.supplier_code, inStockroom: Number(r.in_stockroom), withTechnicians: Number(r.with_technicians) }));
+    return rows.map(r => {
+      const inStockroom = Number(r.in_stockroom);
+      const minQty = Number(r.min_qty);
+      return {
+        id: r.id, code: r.code, description: r.description, unit: r.unit, needsReview: r.needs_review,
+        supplierCode: r.supplier_code, inStockroom, withTechnicians: Number(r.with_technicians),
+        minQty, reorderQty: r.reorder_qty == null ? null : Number(r.reorder_qty), photoId: r.photo_id, supplierName: r.supplier_name,
+        belowMin: minQty > 0 && inStockroom < minQty, ordered: r.ordered_at ? { at: r.ordered_at, qty: Number(r.ordered_qty), note: r.ordered_note } : null,
+        sellingPriceCents: r.selling_price_cents, lastUsed: r.last_used,
+      };
+    });
+  });
+
+  /** What to order: everything below its minimum, with how many to order. */
+  app.get('/stock/order-list', async req => {
+    controller(req);
+    const { rows } = await req.db.query(
+      `SELECT i.id, i.code, i.description, i.unit, i.min_qty::float AS min_qty, i.reorder_qty::float AS reorder_qty, i.photo_id, i.supplier_name, i.supplier_code,
+              COALESCE(s.qty, 0)::float AS in_stockroom, i.ordered_at, i.ordered_qty::float AS ordered_qty, i.ordered_note, u.full_name AS ordered_by
+         FROM stock_items i LEFT JOIN stockroom_stock s ON s.stock_item_id = i.id LEFT JOIN users u ON u.id = i.ordered_by
+        WHERE i.active AND i.min_qty > 0 AND COALESCE(s.qty, 0) < i.min_qty
+        ORDER BY (i.ordered_at IS NOT NULL), COALESCE(s.qty, 0) / i.min_qty, i.description`);
+    const lines = rows.map(r => ({ ...r, suggested: S.orderQty(r.in_stockroom, r.min_qty, r.reorder_qty) }));
+    return { toOrder: lines.filter(l => !l.ordered_at), ordered: lines.filter(l => l.ordered_at) };
+  });
+
+  /** Minimum, how many to order, the part's photo and usual supplier. */
+  app.put('/stock/items/:id/settings', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    controller(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({
+      minQty: z.number().min(0).max(1_000_000), reorderQty: z.number().positive().max(1_000_000).nullish(),
+      photoId: Uuid.nullish(), supplierName: z.string().trim().max(200).nullish(),
+    }), req.body);
+    return tx(req.db, async c => {
+      if (!(await c.query('SELECT 1 FROM stock_items WHERE id = $1', [id])).rowCount) throw new Refused(404, ['no such item']);
+      if (b.photoId && !(await c.query("SELECT 1 FROM photos WHERE id = $1 AND kind = 'stock_item'", [b.photoId])).rowCount) throw new Refused(409, ['upload the photo first']);
+      await c.query(
+        `UPDATE stock_items SET min_qty = $2, reorder_qty = $3, supplier_name = $4, photo_id = COALESCE($5, photo_id) WHERE id = $1`,
+        [id, b.minQty, b.reorderQty ?? null, b.supplierName || null, b.photoId ?? null]);
+      await audit(c, req.actor.id, 'stock_item_settings', 'stock_item', id, b);
+      return { id };
+    });
+  });
+
+  /** Marked as ordered from the supplier; cleared when a delivery brings it in. */
+  app.post('/stock/items/:id/ordered', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    controller(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ qty: z.number().positive().max(1_000_000), note: z.string().trim().max(300).optional(), cancel: z.boolean().optional() }), req.body);
+    const r = b.cancel
+      ? await req.db.query('UPDATE stock_items SET ordered_at = NULL, ordered_qty = NULL, ordered_by = NULL, ordered_note = NULL WHERE id = $1 RETURNING id', [id])
+      : await req.db.query('UPDATE stock_items SET ordered_at = now(), ordered_qty = $2, ordered_by = $3, ordered_note = $4 WHERE id = $1 RETURNING id', [id, b.qty, req.actor.id, b.note ?? null]);
+    if (!r.rowCount) throw new Refused(404, ['no such item']);
+    await audit(req.db, req.actor.id, b.cancel ? 'stock_order_cancelled' : 'stock_ordered', 'stock_item', id, b);
+    return { id, ordered: !b.cancel };
+  });
+
+  /** Everything that happened to one part, newest first: where it went and where it was last used. */
+  app.get('/stock/items/:id/history', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    controller(req);
+    const id = parse(Uuid, req.params.id);
+    const { rows } = await req.db.query(
+      `SELECT m.id, m.created_at AS at, m.kind, m.qty::float AS qty, m.note, j.job_number, st.name AS store,
+              coalesce(ut.full_name, uf.full_name) AS technician, ub.full_name AS by, v.registration AS vehicle, fj.number AS fleet_job_number,
+              m.to_workshop, m.from_workshop, m.to_stockroom, m.from_stockroom
+         FROM stock_movements m
+         LEFT JOIN jobs j ON j.id = coalesce(m.job_id, m.holding_job_id) LEFT JOIN stores st ON st.id = j.store_id
+         LEFT JOIN users ut ON ut.id = m.to_technician_id LEFT JOIN users uf ON uf.id = m.from_technician_id JOIN users ub ON ub.id = m.created_by
+         LEFT JOIN fleet_job_parts fp ON fp.id = m.fleet_job_part_id LEFT JOIN fleet_jobs fj ON fj.id = fp.job_id
+         LEFT JOIN daily_checks dc ON dc.id = m.daily_check_id LEFT JOIN vehicles v ON v.id = coalesce(fj.vehicle_id, dc.vehicle_id)
+        WHERE m.stock_item_id = $1 ORDER BY m.created_at DESC LIMIT 300`, [id]);
+    return rows;
   });
 
   app.post('/stock/items', async (req, reply) => {
@@ -473,6 +551,8 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
       for (const l of b.lines) {
         await c.query(`INSERT INTO stock_movements (stock_item_id, qty, kind, to_stockroom, delivery_id, created_by) VALUES ($1, $2, 'receive', true, $3, $4)`,
           [l.stockItemId, l.qty, id, me]);
+        // It came in: no longer waiting on the order list.
+        await c.query('UPDATE stock_items SET ordered_at = NULL, ordered_qty = NULL, ordered_by = NULL, ordered_note = NULL WHERE id = $1', [l.stockItemId]);
       }
       await audit(c, me, 'stock_delivery_received', 'stock_delivery', id, { lines: b.lines.length });
       return { id };

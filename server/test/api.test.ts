@@ -974,6 +974,31 @@ test('queries: the office or a technician asks any technician at any time; both 
   await assert.rejects(db.query('UPDATE query_messages SET body = $1', ['changed']), /cannot be edited/);
 });
 
+test('stockroom order list: a minimum per item, a photo of the part, ordered until delivered, and where it was last used', async () => {
+  const company = (await db.query('SELECT company_id FROM stock_items WHERE id = $1', [ids.seal])).rows[0].company_id;
+  const fuse = (await db.query("INSERT INTO stock_items (company_id, code, description) VALUES ($1, 'FUSE-10A', 'Fuse 10A') RETURNING id", [company])).rows[0].id;
+  await db.query("INSERT INTO stock_movements (stock_item_id, qty, kind, to_stockroom, created_by) VALUES ($1, 3, 'receive', true, $2)", [fuse, ids.stock]);
+  assert.equal((await call('tech', 'PUT', `/stock/items/${fuse}/settings`, { minQty: 10 })).status, 403);
+  const photo = await upload('stock', '/photos', { kind: 'stock_item', takenAt: '2026-10-17T09:00:00+02:00' });
+  assert.equal((await call('stock', 'PUT', `/stock/items/${fuse}/settings`, { minQty: 10, reorderQty: 20, photoId: photo.body.id, supplierName: 'Voltex Richards Bay' })).status, 200);
+  let ol = (await call('stock', 'GET', '/stock/order-list')).body;
+  const line = ol.toOrder.find((x: { id: string }) => x.id === fuse);
+  assert.equal(line.suggested, 20, 'the set order quantity');
+  assert.equal(line.in_stockroom, 3);
+  assert.equal((await call('stock', 'GET', '/stock/stockroom')).body.find((x: { id: string }) => x.id === fuse).photoId, photo.body.id);
+  assert.equal((await call('stock', 'POST', `/stock/items/${fuse}/ordered`, { qty: 20, note: 'Voltex order 5521' })).status, 200);
+  ol = (await call('stock', 'GET', '/stock/order-list')).body;
+  assert.ok(ol.ordered.some((x: { id: string }) => x.id === fuse) && !ol.toOrder.some((x: { id: string }) => x.id === fuse));
+  assert.equal((await call('stock', 'POST', '/stock/deliveries', { at: '2026-10-18T09:00:00+02:00', supplierName: 'Voltex', reference: 'INV-5521', lines: [{ stockItemId: fuse, qty: 20 }] })).status, 201);
+  ol = (await call('stock', 'GET', '/stock/order-list')).body;
+  assert.ok(!ol.ordered.some((x: { id: string }) => x.id === fuse) && !ol.toOrder.some((x: { id: string }) => x.id === fuse), 'delivered and above the minimum');
+  // Where the valve was last used (it was used on a job card earlier).
+  const room = (await call('stock', 'GET', '/stock/stockroom')).body.find((x: { id: string }) => x.id === ids.seal);
+  assert.ok(room.lastUsed && room.lastUsed.jobNumber > 0, JSON.stringify(room.lastUsed));
+  const hist = (await call('stock', 'GET', `/stock/items/${ids.seal}/history`)).body;
+  assert.ok(hist.some((h: { kind: string; job_number: number }) => h.kind === 'use_on_job' && h.job_number > 0));
+});
+
 test('the CEO assigns each person a position; it takes effect at once and is logged', async () => {
   assert.equal((await call('manager', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'mechanic' })).status, 403, 'only whoever manages access');
   const list = (await call('director', 'GET', '/access/positions')).body;

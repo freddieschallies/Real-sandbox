@@ -73,3 +73,10 @@ export function linesTotalCents(lines: InvoiceLine[]): number | null {
 }
 
 export const round = (n: number) => Math.round(n * 100) / 100;
+
+/** How many to order to get back above the minimum: the set order quantity, or enough to reach the minimum. */
+export function orderQty(inStock: number, minQty: number, reorderQty: number | null): number {
+  const short = Math.max(0, minQty - inStock);
+  if (short === 0) return 0;
+  return reorderQty && reorderQty >= short ? reorderQty : Math.ceil(short);
+}

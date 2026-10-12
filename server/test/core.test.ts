@@ -352,3 +352,12 @@ test('quotes and invoices: totals with VAT, labour per quarter hour, draft from 
   assert.deepEqual(lines.map(l => [l.kind, l.qty, l.unitPriceCents]), [['labour', 3.5, 65000], ['call_out', 1, 45000], ['stock', 1, 0], ['bought_out', 2, 1200]]);
   assert.deepEqual(D.missingToSend({ lines }), ['line 3 (Water inlet valve): a price']);
 });
+
+test('order list: how many to order', async () => {
+  const S = await import('../src/core/stock.ts');
+  assert.equal(S.orderQty(3, 10, 20), 20);
+  assert.equal(S.orderQty(3, 10, null), 7);
+  assert.equal(S.orderQty(3, 10, 5), 7, 'never less than what gets it back to the minimum');
+  assert.equal(S.orderQty(12, 10, 20), 0);
+  assert.equal(S.orderQty(2.5, 10, null), 8);
+});
