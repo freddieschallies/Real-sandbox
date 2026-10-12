@@ -3,10 +3,20 @@
 import * as S from '../../server/src/core/stock.ts';
 import type { CatalogueLine, InventoryLine, JobStockLine, ReadLine, StockRequest, StockReturn, SupplierInvoice } from './types.ts';
 
+export interface Activity { id: string; at: string; kind: string; what: string; qty: number; code: string; description: string; unit: string; technician: string | null; by: string; jobNumber: number | null; store: string | null; unitCostCents: number | null; reference: string | null }
+export interface Holding { technicianId: string; technician: string; stockItemId: string; code: string; description: string; unit: string; holdingJobId: string | null; jobNumber: number | null; jobStatus: string | null; store: string | null; qty: number; pendingReturn: number; mustReturn: boolean }
+
+const ME = 'Thabo Mkhize';
+const WHAT: Record<string, string> = {
+  assign: 'Issued from stockroom', use_on_job: 'Used on job card', return: 'Returned to stockroom', supplier_invoice: 'Bought on supplier invoice', receive: 'Delivery into stockroom',
+};
+
 export interface DemoStockState {
   items: { id: string; code: string; description: string; unit: string; supplierCode?: string | null; needsReview?: boolean }[];
   stockroom: Record<string, number>;
-  holdings: { stockItemId: string; holdingJobId: string | null; qty: number }[];
+  /** tech: 'me' (Thabo, the demo technician) or another technician's name. */
+  holdings: { stockItemId: string; holdingJobId: string | null; qty: number; tech?: string }[];
+  activity?: Activity[];
   /** Per job: booked, used, returned per item. */
   jobLog: { jobId: string; stockItemId: string; booked: number; used: number; returned: number }[];
   invoices: SupplierInvoice[];
@@ -35,10 +45,28 @@ export function seedStock(): DemoStockState {
       { stockItemId: 'st-4', holdingJobId: null, qty: 10 },
       // Left over from a job closed last week: must go back.
       { stockItemId: 'st-5', holdingJobId: 'job-10190', qty: 1 },
+      // Another technician, so the stock controller sees more than one person.
+      { stockItemId: 'st-3', holdingJobId: null, qty: 6, tech: 'Sipho Ndlovu' },
+      { stockItemId: 'st-4', holdingJobId: null, qty: 8, tech: 'Sipho Ndlovu' },
+      { stockItemId: 'st-7', holdingJobId: 'job-10220', qty: 1, tech: 'Sipho Ndlovu' },
+      { stockItemId: 'st-6', holdingJobId: 'job-10220', qty: 2, tech: 'Sipho Ndlovu' },
+    ],
+    activity: [
+      { id: 'a-1', at: new Date(Date.now() - 3 * 3600_000).toISOString(), kind: 'assign', what: WHAT.assign, qty: 2, code: 'CAP-35UF', description: 'Run capacitor 35uF', unit: 'each', technician: 'Sipho Ndlovu', by: 'Lindiwe Zulu', jobNumber: 10220, store: 'Boxer Esikhawini', unitCostCents: null, reference: null },
+      { id: 'a-2', at: new Date(Date.now() - 2 * 3600_000).toISOString(), kind: 'use_on_job', what: WHAT.use_on_job, qty: 1, code: 'FAN-MTR', description: 'Condenser fan motor 10W', unit: 'each', technician: 'Sipho Ndlovu', by: 'Sipho Ndlovu', jobNumber: 10220, store: 'Boxer Esikhawini', unitCostCents: null, reference: null },
     ],
     jobLog: [{ jobId: 'job-10190', stockItemId: 'st-5', booked: 2, used: 1, returned: 0 }],
     invoices: [],
     returns: [],
+    requests: [{
+      id: 'req-seed-1', technician_id: 'sipho', technician: 'Sipho Ndlovu', job_id: 'job-10220', job_number: 10220, store: 'Boxer Esikhawini',
+      status: 'issued', requested_at: new Date(Date.now() - 3.2 * 3600_000).toISOString(), decided_at: new Date(Date.now() - 3 * 3600_000).toISOString(),
+      decided_by: 'Lindiwe Zulu', note: null,
+      lines: [
+        { lineId: 'req-seed-1-0', stockItemId: 'st-6', code: 'CAP-35UF', description: 'Run capacitor 35uF', unit: 'each', qtyRequested: 2, qtyIssued: 2, inStockroom: 10 },
+        { lineId: 'req-seed-1-1', stockItemId: 'st-7', code: 'FAN-MTR', description: 'Condenser fan motor 10W', unit: 'each', qtyRequested: 2, qtyIssued: 1, inStockroom: 4 },
+      ],
+    }],
     nextNew: 1001,
   };
 }
@@ -65,12 +93,38 @@ export class DemoStock {
     return this.s.returns.filter(r => r.status === 'pending').flatMap(r => r.lines)
       .filter(l => l.stockItemId === stockItemId && l.holdingJobId === holdingJobId).reduce((n, l) => n + l.qty, 0);
   }
+  private mine() { return this.s.holdings.filter(h => (h.tech ?? 'me') === 'me'); }
+
+  private record(kind: string, stockItemId: string, qty: number, technician: string | null, by: string, jobId: string | null, reference: string | null = null, unitCostCents: number | null = null) {
+    const it = this.item(stockItemId)!;
+    const job = jobId ? this.jobInfo(jobId) : null;
+    (this.s.activity ??= []).unshift({ id: `a-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, at: new Date().toISOString(), kind, what: WHAT[kind] ?? kind,
+      qty, code: it.code, description: it.description, unit: it.unit, technician, by, jobNumber: job?.number ?? null, store: job?.store ?? null, unitCostCents, reference });
+    this.s.activity = this.s.activity.slice(0, 300);
+  }
+
+  activity(): Activity[] { return [...(this.s.activity ?? [])].sort((a, b) => b.at.localeCompare(a.at)); }
+
+  /** Everything that is out with technicians, for the stock controller. */
+  allHoldings(): Holding[] {
+    return this.s.holdings.filter(h => h.qty > 0).map(h => {
+      const it = this.item(h.stockItemId)!;
+      const job = h.holdingJobId ? this.jobInfo(h.holdingJobId) : null;
+      const tech = h.tech ?? 'me';
+      return {
+        technicianId: tech, technician: tech === 'me' ? ME : tech, stockItemId: it.id, code: it.code, description: it.description, unit: it.unit,
+        holdingJobId: h.holdingJobId, jobNumber: job?.number ?? null, jobStatus: job?.status ?? null, store: job?.store ?? null, qty: h.qty,
+        pendingReturn: tech === 'me' ? this.pending(h.stockItemId, h.holdingJobId) : 0, mustReturn: S.mustReturn(h.holdingJobId, job?.status ?? null),
+      };
+    }).sort((a, b) => a.technician.localeCompare(b.technician) || (a.jobNumber ?? 1e9) - (b.jobNumber ?? 1e9) || a.code.localeCompare(b.code));
+  }
+
   private holdingsOf(stockItemId: string): S.Holding[] {
-    return this.s.holdings.filter(h => h.stockItemId === stockItemId && h.qty > 0)
+    return this.mine().filter(h => h.stockItemId === stockItemId && h.qty > 0)
       .map(h => ({ holdingJobId: h.holdingJobId, qty: h.qty, pendingReturn: this.pending(stockItemId, h.holdingJobId) }));
   }
   private add(stockItemId: string, holdingJobId: string | null, qty: number) {
-    const h = this.s.holdings.find(x => x.stockItemId === stockItemId && x.holdingJobId === holdingJobId);
+    const h = this.mine().find(x => x.stockItemId === stockItemId && x.holdingJobId === holdingJobId);
     if (h) h.qty = S.round(h.qty + qty); else this.s.holdings.push({ stockItemId, holdingJobId, qty });
     this.s.holdings = this.s.holdings.filter(x => x.qty > 0);
   }
@@ -93,7 +147,7 @@ export class DemoStock {
   }
 
   inventory(): InventoryLine[] {
-    return this.s.holdings.filter(h => h.qty > 0).map(h => {
+    return this.mine().filter(h => h.qty > 0).map(h => {
       const it = this.item(h.stockItemId)!;
       const job = h.holdingJobId ? this.jobInfo(h.holdingJobId) : null;
       return {
@@ -118,7 +172,7 @@ export class DemoStock {
   jobStock(jobId: string): JobStockLine[] {
     return this.s.jobLog.filter(l => l.jobId === jobId).map(l => {
       const it = this.item(l.stockItemId)!;
-      const on = this.s.holdings.find(h => h.stockItemId === l.stockItemId && h.holdingJobId === jobId)?.qty ?? 0;
+      const on = this.mine().find(h => h.stockItemId === l.stockItemId && h.holdingJobId === jobId)?.qty ?? 0;
       return { stockItemId: it.id, code: it.code, description: it.description, unit: it.unit, booked: l.booked, used: l.used, returned: l.returned, onTechnician: on, requested: this.asked(jobId, l.stockItemId) };
     }).concat(this.pendingOnly(jobId));
   }
@@ -151,6 +205,7 @@ export class DemoStock {
 
   requests(status?: string): StockRequest[] {
     return (this.s.requests ?? []).filter(r => !status || r.status === status)
+      .sort((a, b) => (status && status !== 'pending' ? (b.decided_at ?? '').localeCompare(a.decided_at ?? '') : a.requested_at.localeCompare(b.requested_at)))
       .map(r => ({ ...r, lines: r.lines.map(l => ({ ...l, inStockroom: this.s.stockroom[l.stockItemId] ?? 0 })) }));
   }
 
@@ -175,9 +230,10 @@ export class DemoStock {
         this.s.stockroom[l.stockItemId] -= g;
         this.add(l.stockItemId, r.job_id, g);
         if (r.job_id) this.log(r.job_id, l.stockItemId, 'booked', g);
+        this.record('assign', l.stockItemId, g, ME, 'Lindiwe Zulu', r.job_id);
       }
     }
-    Object.assign(r, { status: 'issued', decided_at: new Date().toISOString(), note: b.note ?? null });
+    Object.assign(r, { status: 'issued', decided_at: new Date().toISOString(), decided_by: 'Lindiwe Zulu', note: b.note ?? null });
     return good({ id, status: 'issued', short: r.lines.filter(l => (l.qtyIssued ?? 0) < l.qtyRequested).map(l => l.code) });
   }
 
@@ -208,6 +264,7 @@ export class DemoStock {
         this.add(l.stockItemId, l.holdingJobId, -got);
         this.s.stockroom[l.stockItemId] = (this.s.stockroom[l.stockItemId] ?? 0) + got;
         if (l.holdingJobId) this.log(l.holdingJobId, l.stockItemId, 'returned', got);
+        this.record('return', l.stockItemId, got, ME, 'Lindiwe Zulu', l.holdingJobId);
       }
       if (got < l.qty) short.push({ code: l.code, expected: l.qty, received: got });
     }
@@ -237,7 +294,10 @@ export class DemoStock {
       return bad(409, `delivery ${b.reference} from ${b.supplierName} was already received`);
     }
     d.push({ supplierName: b.supplierName, reference: b.reference });
-    for (const l of b.lines) this.s.stockroom[l.stockItemId] = (this.s.stockroom[l.stockItemId] ?? 0) + l.qty;
+    for (const l of b.lines) {
+      this.s.stockroom[l.stockItemId] = (this.s.stockroom[l.stockItemId] ?? 0) + l.qty;
+      this.record('receive', l.stockItemId, l.qty, null, 'Lindiwe Zulu', null, `${b.supplierName} ${b.reference}`);
+    }
     return good({ id: `del-${Date.now()}` });
   }
 
@@ -255,6 +315,7 @@ export class DemoStock {
     if (!plan.ok) return bad(409, `only ${plan.have} on your name; book it out from the stockroom, or add it under Bought out if you bought it`);
     for (const t of plan.take) this.add(stockItemId, t.holdingJobId, -t.qty);
     this.log(jobId, stockItemId, 'used', qty);
+    this.record('use_on_job', stockItemId, qty, ME, ME, jobId);
     return good({});
   }
 
@@ -288,6 +349,7 @@ export class DemoStock {
       }
       this.add(itemId, jobId, l.qty);
       if (jobId) this.log(jobId, itemId, 'booked', l.qty);
+      this.record('supplier_invoice', itemId, l.qty, ME, ME, jobId ?? null, `${b.supplierName} ${b.invoiceNumber}`, l.unitPriceCents ?? null);
     }
     Object.assign(inv, { status: 'confirmed', confirmed_at: new Date().toISOString(), supplier_name: b.supplierName, invoice_number: b.invoiceNumber, total_cents: b.totalCents ?? null, job_id: jobId });
     return good({ id, status: 'confirmed', newItems });

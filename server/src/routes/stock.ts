@@ -334,8 +334,11 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
 
   app.get('/stock/issues', async req => {
     controller(req, 'assign_stock');
-    const q = parse(z.object({ status: z.enum(['pending', 'issued', 'rejected']).default('pending') }), req.query);
-    return issuesWhere(req.db, 'i.status = $1', [q.status]);
+    const q = parse(z.object({ status: z.enum(['pending', 'issued', 'rejected']).default('pending'), technicianId: Uuid.optional() }), req.query);
+    // Waiting requests oldest first (work through them); the issued register newest first.
+    return q.status === 'pending'
+      ? issuesWhere(req.db, 'i.status = $1', [q.status])
+      : issuesWhere(req.db, 'i.status = $1 AND ($2::uuid IS NULL OR i.technician_id = $2)', [q.status, q.technicianId ?? null], 'i.decided_at DESC', 500);
   });
 
   app.post('/stock/issues/:id/issue', async (req: FastifyRequest<{ Params: { id: string } }>) => {
@@ -474,6 +477,61 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
     return reply.code(201).send(out);
   });
 
+  // Everything that is out with technicians: who has what, for which job, and what must come back.
+  app.get('/stock/holdings', async req => {
+    controller(req);
+    const { rows } = await req.db.query(
+      `SELECT h.technician_id, u.full_name AS technician, i.id AS stock_item_id, i.code, i.description, i.unit, h.holding_job_id,
+              j.job_number, j.status AS job_status, s.name AS store, h.qty, COALESCE(p.qty, 0) AS pending_return
+         FROM technician_holdings h
+         JOIN users u ON u.id = h.technician_id JOIN stock_items i ON i.id = h.stock_item_id
+         LEFT JOIN pending_returns p ON p.technician_id = h.technician_id AND p.stock_item_id = h.stock_item_id
+              AND p.holding_job_id IS NOT DISTINCT FROM h.holding_job_id
+         LEFT JOIN jobs j ON j.id = h.holding_job_id LEFT JOIN stores s ON s.id = j.store_id
+        WHERE h.qty > 0 ORDER BY u.full_name, j.job_number NULLS LAST, i.code`,
+    );
+    return rows.map(r => ({
+      technicianId: r.technician_id, technician: r.technician, stockItemId: r.stock_item_id, code: r.code, description: r.description, unit: r.unit,
+      holdingJobId: r.holding_job_id, jobNumber: r.job_number, jobStatus: r.job_status, store: r.store,
+      qty: Number(r.qty), pendingReturn: Number(r.pending_return), mustReturn: S.mustReturn(r.holding_job_id, r.job_status),
+    }));
+  });
+
+  // Live: every stock movement as it happens, newest first. "since" returns only what is new.
+  app.get('/stock/activity', async req => {
+    controller(req);
+    const q = parse(z.object({ since: Iso.optional(), limit: z.coerce.number().int().min(1).max(300).default(100) }), req.query);
+    const { rows } = await req.db.query(
+      `SELECT m.id, to_json(m.created_at) #>> '{}' AS created_at, m.kind, m.qty, i.code, i.description, i.unit,
+              COALESCE(tt.full_name, ft.full_name) AS technician, cb.full_name AS by_name,
+              COALESCE(j.job_number, hj.job_number) AS job_number, COALESCE(js.name, hs.name) AS store,
+              m.unit_cost_cents, d.supplier_name AS delivery_supplier, d.reference AS delivery_ref,
+              si.supplier_name AS invoice_supplier, si.invoice_number
+         FROM stock_movements m
+         JOIN stock_items i ON i.id = m.stock_item_id
+         JOIN users cb ON cb.id = m.created_by
+         LEFT JOIN users tt ON tt.id = m.to_technician_id
+         LEFT JOIN users ft ON ft.id = m.from_technician_id
+         LEFT JOIN jobs j ON j.id = m.job_id LEFT JOIN stores js ON js.id = j.store_id
+         LEFT JOIN jobs hj ON hj.id = m.holding_job_id LEFT JOIN stores hs ON hs.id = hj.store_id
+         LEFT JOIN stock_deliveries d ON d.id = m.delivery_id
+         LEFT JOIN supplier_invoice_lines sl ON sl.id = m.supplier_invoice_line_id
+         LEFT JOIN supplier_invoices si ON si.id = sl.invoice_id
+        WHERE ($1::timestamptz IS NULL OR m.created_at > $1)
+        ORDER BY m.created_at DESC, m.id LIMIT $2`,
+      [q.since ?? null, q.limit],
+    );
+    const what: Record<string, string> = {
+      assign: 'Issued from stockroom', use_on_job: 'Used on job card', return: 'Returned to stockroom', supplier_invoice: 'Bought on supplier invoice',
+      supply_run: 'Collected on supply run', receive: 'Delivery into stockroom', transfer: 'Handed to another technician', stocktake_adjustment: 'Stock take correction',
+    };
+    return rows.map(r => ({
+      id: r.id, at: r.created_at, kind: r.kind, what: what[r.kind] ?? r.kind, qty: Number(r.qty), code: r.code, description: r.description, unit: r.unit,
+      technician: r.technician, by: r.by_name, jobNumber: r.job_number, store: r.store, unitCostCents: r.unit_cost_cents,
+      reference: r.kind === 'receive' ? `${r.delivery_supplier} ${r.delivery_ref}` : r.kind === 'supplier_invoice' ? `${r.invoice_supplier} ${r.invoice_number}` : null,
+    }));
+  });
+
   // Supplier invoices the technicians booked, for the stock controller to check against.
   app.get('/stock/invoices', async req => {
     controller(req);
@@ -549,16 +607,17 @@ async function jobStock(c: Q, jobId: string) {
   return out;
 }
 
-async function issuesWhere(c: Q, where: string, params: unknown[]) {
+async function issuesWhere(c: Q, where: string, params: unknown[], order = 'i.requested_at', limit = 100) {
   const { rows } = await c.query(
     `SELECT i.id, i.technician_id, u.full_name AS technician, i.job_id, j.job_number, s.name AS store, i.status, i.requested_at, i.decided_at, i.note,
+            db.full_name AS decided_by,
             json_agg(json_build_object('lineId', l.id, 'stockItemId', l.stock_item_id, 'code', it.code, 'description', it.description, 'unit', it.unit,
                      'qtyRequested', l.qty_requested, 'qtyIssued', l.qty_issued, 'inStockroom', COALESCE(ss.qty, 0)) ORDER BY it.code) AS lines
-       FROM stock_issues i JOIN users u ON u.id = i.technician_id
+       FROM stock_issues i JOIN users u ON u.id = i.technician_id LEFT JOIN users db ON db.id = i.decided_by
        JOIN stock_issue_lines l ON l.issue_id = i.id JOIN stock_items it ON it.id = l.stock_item_id
        LEFT JOIN stockroom_stock ss ON ss.stock_item_id = l.stock_item_id
        LEFT JOIN jobs j ON j.id = i.job_id LEFT JOIN stores s ON s.id = j.store_id
-      WHERE ${where} GROUP BY i.id, u.full_name, j.job_number, s.name ORDER BY i.requested_at LIMIT 100`,
+      WHERE ${where} GROUP BY i.id, u.full_name, db.full_name, j.job_number, s.name ORDER BY ${order} LIMIT ${limit}`,
     params,
   );
   return rows.map(r => ({ ...r, lines: r.lines.map((l: Record<string, unknown>) => ({ ...l, qtyRequested: Number(l.qtyRequested), qtyIssued: l.qtyIssued == null ? null : Number(l.qtyIssued), inStockroom: Number(l.inStockroom) })) }));

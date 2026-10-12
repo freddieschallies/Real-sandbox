@@ -3,6 +3,7 @@
 // feel in demo mode is what the technicians will get. Data is invented.
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
+import { normReg, registrationCandidates } from '../../server/src/core/vehicleCode.ts';
 import { DemoStock, seedStock, type DemoStockState } from './demoStock.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
 import type { CardView, Flag, StockLine, Today, TodayJob } from './types.ts';
@@ -125,11 +126,19 @@ export class DemoTransport implements Transport {
     const st = this.state.stockControl ?? (this.state.stockControl = seedStock());
     const ds = new DemoStock(st, jobId => {
       if (jobId === 'job-10190') return { number: 10190, status: 'closed', store: 'Spar Arboretum' };
+      if (jobId === 'job-10220') return { number: 10220, status: 'in_progress', store: 'Boxer Esikhawini' };
       const j = this.findJob(jobId);
       return j ? { number: j.meta.job_number, status: j.card.status, store: j.meta.store } : null;
     });
     ds.tick();
     return ds;
+  }
+
+  /** The demo has one vehicle, ND 412-778, with sticker ZSP-V07 (any other sticker code also works). */
+  private isDemoVehicle(code: string) {
+    // A licence disc must be ND 412-778's; any sticker code or that registration is accepted.
+    if (code.trim().startsWith('%')) return registrationCandidates(code).includes(normReg('ND 412-778'));
+    return code.trim().length >= 3;
   }
 
   private van() {
@@ -199,7 +208,7 @@ export class DemoTransport implements Transport {
       if (j.card.status === 'closed') return refuse(409, 'job is closed');
       return this.stockResult(this.stock().request(m[1], b, { number: j.meta.job_number, store: j.meta.store }), 201);
     }
-    if (p === '/me/stock-requests') return ok(this.stock().requests());
+    if (p === '/me/stock-requests') return ok(this.stock().requests().filter(r => (r.technician_id ?? 'me') === 'me'));
     // Stock controller
     if (p === '/stock/overview') return ok(this.stock().overview());
     if (p === '/stock/issues') return ok(this.stock().requests(new URLSearchParams(req.path.split('?')[1] ?? '').get('status') ?? 'pending'));
@@ -211,6 +220,8 @@ export class DemoTransport implements Transport {
     }
     if ((m = p.match(/^\/stock\/returns\/([^/]+)\/receive$/))) return this.stockResult(this.stock().receive(m[1], b));
     if (p === '/stock/stockroom') return ok(this.stock().stockroomList());
+    if (p === '/stock/holdings') return ok(this.stock().allHoldings());
+    if (p === '/stock/activity') return ok(this.stock().activity());
     if ((m = p.match(/^\/stock\/items\/([^/]+)$/)) && req.method === 'PATCH') return this.stockResult(this.stock().nameItem(m[1], b));
     if (p === '/stock/deliveries') return this.stockResult(this.stock().delivery(b), 201);
     if (p === '/stock/invoices') return ok(this.stock().s.invoices.filter(i => i.status === 'confirmed'));
@@ -223,6 +234,8 @@ export class DemoTransport implements Transport {
       return ok({ id: f.id, status: 'explained' });
     }
     if (p === '/vehicles/lookup') {
+      const barcode = new URLSearchParams(req.path.split('?')[1] ?? '').get('barcode') ?? '';
+      if (!this.isDemoVehicle(barcode)) return refuse(404, 'unknown vehicle barcode: in the demo use ZSP-V07, ND 412-778 or its licence disc');
       const van = this.van();
       const mode = new URLSearchParams(req.path.split('?')[1] ?? '').get('mode') ?? 'driving';
       return ok({
@@ -233,6 +246,7 @@ export class DemoTransport implements Transport {
       });
     }
     if (p === '/vehicles/scan') {
+      if (!this.isDemoVehicle(b.barcode ?? '')) return refuse(404, 'unknown vehicle barcode');
       const van = this.van();
       let handoverStatus: 'signed' | 'awaiting_approval' | null = null;
       if (b.mode === 'driving' && !van.lastDriverMe) {

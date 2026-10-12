@@ -296,3 +296,18 @@ test('stock: invoice lines matched by code or description', () => {
   assert.deepEqual(St.invoiceProblems({ supplierName: '', invoiceNumber: 'A1', lines: [{ description: 'x', qty: 0 }] }), ['supplier name', 'line 1: quantity']);
   assert.equal(St.linesTotalCents([{ description: 'a', qty: 2, unitPriceCents: 150 }, { description: 'b', qty: 1, unitPriceCents: 100 }]), 400);
 });
+
+import * as V from '../src/core/vehicleCode.ts';
+
+const DISC = '%MVL1CC09%0154%4025T09N%1%4025015ABCD1%ND412778%BCD123X%Bakkie / Bakkie%TOYOTA%HILUX%White / Wit%AHTFR22G406123456%1GD1234567%2027-03-31%';
+
+test('vehicle codes: a licence disc is read as the vehicle, a typed registration works too', () => {
+  const d = V.parseLicenceDisc(DISC)!;
+  assert.equal(d.registration, 'ND412778');
+  assert.equal(d.make, 'TOYOTA');
+  assert.equal(d.expiry, '2027-03-31');
+  assert.ok(V.registrationCandidates(DISC).includes('ND412778'));
+  assert.equal(V.describeCode(DISC), 'Licence disc · ND412778 · TOYOTA HILUX');
+  assert.equal(V.parseLicenceDisc('RS-V1'), null);
+  assert.deepEqual(V.registrationCandidates('nd 412-778'), ['ND412778']);
+});

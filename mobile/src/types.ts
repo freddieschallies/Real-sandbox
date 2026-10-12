@@ -119,6 +119,6 @@ export interface StockReturn {
 /** A request to the stockroom: nothing is on the technician's name until the stock controller issues it. */
 export interface StockRequest {
   id: string; technician_id?: string; technician?: string; job_id: string | null; job_number: number | null; store: string | null;
-  status: 'pending' | 'issued' | 'rejected'; requested_at: string; decided_at: string | null; note: string | null;
+  status: 'pending' | 'issued' | 'rejected'; requested_at: string; decided_at: string | null; note: string | null; decided_by?: string | null;
   lines: { lineId: string; stockItemId: string; code: string; description: string; unit: string; qtyRequested: number; qtyIssued: number | null; inStockroom: number }[];
 }

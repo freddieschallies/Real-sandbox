@@ -9,8 +9,14 @@ export interface RoomItem { id: string; code: string; description: string; unit:
 export interface Overview { toIssue: number; toReceive: number; newItems: number; invoicesToday: number }
 export interface BookedInvoice { id: string; technician?: string; job_number?: number | null; supplier_name: string | null; invoice_number: string | null; total_cents: number | null; confirmed_at: string | null; changed_from_read?: boolean; lines?: { description: string; qty: number; unitPriceCents: number | null }[] | null }
 
-export interface Ctl { issues: StockRequest[]; returns: StockReturn[]; room: RoomItem[]; invoices: BookedInvoice[]; overview: Overview | null; loadedAt: string | null }
-const EMPTY: Ctl = { issues: [], returns: [], room: [], invoices: [], overview: null, loadedAt: null };
+export interface Holding { technicianId: string; technician: string; stockItemId: string; code: string; description: string; unit: string; holdingJobId: string | null; jobNumber: number | null; jobStatus: string | null; store: string | null; qty: number; pendingReturn: number; mustReturn: boolean }
+export interface Activity { id: string; at: string; kind: string; what: string; qty: number; code: string; description: string; unit: string; technician: string | null; by: string; jobNumber: number | null; store: string | null; unitCostCents: number | null; reference: string | null }
+
+export interface Ctl {
+  issues: StockRequest[]; returns: StockReturn[]; room: RoomItem[]; invoices: BookedInvoice[]; overview: Overview | null; loadedAt: string | null;
+  holdings?: Holding[]; activity?: Activity[]; seenActivityAt?: string | null; issued?: StockRequest[];
+}
+const EMPTY: Ctl = { issues: [], returns: [], room: [], invoices: [], overview: null, loadedAt: null, holdings: [], activity: [], seenActivityAt: null };
 
 export function useStockroom() {
   const s = useStore();
@@ -30,14 +36,16 @@ export function useStockroom() {
     setLoading(true);
     try {
       const get = async <T,>(path: string): Promise<T | null> => { const r = await s.ask({ method: 'GET', path }); return r && r.status === 200 ? r.body as T : null; };
-      const [issues, returns, room, invoices, overview] = await Promise.all([
+      const [issues, returns, room, invoices, overview, holdings, activity, issued] = await Promise.all([
         get<StockRequest[]>('/stock/issues?status=pending'), get<StockReturn[]>('/stock/returns?status=pending'),
         get<RoomItem[]>('/stock/stockroom'), get<BookedInvoice[]>('/stock/invoices'), get<Overview>('/stock/overview'),
+        get<Holding[]>('/stock/holdings'), get<Activity[]>('/stock/activity?limit=150'), get<StockRequest[]>('/stock/issues?status=issued'),
       ]);
       if (issues === null && returns === null) return;   // no signal: keep what we have
       save(c => ({
         issues: issues ?? c.issues, returns: returns ?? c.returns, room: room ?? c.room, invoices: invoices ?? c.invoices,
         overview: overview ?? c.overview, loadedAt: new Date().toISOString(),
+        holdings: holdings ?? c.holdings, activity: activity ?? c.activity, issued: issued ?? c.issued, seenActivityAt: c.seenActivityAt ?? activity?.[0]?.at ?? null,
       }));
     } finally {
       setLoading(false);
@@ -46,7 +54,7 @@ export function useStockroom() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 15_000);
+    const t = setInterval(load, 10_000);   // "live": what the technicians do shows within seconds
     return () => clearInterval(t);
   }, []);
 
@@ -66,8 +74,10 @@ export function useStockroom() {
       method: 'POST', path: `/stock/issues/${r.id}/issue`,
       json: { at: nowIso(), note, lines: r.lines.map(l => ({ lineId: l.lineId, qtyIssued: qty[l.lineId] ?? 0, photoId: photos[l.lineId]?.id })) },
     });
+    const done: StockRequest = { ...r, status: 'issued', decided_at: nowIso(), decided_by: s.session?.user.name ?? null, note: note ?? null,
+      lines: r.lines.map(l => ({ ...l, qtyIssued: qty[l.lineId] ?? 0 })) };
     save(c => ({
-      ...c, issues: c.issues.filter(x => x.id !== r.id),
+      ...c, issues: c.issues.filter(x => x.id !== r.id), issued: [done, ...(c.issued ?? [])],
       room: c.room.map(i => ({ ...i, inStockroom: i.inStockroom - r.lines.filter(l => l.stockItemId === i.id).reduce((n, l) => n + (qty[l.lineId] ?? 0), 0) })),
       overview: c.overview ? { ...c.overview, toIssue: Math.max(0, c.overview.toIssue - 1) } : c.overview,
     }));
@@ -103,5 +113,7 @@ export function useStockroom() {
     save(c => ({ ...c, room: c.room.map(i => ({ ...i, inStockroom: i.inStockroom + b.lines.filter(l => l.stockItemId === i.id).reduce((n, l) => n + l.qty, 0) })) }));
   };
 
-  return { ctl, loading, load, photo, issue, reject, receive, nameItem, delivery };
+  const seenActivity = () => save(c => ({ ...c, seenActivityAt: c.activity?.[0]?.at ?? c.seenActivityAt ?? null }));
+
+  return { ctl, loading, load, seenActivity, photo, issue, reject, receive, nameItem, delivery };
 }

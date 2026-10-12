@@ -346,6 +346,15 @@ test('vehicle scan-in: reason needed for another vehicle, managers told, tracker
   assert.equal(open.rows[0].n, 1);
 });
 
+test('vehicle scan: the licence disc or the registration finds the vehicle', async () => {
+  const disc = '%MVL1CC09%0154%4025T09N%1%4025015ABCD1%ND412778%BCD123X%Bakkie / Bakkie%TOYOTA%HILUX%White / Wit%AHTFR22G406123456%1GD1234567%2027-03-31%';
+  const byDisc = await call('tech2', 'GET', `/vehicles/lookup?barcode=${encodeURIComponent(disc)}`);
+  assert.equal(byDisc.status, 200);
+  assert.equal(byDisc.body.vehicle.registration, 'ND 412-778');
+  assert.equal((await call('tech2', 'GET', '/vehicles/lookup?barcode=nd412778')).body.vehicle.registration, 'ND 412-778');
+  assert.equal((await call('tech2', 'GET', '/vehicles/lookup?barcode=XX999999')).status, 404);
+});
+
 test('vehicle handover: inspect and sign to take over, new damage flagged to the previous driver, remote handover approved', async () => {
   // tech drove V1 last (previous test). tech2 takes it over.
   const look = await call('tech2', 'GET', '/vehicles/lookup?barcode=RS-V1');
@@ -549,6 +558,26 @@ test('stock control: book out for a job, supplier invoice read and confirmed, us
   assert.equal(named.body.needsReview, false);
   assert.equal((await holding('TIE-300', jobId))!.qty, 1, 'still on his name under the new code');
   assert.equal((await call('stock', 'GET', '/stock/overview')).body.newItems, 1, 'NEW-1002 still to name');
+
+  // The issued register: what was issued to whom, by whom.
+  const register = (await call('stock', 'GET', '/stock/issues?status=issued')).body;
+  const first = register.find((r: { id: string }) => r.id === asked.body.id);
+  assert.equal(first.technician, 'tech');
+  assert.equal(first.decided_by, 'stock');
+  assert.equal(first.lines[0].qtyIssued, 3);
+  assert.equal((await call('stock', 'GET', `/stock/issues?status=issued&technicianId=${ids.tech2}`)).body.length, 0);
+
+  // The stock controller sees everything that is out, and every movement as it happens.
+  assert.equal((await call('tech', 'GET', '/stock/holdings')).status, 403);
+  const out2 = (await call('stock', 'GET', '/stock/holdings')).body;
+  const tie = out2.find((h: { code: string }) => h.code === 'TIE-300');
+  assert.equal(tie.technician, 'tech');
+  assert.equal(tie.mustReturn, true);
+  const feed = (await call('stock', 'GET', '/stock/activity?limit=50')).body;
+  assert.ok(feed.some((a: { kind: string; jobNumber: number; technician: string }) => a.kind === 'use_on_job' && a.technician === 'tech' && a.jobNumber === created.body.job_number), 'use on the job card shows live');
+  assert.ok(feed.some((a: { kind: string; reference: string }) => a.kind === 'receive' && a.reference === 'Voltex Richards Bay DN-5512'));
+  const newest = feed[0].at;
+  assert.equal((await call('stock', 'GET', `/stock/activity?since=${encodeURIComponent(newest)}`)).body.length, 0);
 
   // The movement record can't be quietly changed.
   await assert.rejects(db.query('UPDATE stock_movements SET qty = 1 WHERE stock_item_id = $1', [ids.seal]), /cannot be edited/);

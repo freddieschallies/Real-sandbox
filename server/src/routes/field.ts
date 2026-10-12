@@ -7,6 +7,7 @@ import { audit, raiseFlag, tx } from '../db.ts';
 import { can, departmentsFor } from '../core/permissions.ts';
 import { fuelProblems } from '../core/rules.ts';
 import * as H from '../core/handover.ts';
+import { registrationCandidates } from '../core/vehicleCode.ts';
 import { Iso, Point, Refused, Uuid, parse } from '../http.ts';
 import { openFile, readUpload, removeFile, saveFile } from '../uploads.ts';
 
@@ -43,6 +44,17 @@ const Inspection = z.object({
   remoteReason: z.string().max(1000).optional(),
 }).strict();
 type InspectionIn = z.infer<typeof Inspection>;
+
+/** The vehicle for a scanned code: our own sticker, or the licence disc / typed registration. */
+async function findVehicle(c: Q, code: string): Promise<{ id: string; registration: string; active: boolean } | null> {
+  const own = (await c.query('SELECT id, registration, active FROM vehicles WHERE barcode = $1', [code.trim()])).rows[0];
+  if (own) return own;
+  const regs = registrationCandidates(code);
+  if (!regs.length) return null;
+  const { rows } = await c.query(
+    "SELECT id, registration, active FROM vehicles WHERE regexp_replace(upper(registration), '[^A-Z0-9]', '', 'g') = ANY($1)", [regs]);
+  return rows.length === 1 ? rows[0] : null;
+}
 
 interface HandoverCtx {
   lastDriver: { id: string; name: string } | null;
@@ -244,8 +256,8 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
 
   // What the phone needs to know before the scan: who drove it last and whether an inspection is needed.
   app.get('/vehicles/lookup', async req => {
-    const q = parse(z.object({ barcode: z.string().min(3).max(100), mode: z.enum(['driving', 'riding_along']).default('driving') }), req.query);
-    const v = (await req.db.query('SELECT id, registration, active FROM vehicles WHERE barcode = $1', [q.barcode])).rows[0];
+    const q = parse(z.object({ barcode: z.string().min(3).max(600), mode: z.enum(['driving', 'riding_along']).default('driving') }), req.query);
+    const v = await findVehicle(req.db, q.barcode);
     if (!v || !v.active) throw new Refused(404, ['unknown vehicle barcode']);
     const h = await handoverContext(req.db, v.id);
     return {
@@ -259,7 +271,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
 
   app.post('/vehicles/scan', async req => {
     const b = parse(z.object({
-      barcode: z.string().min(3).max(100),
+      barcode: z.string().min(3).max(600),
       mode: z.enum(['driving', 'riding_along']),
       at: Iso,
       reason: z.enum(['usual', 'breakdown', 'service', 'swapped_with_colleague', 'other']).default('usual'),
@@ -268,7 +280,8 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
     }), req.body);
     const me = req.actor.id;
     return tx(req.db, async c => {
-      const v = (await c.query('SELECT id, registration, active FROM vehicles WHERE barcode = $1 FOR UPDATE', [b.barcode])).rows[0];
+      const found = await findVehicle(c, b.barcode);
+      const v = found ? (await c.query('SELECT id, registration, active FROM vehicles WHERE id = $1 FOR UPDATE', [found.id])).rows[0] : null;
       if (!v || !v.active) throw new Refused(404, ['unknown vehicle barcode']);
       const usual = (await c.query('SELECT usual_vehicle_id FROM technician_settings WHERE user_id = $1', [me])).rows[0]?.usual_vehicle_id ?? null;
       const notUsual = usual !== null && usual !== v.id;

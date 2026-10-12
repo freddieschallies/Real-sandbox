@@ -7,13 +7,14 @@ import { useStore } from '../state.tsx';
 import { Body, Button, Card, Field, Heading, Label, Notice, Pill, Stepper, rand, st } from '../ui.tsx';
 import { SyncPill } from '../screens/SyncPill.tsx';
 import { C, S } from '../theme.ts';
-import { useStockroom, type RoomItem } from './useStockroom.ts';
+import { useStockroom, type Activity, type Holding, type RoomItem } from './useStockroom.ts';
+import { Choice } from '../ui.tsx';
 import type { StockRequest, StockReturn } from '../types.ts';
 
 // The stockroom's own colour, so nobody confuses it with the technician app.
 const K = { band: '#1E6F6A', bandText: '#E8FFFB', tick: '#3FB57A' };
 
-type Tab = 'issue' | 'receive' | 'room' | 'items' | 'invoices';
+type Tab = 'issue' | 'receive' | 'room' | 'live' | 'items';
 type Sel = { kind: 'issue'; id: string } | { kind: 'return'; id: string } | { kind: 'item'; id: string } | { kind: 'delivery' } | null;
 type Photo = { id: string; uri: string; mime: string };
 
@@ -32,18 +33,18 @@ export function StockroomApp() {
   const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: 'issue', label: 'To issue', count: room.ctl.issues.length },
     { key: 'receive', label: 'To receive', count: room.ctl.returns.length },
-    { key: 'room', label: 'Stockroom' },
+    { key: 'room', label: 'Stock' },
+    { key: 'live', label: 'Live', count: (room.ctl.activity ?? []).filter(a => !room.ctl.seenActivityAt || a.at > room.ctl.seenActivityAt).length },
     { key: 'items', label: 'New items', count: o?.newItems ?? room.ctl.room.filter(i => i.needsReview).length },
-    { key: 'invoices', label: 'Invoices' },
   ];
 
   const list = (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 40 }}>
-      {tab === 'issue' ? <IssueList items={room.ctl.issues} open={id => setSel({ kind: 'issue', id })} selected={sel?.kind === 'issue' ? sel.id : null} /> : null}
+      {tab === 'issue' ? <IssueTab waiting={room.ctl.issues} issued={room.ctl.issued ?? []} open={id => setSel({ kind: 'issue', id })} selected={sel?.kind === 'issue' ? sel.id : null} /> : null}
       {tab === 'receive' ? <ReturnList items={room.ctl.returns} open={id => setSel({ kind: 'return', id })} selected={sel?.kind === 'return' ? sel.id : null} /> : null}
-      {tab === 'room' ? <RoomList items={room.ctl.room} onDelivery={() => setSel({ kind: 'delivery' })} /> : null}
+      {tab === 'room' ? <RoomList items={room.ctl.room} holdings={room.ctl.holdings ?? []} onDelivery={() => setSel({ kind: 'delivery' })} /> : null}
+      {tab === 'live' ? <LiveFeed items={room.ctl.activity ?? []} seen={room.ctl.seenActivityAt ?? null} invoices={room.ctl.invoices} /> : null}
       {tab === 'items' ? <NewItemList items={room.ctl.room.filter(i => i.needsReview)} open={id => setSel({ kind: 'item', id })} /> : null}
-      {tab === 'invoices' ? <InvoiceList invoices={room.ctl.invoices} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} disabled={s.waiting > 0} /> : null}
       {room.ctl.loadedAt ? <Text style={st.small}>Updated {when(room.ctl.loadedAt)}</Text> : <Text style={st.small}>{room.loading ? 'Loading…' : 'Needs signal to load.'}</Text>}
     </ScrollView>
@@ -95,7 +96,7 @@ export function StockroomApp() {
         {header}
         <View style={{ flex: 1, flexDirection: 'row' }}>
           <View style={{ width: 210, borderRightWidth: 1, borderRightColor: C.line, padding: 12, gap: 6 }}>
-            {tabs.map(t => <SideTab key={t.key} t={t} on={tab === t.key} press={() => { setTab(t.key); setSel(null); }} />)}
+            {tabs.map(t => <SideTab key={t.key} t={t} on={tab === t.key} press={() => { if (tab === 'live') room.seenActivity(); setTab(t.key); setSel(null); }} />)}
           </View>
           <View style={{ width: 420, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
           <View style={{ flex: 1 }}>
@@ -113,7 +114,7 @@ export function StockroomApp() {
       {!sel ? (
         <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: C.line, paddingBottom: ins.bottom, backgroundColor: C.panel }}>
           {tabs.map(t => (
-            <Pressable key={t.key} onPress={() => setTab(t.key)} accessibilityRole="tab" accessibilityState={{ selected: tab === t.key }}
+            <Pressable key={t.key} onPress={() => { if (tab === 'live') room.seenActivity(); setTab(t.key); }} accessibilityRole="tab" accessibilityState={{ selected: tab === t.key }}
               style={{ flex: 1, alignItems: 'center', paddingVertical: 10, minHeight: 56, borderTopWidth: 3, borderTopColor: tab === t.key ? K.band : 'transparent' }}>
               <Text style={{ color: tab === t.key ? C.text : C.quiet, fontWeight: '700', fontSize: 12, textAlign: 'center' }}>{t.label}</Text>
               {t.count ? <Text style={{ color: C.warn, fontWeight: '800' }}>{t.count}</Text> : null}
@@ -135,7 +136,46 @@ function SideTab({ t, on, press }: { t: { label: string; count?: number }; on: b
   );
 }
 
-// ---- Requests to issue -----------------------------------------------------------
+// ---- Requests to issue, and the register of what was issued to whom -----------------
+
+function IssueTab({ waiting, issued, open, selected }: { waiting: StockRequest[]; issued: StockRequest[]; open: (id: string) => void; selected: string | null }) {
+  const [view, setView] = useState<'waiting' | 'issued'>('waiting');
+  return (
+    <>
+      <Choice options={['waiting', 'issued'] as const} value={view} onChange={setView}
+        labels={{ waiting: `Waiting (${waiting.length})`, issued: 'Issued register' }} />
+      {view === 'waiting' ? <IssueList items={waiting} open={open} selected={selected} /> : <IssuedRegister items={issued} />}
+    </>
+  );
+}
+
+function IssuedRegister({ items }: { items: StockRequest[] }) {
+  const [q, setQ] = useState('');
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = items.filter(r => words.every(w => `${r.technician} ${r.job_number ?? ''} ${r.store ?? ''} ${r.lines.map(l => `${l.code} ${l.description}`).join(' ')}`.toLowerCase().includes(w)));
+  return (
+    <>
+      <Field label="Search" value={q} onChangeText={setQ} placeholder="technician, job number or item" autoCorrect={false} />
+      {!shown.length ? <Body quiet>Nothing issued{q ? ' that matches' : ' yet'}.</Body> : null}
+      {shown.map(r => (
+        <Card key={r.id}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>{r.technician}</Text>
+            <Text style={st.small}>{r.decided_at ? when(r.decided_at) : ''}</Text>
+          </View>
+          <Text style={st.small}>{r.job_number ? `Job #${r.job_number}${r.store ? ` · ${r.store}` : ''}` : 'Van stock'} · issued by {r.decided_by ?? '–'}</Text>
+          {r.lines.map(l => (
+            <Text key={l.lineId} style={[st.body, (l.qtyIssued ?? 0) < l.qtyRequested && { color: C.warn }]}>
+              {l.qtyIssued ?? 0}{(l.qtyIssued ?? 0) < l.qtyRequested ? ` of ${l.qtyRequested}` : ''} × {l.description} <Text style={st.small}>{l.code}</Text>
+            </Text>
+          ))}
+          {r.note ? <Text style={st.small}>Note: {r.note}</Text> : null}
+        </Card>
+      ))}
+    </>
+  );
+}
+
 
 function IssueList({ items, open, selected }: { items: StockRequest[]; open: (id: string) => void; selected: string | null }) {
   if (!items.length) return <Body quiet>No stock requests waiting.</Body>;
@@ -260,28 +300,107 @@ function ReturnDetail({ r, room, done }: { r: StockReturn; room: ReturnType<type
 
 // ---- The stockroom, deliveries and new items ------------------------------------------
 
-function RoomList({ items, onDelivery }: { items: RoomItem[]; onDelivery: () => void }) {
+// The whole inventory: what is in the stockroom and exactly who holds the rest, for which job.
+function RoomList({ items, holdings, onDelivery }: { items: RoomItem[]; holdings: Holding[]; onDelivery: () => void }) {
   const [q, setQ] = useState('');
+  const [view, setView] = useState<'item' | 'tech'>('item');
+  const [open, setOpen] = useState<string | null>(null);
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = items.filter(i => words.every(w => `${i.code} ${i.description}`.toLowerCase().includes(w)));
+  const hit = (t: string) => words.every(w => t.toLowerCase().includes(w));
+  const totalOut = holdings.reduce((n, h) => n + h.qty, 0);
+  const mustBack = holdings.filter(h => h.mustReturn);
+  const techs = [...new Set(holdings.map(h => h.technician))];
   return (
     <>
       <Button label="Receive a delivery" onPress={onDelivery} />
-      <Field label="Search" value={q} onChangeText={setQ} placeholder="code or description" autoCorrect={false} />
-      {shown.map(i => (
-        <Card key={i.id}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-            <View style={{ flex: 1 }}>
-              <Text style={[st.body, { fontWeight: '700' }]}>{i.description}</Text>
-              <Text style={st.small}>{i.code} · {i.unit}{i.needsReview ? ' · needs a code' : ''}</Text>
+      <View style={{ flexDirection: 'row', gap: 10 }}>
+        <Card style={{ flex: 1 }}><Label>Stockroom</Label><Text style={big}>{items.reduce((n, i) => n + i.inStockroom, 0)}</Text></Card>
+        <Card style={{ flex: 1 }}><Label>With techs</Label><Text style={big}>{totalOut}</Text></Card>
+        <Card style={{ flex: 1, borderColor: mustBack.length ? C.bad : C.line }}><Label>To return</Label><Text style={[big, mustBack.length ? { color: C.bad } : null]}>{mustBack.reduce((n, h) => n + h.qty, 0)}</Text></Card>
+      </View>
+      <Choice options={['item', 'tech'] as const} value={view} onChange={setView} labels={{ item: 'By item', tech: 'By technician' }} />
+      <Field label="Search" value={q} onChangeText={setQ} placeholder={view === 'item' ? 'code or description' : 'technician, job or item'} autoCorrect={false} />
+      {view === 'item' ? items.filter(i => hit(`${i.code} ${i.description}`)).map(i => {
+        const out = holdings.filter(h => h.stockItemId === i.id);
+        const isOpen = open === i.id;
+        return (
+          <Card key={i.id} onPress={() => setOpen(isOpen ? null : i.id)} accessibilityLabel={`${i.code} stock`}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <View style={{ flex: 1 }}>
+                <Text style={[st.body, { fontWeight: '700' }]}>{i.description}</Text>
+                <Text style={st.small}>{i.code} · {i.unit}{i.needsReview ? ' · needs a code' : ''}</Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={{ color: i.inStockroom <= 0 ? C.bad : C.text, fontSize: 22, fontWeight: '800' }}>{i.inStockroom}</Text>
+                <Text style={st.small}>{i.withTechnicians} with techs · {i.inStockroom + i.withTechnicians} total</Text>
+              </View>
             </View>
-            <View style={{ alignItems: 'flex-end' }}>
-              <Text style={{ color: i.inStockroom <= 0 ? C.bad : C.text, fontSize: 22, fontWeight: '800' }}>{i.inStockroom}</Text>
-              <Text style={st.small}>{i.withTechnicians} with techs</Text>
+            {isOpen ? (out.length ? out.map((h, n) => <HoldingRow key={n} h={h} who />) : <Text style={st.small}>None out with technicians.</Text>) : null}
+          </Card>
+        );
+      }) : techs.filter(t => holdings.some(h => h.technician === t && hit(`${t} ${h.code} ${h.description} ${h.jobNumber ?? ''} ${h.store ?? ''}`))).map(t => {
+        const hs = holdings.filter(h => h.technician === t);
+        const back = hs.filter(h => h.mustReturn).length;
+        return (
+          <Card key={t}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>{t}</Text>
+              {back ? <Pill text={`${back} to return`} tone="bad" /> : null}
             </View>
-          </View>
-        </Card>
-      ))}
+            {hs.map((h, n) => <HoldingRow key={n} h={h} />)}
+          </Card>
+        );
+      })}
+    </>
+  );
+}
+
+const big = { color: C.text, fontSize: 24, fontWeight: '800' as const };
+
+function HoldingRow({ h, who }: { h: Holding; who?: boolean }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4, borderTopWidth: 1, borderTopColor: C.line }}>
+      <Text style={{ color: h.mustReturn ? C.bad : C.text, fontWeight: '800', minWidth: 32 }}>{h.qty}</Text>
+      <View style={{ flex: 1 }}>
+        <Text style={st.body} numberOfLines={1}>{who ? h.technician : `${h.code} ${h.description}`}</Text>
+        <Text style={st.small}>{h.jobNumber ? `Job #${h.jobNumber}${h.store ? ` · ${h.store}` : ''}${h.jobStatus === 'closed' ? ' · closed' : ''}` : 'Van stock'}{h.pendingReturn ? ` · ${h.pendingReturn} on its way back` : ''}</Text>
+      </View>
+      {h.mustReturn ? <Pill text="Return" tone="bad" /> : null}
+    </View>
+  );
+}
+
+// Live: every stock movement as it happens, newest first; new since you last looked are marked.
+const FILTERS = ['all', 'use_on_job', 'assign', 'return', 'supplier_invoice', 'receive'] as const;
+const FILTER_LABEL = { all: 'All', use_on_job: 'Used on jobs', assign: 'Issued', return: 'Returned', supplier_invoice: 'Invoices', receive: 'Deliveries' };
+const TONE: Record<string, 'info' | 'good' | 'warn' | 'bad' | 'quiet'> = { use_on_job: 'warn', assign: 'info', return: 'good', supplier_invoice: 'quiet', receive: 'good' };
+
+function LiveFeed({ items, seen, invoices }: { items: Activity[]; seen: string | null; invoices: ReturnType<typeof useStockroom>['ctl']['invoices'] }) {
+  const [f, setF] = useState<typeof FILTERS[number]>('all');
+  const shown = items.filter(a => f === 'all' || a.kind === f);
+  return (
+    <>
+      <Body quiet>Updates every few seconds. Used on a job card = on the job, ready to invoice.</Body>
+      <Choice options={FILTERS} value={f} onChange={setF} labels={FILTER_LABEL} />
+      {!shown.length ? <Body quiet>Nothing yet.</Body> : null}
+      {shown.map(a => {
+        const fresh = !!seen && a.at > seen;
+        return (
+          <Card key={a.id} style={fresh ? { borderColor: C.accent, borderWidth: 2 } : undefined}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Pill text={a.what} tone={TONE[a.kind] ?? 'quiet'} />
+              {fresh ? <Pill text="New" tone="warn" /> : null}
+              <View style={{ flex: 1 }} />
+              <Text style={st.small}>{when(a.at)}</Text>
+            </View>
+            <Text style={[st.body, { fontWeight: '700' }]}>{a.qty} × {a.description}</Text>
+            <Text style={st.small}>
+              {[a.code, a.technician, a.jobNumber ? `job #${a.jobNumber}${a.store ? ` ${a.store}` : ''}` : null, a.reference, a.unitCostCents != null ? `@ ${rand(a.unitCostCents)}` : null].filter(Boolean).join(' · ')}
+            </Text>
+          </Card>
+        );
+      })}
+      {f === 'supplier_invoice' ? <><Heading>Invoice details</Heading><InvoiceList invoices={invoices} /></> : null}
     </>
   );
 }
