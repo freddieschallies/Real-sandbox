@@ -11,6 +11,7 @@ import pg from 'pg';
 import type { FastifyInstance } from 'fastify';
 import type { InvoiceReader } from '../src/invoiceReader.ts';
 import { readPendingInvoices } from '../src/routes/stock.ts';
+import { purgeOldPhotos } from '../src/retention.ts';
 import { buildApp } from '../src/app.ts';
 import { hashPassword } from '../src/auth.ts';
 import { ensureAppRole, migrate } from '../src/migrate.ts';
@@ -814,6 +815,38 @@ test('workshop stock: set by the stock controller, used on job cards and daily c
   assert.equal(moves[3].registration, 'ND 412-778', 'which vehicle the oil went into');
   assert.equal((await call('stock', 'GET', '/fleet/workshop/movements')).status, 200);
   assert.equal((await call('tech', 'GET', '/fleet/workshop')).status, 403);
+});
+
+test('vehicle photos: fault and damage photos kept 2 years, routine inspection photos 90 days, the latest handover always kept', async () => {
+  const kinds = async () => (await db.query(
+    `SELECT p.id, p.kind::text, p.purged_at IS NOT NULL AS gone FROM photos p`)).rows as { id: string; kind: string; gone: boolean }[];
+  const latest = new Set((await db.query(
+    `SELECT unnest(photo_ids) AS id FROM (SELECT DISTINCT ON (vehicle_id) photo_ids FROM vehicle_inspections ORDER BY vehicle_id, inspected_at DESC) l`)).rows.map(r => r.id));
+  const newDamage = new Set((await db.query('SELECT unnest(photo_ids) AS id FROM vehicle_inspections WHERE cardinality(new_problems) > 0')).rows.map(r => r.id));
+  const routineBefore = (await kinds()).filter(p => ['vehicle_front', 'vehicle_back', 'vehicle_left', 'vehicle_right', 'vehicle_dashboard'].includes(p.kind));
+  assert.ok(routineBefore.length > 10, 'the handover tests took routine photos');
+
+  assert.equal(await purgeOldPhotos(appDb, new Date('2026-12-01T00:00:00Z')), 0, 'nothing goes inside 90 days');
+  const n = await purgeOldPhotos(appDb, new Date('2027-03-01T00:00:00Z'));
+  assert.ok(n > 0, 'routine photos older than 90 days are removed');
+  let all = await kinds();
+  for (const p of all.filter(x => x.gone)) {
+    assert.ok(!latest.has(p.id), 'never the latest handover of a vehicle');
+    assert.ok(!newDamage.has(p.id), 'never a handover where new damage was found');
+    assert.ok(['vehicle_front', 'vehicle_back', 'vehicle_left', 'vehicle_right', 'vehicle_dashboard'].includes(p.kind), `only routine photos (${p.kind})`);
+  }
+  assert.ok(all.filter(x => ['vehicle_damage', 'handover_signature'].includes(x.kind)).every(x => !x.gone), 'damage photos and signatures stay');
+  const gone = all.find(x => x.gone)!;
+  const r = await call('director', 'GET', `/photos/${gone.id}`);
+  assert.equal(r.status, 410);
+  assert.match(r.body.reasons[0], /routine inspection photo, removed after 90 days/);
+  assert.ok((await db.query('SELECT count(*)::int AS n FROM vehicle_inspections')).rows[0].n > 0, 'the inspection records themselves stay');
+
+  await purgeOldPhotos(appDb, new Date('2029-01-01T00:00:00Z'));
+  all = await kinds();
+  assert.ok(all.some(x => x.kind === 'vehicle_damage' && x.gone), 'after 2 years the damage photos go too');
+  assert.ok(all.filter(x => latest.has(x.id)).every(x => !x.gone), 'the latest handover is still kept');
+  assert.ok(all.filter(x => !['vehicle_front', 'vehicle_back', 'vehicle_left', 'vehicle_right', 'vehicle_dashboard', 'vehicle_damage', 'handover_signature', 'fleet_fault'].includes(x.kind)).every(x => !x.gone), 'job photos, slips and signatures on job cards are not touched');
 });
 
 test('the CEO assigns each person a position; it takes effect at once and is logged', async () => {

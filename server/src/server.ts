@@ -4,6 +4,7 @@ import { createPool } from './db.ts';
 import { ensureAppRole, migrate } from './migrate.ts';
 import { readerFromEnv } from './invoiceReader.ts';
 import { readPendingInvoices } from './routes/stock.ts';
+import { purgeOldPhotos } from './retention.ts';
 
 // Migrations run as the database owner; the app then runs as its own restricted user.
 const appUrl = process.env.DATABASE_URL ?? '';
@@ -24,3 +25,8 @@ await app.listen({ host: '0.0.0.0', port: Number(process.env.PORT ?? 8080) });
 
 // Supplier invoices that are still waiting to be read (e.g. after a restart) are picked up every minute.
 if (invoiceReader) setInterval(() => { readPendingInvoices(pool, invoiceReader).catch(e => app.log.error(e)); }, 60_000);
+
+// Old vehicle photos past their keeping time: once at start, then every 6 hours.
+const purge = () => purgeOldPhotos(pool).then(n => { if (n) app.log.info(`removed ${n} old vehicle photos`); }).catch(e => app.log.error(e));
+purge();
+setInterval(purge, 6 * 3600_000);

@@ -170,9 +170,10 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
 
   app.get('/photos/:id', async (req: FastifyRequest<{ Params: { id: string } }>, reply) => {
     const id = parse(Uuid, req.params.id);
-    const { rows } = await req.db.query('SELECT file_path, content_type, taken_by FROM photos WHERE id = $1', [id]);
+    const { rows } = await req.db.query('SELECT file_path, content_type, taken_by, purged_at, purge_reason FROM photos WHERE id = $1', [id]);
     const p = rows[0];
     if (!p) throw new Refused(404, ['no such photo']);
+    if (p.purged_at) throw new Refused(410, [`this photo is no longer kept: ${p.purge_reason}`]);
     if (p.taken_by !== req.actor.id && !can(req.actor, 'view_all_job_cards')) throw new Refused(403, ['not your photo']);
     reply.header('content-type', p.content_type ?? 'image/jpeg').header('cache-control', 'private, max-age=86400');
     return reply.send(openFile(p.file_path));
