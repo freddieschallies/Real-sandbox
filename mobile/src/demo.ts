@@ -5,6 +5,7 @@ import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
 import { normReg, registrationCandidates } from '../../server/src/core/vehicleCode.ts';
 import { DemoStock, seedStock, type DemoStockState } from './demoStock.ts';
+import { DemoFleet, seedFleet, type DemoFleetState } from './demoFleet.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
 import type { CardView, Flag, StockLine, Today, TodayJob } from './types.ts';
 
@@ -24,6 +25,8 @@ export interface DemoState {
   /** The demo van: who drove it last and what the last handover recorded. */
   van?: { lastDriverMe: boolean; odometerKm: number; problems: H.CheckKey[] };
   stockControl?: DemoStockState;
+  fleet?: DemoFleetState;
+  who?: { id: string; name: string; level: string };
   fuel: { litres: number; at: string }[];
 }
 
@@ -107,6 +110,9 @@ const refuse = (status: number, ...reasons: string[]): Response => ({ status, bo
 export class DemoTransport implements Transport {
   /** When true, behaves like a phone without signal. */
   noSignal = false;
+  /** Who is signed in to the demo right now (technician, stock controller or mechanic); kept with the demo data so a reload remembers. */
+  get who() { return this.state.who ?? { id: 'me', name: 'Thabo Mkhize', level: 'technician' }; }
+  set who(w) { this.state.who = w; this.persist(this.state); }
 
   constructor(public state: DemoState, private persist: (s: DemoState) => void) {}
 
@@ -141,6 +147,15 @@ export class DemoTransport implements Transport {
     return code.trim().length >= 3;
   }
 
+  private fleet(): DemoFleet {
+    return new DemoFleet(this.state.fleet ?? (this.state.fleet = seedFleet()));
+  }
+
+  private fleetResult(r: { ok: true; body: unknown; status?: number } | { ok: false; status: number; reasons: string[] }): Response {
+    this.persist(this.state);
+    return r.ok ? ok(r.body, r.status ?? 200) : refuse(r.status, ...r.reasons);
+  }
+
   private van() {
     return this.state.van ?? (this.state.van = { lastDriverMe: false, odometerKm: 87450, problems: ['windscreen_mirrors'] });
   }
@@ -172,10 +187,13 @@ export class DemoTransport implements Transport {
 
     if (p === '/auth/login') {
       // The same pretend company seen as the technician or as the stock controller.
-      const controller = b.email === 'stock';
+      const who = b.email === 'stock' ? { id: 'stock', name: 'Lindiwe Zulu', level: 'stockroom' }
+        : b.email === 'mech' ? { id: 'mech', name: 'Bongani Khumalo', level: 'mechanic' }
+        : { id: 'me', name: 'Thabo Mkhize', level: 'technician' };
+      this.who = who;
       return ok({
-        token: controller ? 'demo-stock' : 'demo',
-        user: controller ? { id: 'stock', name: 'Lindiwe Zulu', level: 'stockroom' } : { id: 'me', name: 'Thabo Mkhize', level: 'technician' },
+        token: `demo-${who.id}`,
+        user: who,
         company: { id: 'demo', name: 'ZSP (demo)' },
       });
     }
@@ -247,6 +265,7 @@ export class DemoTransport implements Transport {
     }
     if (p === '/vehicles/scan') {
       if (!this.isDemoVehicle(b.barcode ?? '')) return refuse(404, 'unknown vehicle barcode');
+      if (b.mode === 'driving') { const dr = this.fleet().canDrive('veh-1'); if (!dr.ok) return refuse(409, dr.reason); }
       const van = this.van();
       let handoverStatus: 'signed' | 'awaiting_approval' | null = null;
       if (b.mode === 'driving' && !van.lastDriverMe) {
@@ -255,6 +274,9 @@ export class DemoTransport implements Transport {
         if (missing.length) return refuse(409, ...missing);
         // New problems go to the previous driver (Sipho, in the demo) to explain, not to you.
         handoverStatus = b.inspection.handoverBy === 'remote_approval' ? 'awaiting_approval' : 'signed';
+        const fresh = H.newProblems(b.inspection, { odometerKm: van.odometerKm, problems: van.problems });
+        this.fleet().fromHandover('veh-1', b.inspection.odometerKm,
+          fresh.map(k => `${H.CHECKS.find(c => c[0] === k)![1]}${b.inspection.checks[k]?.note ? `: ${b.inspection.checks[k].note}` : ''}`), 'Thabo Mkhize');
         this.state.van = { lastDriverMe: true, odometerKm: b.inspection.odometerKm, problems: H.problemsOf(b.inspection) };
       }
       if (b.mode === 'driving') this.state.van = { ...this.van(), lastDriverMe: true };
@@ -271,6 +293,22 @@ export class DemoTransport implements Transport {
       this.persist(this.state);
       return ok({ id: id('fuel'), vehicle: this.state.vehicle?.registration ?? 'ND 412-778', problems }, 201);
     }
+
+    // Fleet (mechanic). Technicians may report faults; the rest is the mechanic's.
+    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/faults$/))) return this.fleetResult(this.fleet().reportFault(m[1], b, this.who.name, this.who.level === 'mechanic'));
+    if (p.startsWith('/fleet') && this.who.level !== 'mechanic') return refuse(403, 'mechanic only');
+    if (p === '/fleet') return ok(this.fleet().list());
+    if (p === '/fleet/faults') return ok(this.fleet().openFaults());
+    if (p === '/fleet/jobs') return ok(this.fleet().jobsList(new URLSearchParams(req.path.split('?')[1] ?? '').get('status') ?? 'open'));
+    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)$/)) && req.method === 'GET') return this.fleetResult(this.fleet().detail(m[1]));
+    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)$/)) && req.method === 'PATCH') return this.fleetResult(this.fleet().patchVehicle(m[1], b));
+    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/status$/))) return this.fleetResult(this.fleet().setStatus(m[1], b));
+    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/odometer$/))) return this.fleetResult(this.fleet().odometer(m[1], b.km));
+    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/jobs$/))) return this.fleetResult(this.fleet().openJob(m[1], b));
+    if ((m = p.match(/^\/fleet\/faults\/([^/]+)\/defer$/))) return this.fleetResult(this.fleet().defer(m[1], b.note));
+    if ((m = p.match(/^\/fleet\/jobs\/([^/]+)$/)) && req.method === 'PATCH') return this.fleetResult(this.fleet().patchJob(m[1], b));
+    if ((m = p.match(/^\/fleet\/jobs\/([^/]+)\/parts$/))) return this.fleetResult(this.fleet().addPart(m[1], b));
+    if ((m = p.match(/^\/fleet\/jobs\/([^/]+)\/complete$/))) return this.fleetResult(this.fleet().complete(m[1], b));
 
     if ((m = p.match(/^\/jobs\/([^/]+)$/)) && req.method === 'GET') {
       const j = this.findJob(m[1]);

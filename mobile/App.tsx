@@ -21,6 +21,8 @@ import { BookOut } from './src/screens/BookOut.tsx';
 import { Return } from './src/screens/Return.tsx';
 import { StockroomApp } from './src/stockroom/StockroomApp.tsx';
 import { TesterWelcome } from './src/screens/TesterWelcome.tsx';
+import { FleetApp } from './src/fleet/FleetApp.tsx';
+import { VehicleFault } from './src/screens/VehicleFault.tsx';
 import { C } from './src/theme.ts';
 
 function Current() {
@@ -39,6 +41,7 @@ function Current() {
     case 'invoice': return <Invoice key={route.invoiceId ?? 'new'} invoiceId={route.invoiceId} jobId={route.jobId} />;
     case 'bookout': return <BookOut jobId={route.jobId} />;
     case 'return': return <Return />;
+    case 'fault': return <VehicleFault />;
   }
 }
 
@@ -49,6 +52,8 @@ function Root() {
   if (s.needsPolicy) return <Policy />;
   // Stock controllers get the stockroom app; everyone else on the phone gets the technician app.
   if (s.session.user.level === 'stockroom') return <NavProvider key={s.session.user.id}><StockroomApp /></NavProvider>;
+  // Mechanics get the fleet app.
+  if (s.session.user.level === 'mechanic') return <NavProvider key={s.session.user.id}><FleetApp /></NavProvider>;
   return <NavProvider key={s.session.user.id}><Current /></NavProvider>;
 }
 
@@ -59,7 +64,7 @@ const TESTER = process.env.EXPO_PUBLIC_TESTER === '1';
 function Frame({ children }: { children: React.ReactNode }) {
   const s = useStore();
   const { width } = useWindowDimensions();
-  const narrow = Platform.OS === 'web' && width > 640 && s.session?.user.level !== 'stockroom';
+  const narrow = Platform.OS === 'web' && width > 640 && !['stockroom', 'mechanic'].includes(s.session?.user.level ?? '');
   if (!narrow) return <>{children}</>;
   return (
     <View style={{ flex: 1, alignItems: 'center', backgroundColor: '#101214' }}>

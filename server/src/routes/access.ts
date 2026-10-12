@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Db, Q } from '../db.ts';
 import { audit, tx } from '../db.ts';
-import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, can, isScoped, type Action, type LoginLevel } from '../core/permissions.ts';
+import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, POSITION_LABEL, can, isScoped, type Action, type LoginLevel } from '../core/permissions.ts';
 import { Refused, Uuid, parse } from '../http.ts';
 import { loadActor } from '../auth.ts';
 import { notify } from './field.ts';
@@ -108,6 +108,35 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
     if (!u) throw new Refused(404, ['no such user']);
     const overrides = (await req.db.query('SELECT action, effect, scope, department_ids, set_by, set_at FROM access_overrides WHERE user_id = $1', [id])).rows;
     return { user: u, effective: target?.perms ?? {}, overrides };
+  });
+
+  // The CEO gives each person their position: technician, mechanic, stock controller, manager...
+  // The position decides which app opens on their phone and what they may do by default.
+  app.get('/access/positions', async req => {
+    guard(req);
+    const { rows } = await req.db.query("SELECT id, full_name, login_level, department_id FROM users WHERE status <> 'left' ORDER BY full_name");
+    return { positions: LEVELS.map(l => ({ level: l, label: POSITION_LABEL[l] })), people: rows.map(r => ({ ...r, position: POSITION_LABEL[r.login_level as LoginLevel] })) };
+  });
+
+  app.put('/access/users/:id/position', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    guard(req);
+    const userId = parse(Uuid, req.params.id);
+    const b = parse(z.object({ position: z.enum(LEVELS as [LoginLevel, ...LoginLevel[]]) }), req.body);
+    return tx(req.db, async c => {
+      const u = (await c.query('SELECT full_name, login_level FROM users WHERE id = $1 FOR UPDATE', [userId])).rows[0];
+      if (!u) throw new Refused(404, ['no such user']);
+      if (u.login_level === b.position) return { userId, position: b.position, label: POSITION_LABEL[b.position] };
+      if ((b.position === 'creator' || u.login_level === 'creator') && req.actor.level !== 'creator') {
+        throw new Refused(403, ['only the Creator can give or take the Creator position']);
+      }
+      await c.query('UPDATE users SET login_level = $2 WHERE id = $1', [userId, b.position]);
+      await ensureSomeoneCanManageAccess(c);
+      const change = `${POSITION_LABEL[u.login_level as LoginLevel]} → ${POSITION_LABEL[b.position]}`;
+      await c.query('INSERT INTO access_changes (changed_by, user_id, action, change) VALUES ($1, $2, $3, $4)', [req.actor.id, userId, 'position', change]);
+      await audit(c, req.actor.id, 'position_changed', 'user', userId, { from: u.login_level, to: b.position });
+      await notify(c, userId, 'position_changed', `Your position is now ${POSITION_LABEL[b.position]}. Open the app again to see your screens.`, { position: b.position });
+      return { userId, position: b.position, label: POSITION_LABEL[b.position] };
+    });
   });
 
   app.put('/access/users/:id/:action', async (req: FastifyRequest<{ Params: { id: string; action: string } }>) => {

@@ -12,12 +12,19 @@ const STEPS: [string, string[]][] = [
     'Open the work item, fill it in: you cannot press Done until everything is there.',
     'Sign off with the store manager signing on the screen.',
     'My stock: scan a supplier invoice (any photo) and confirm the lines it reads; return the contactor that must go back.',
-    'Vehicle: type any code, choose Driving and do the handover inspection.',
+    'Vehicle: tap the licence disc, choose Driving and do the handover inspection; tick a problem to see it reach the mechanic.',
+    'Then "Report a fault on this vehicle" on My day.',
   ]],
   ['As stock controller (Lindiwe)', [
     'To issue: open Thabo\'s request, tick each item as you pick it, then issue it.',
     'To receive: count and tick what Thabo sent back.',
-    'Stockroom: receive a delivery; New items: give the invoice\'s new items a code.',
+    'Stock: the whole inventory by item or technician; Live: every movement as it happens; Issued register.',
+  ]],
+  ['As mechanic (Bongani)', [
+    'Vehicles: five vans; one in the workshop, one off the road, one with an expired licence disc.',
+    'Faults: Thabo\'s reports and handover problems land here, worst first.',
+    'Open ND 412-778, start a job card for the windscreen crack, fill it in and complete it.',
+    'Take ND 412-778 off the road (Status), then sign in as Thabo and try to drive it: it is refused.',
   ]],
 ];
 
@@ -25,15 +32,16 @@ export function TesterWelcome() {
   const s = useStore();
   const [busy, setBusy] = useState<string | null>(null);
   const [reset, setReset] = useState(false);
-  const go = async (who: 'demo' | 'stock') => { setBusy(who); await s.signIn('demo', '', who, 'demo'); setBusy(null); };
+  const go = async (who: 'demo' | 'stock' | 'mech') => { setBusy(who); await s.signIn('demo', '', who, 'demo'); setBusy(null); };
   return (
     <Screen title="Real Sandbox" sub="Test drive · ZSP job cards and stock">
       <View style={{ gap: 6 }}>
         <Text style={{ color: C.accent, fontSize: 28, fontWeight: '800' }}>Try it as either person</Text>
-        <Body quiet>Everything here is made up and stays in this browser. Switch between the two with Sign out; what one does, the other sees.</Body>
+        <Body quiet>Everything here is made up and stays in this browser. Switch between them with Sign out; what one does, the others see.</Body>
       </View>
       <Button label="Open as technician" onPress={() => go('demo')} busy={busy === 'demo'} />
       <Button label="Open as stock controller" kind="secondary" onPress={() => go('stock')} busy={busy === 'stock'} />
+      <Button label="Open as mechanic" kind="secondary" onPress={() => go('mech')} busy={busy === 'mech'} />
       {STEPS.map(([title, lines]) => (
         <Card key={title}>
           <Heading>{title}</Heading>

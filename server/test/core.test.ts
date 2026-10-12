@@ -311,3 +311,19 @@ test('vehicle codes: a licence disc is read as the vehicle, a typed registration
   assert.equal(V.parseLicenceDisc('RS-V1'), null);
   assert.deepEqual(V.registrationCandidates('nd 412-778'), ['ND412778']);
 });
+
+import * as Fl from '../src/core/fleet.ts';
+
+test('fleet: service and licence due, next service, what a mechanic job card needs', () => {
+  assert.equal(Fl.serviceDue({ next_service_km: 100000, next_service_at: '2027-01-01' }, 99500, '2026-10-12').state, 'soon');
+  assert.equal(Fl.serviceDue({ next_service_km: 100000, next_service_at: '2027-01-01' }, 100200, '2026-10-12').state, 'overdue');
+  assert.equal(Fl.serviceDue({ next_service_km: 100000, next_service_at: '2026-10-01' }, 90000, '2026-10-12').state, 'overdue', 'date passed');
+  assert.equal(Fl.licenceDue('2026-10-30', '2026-10-12').state, 'soon');
+  assert.deepEqual(Fl.nextService(88260, 15000, 12, '2026-10-16'), { km: 103260, at: '2027-10-16' });
+  const base = { jobType: 'repair' as const, odometerIn: 100, found: 'Brake pads worn down to metal', did: 'Replaced front brake pads and skimmed discs', labourHours: 2, afterPhotos: 1, odometerOut: 110, faults: [], vehicleStatusAfter: 'in_service' as const };
+  assert.deepEqual(Fl.missingToComplete(base), []);
+  assert.ok(Fl.missingToComplete({ ...base, odometerOut: 90 })[0].startsWith('odometer when done cannot be lower'));
+  assert.ok(Fl.missingToComplete({ ...base, faults: [{ id: 'f', severity: 'safety', outcome: 'deferred', note: 'no parts yet' }] }).includes('a safety fault cannot be deferred while the vehicle goes back on the road'));
+  assert.deepEqual(Fl.missingToComplete({ ...base, faults: [{ id: 'f', severity: 'safety', outcome: 'deferred', note: 'no parts yet' }], vehicleStatusAfter: 'off_road' }), []);
+  assert.equal(Fl.canDrive('off_road').ok, false);
+});

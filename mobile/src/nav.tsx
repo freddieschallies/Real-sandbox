@@ -15,7 +15,8 @@ export type Route =
   | { name: 'stock' }
   | { name: 'invoice'; invoiceId?: string; jobId?: string }
   | { name: 'bookout'; jobId: string }
-  | { name: 'return' };
+  | { name: 'return' }
+  | { name: 'fault' };
 
 interface Nav { route: Route; push(r: Route): void; back(): void; reset(): void; replace(r: Route): void }
 const Ctx = createContext<Nav | null>(null);

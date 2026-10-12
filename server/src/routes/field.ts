@@ -8,6 +8,8 @@ import { can, departmentsFor } from '../core/permissions.ts';
 import { fuelProblems } from '../core/rules.ts';
 import * as H from '../core/handover.ts';
 import { registrationCandidates } from '../core/vehicleCode.ts';
+import { canDrive } from '../core/fleet.ts';
+import { faultsFromHandover, recordKm } from './fleet.ts';
 import { Iso, Point, Refused, Uuid, parse } from '../http.ts';
 import { openFile, readUpload, removeFile, saveFile } from '../uploads.ts';
 
@@ -116,6 +118,11 @@ async function saveInspection(c: Q, me: string, v: { id: string; registration: s
       i.handoverBy, i.handedOverByName?.trim() ?? null, i.handoverSignatureId ?? null, i.remoteReason?.trim() ?? null, status],
   );
 
+  // The km go into the vehicle's history; new problems become faults for the mechanic.
+  await recordKm(c, v.id, i.odometerKm, at, 'handover', id, me);
+  if (fresh.length) {
+    await faultsFromHandover(c, v.id, id, me, at, fresh.map(k => ({ key: k, label: H.CHECKS.find(x => x[0] === k)![1], note: (i.checks as Record<string, { note?: string }>)[k]?.note })), i.damagePhotos);
+  }
   const myName = await nameOf(c, me);
   const mgr = await managerOf(c, me);
   if (fresh.length) {
@@ -142,7 +149,8 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
     const up = await readUpload(req);
     const f = parse(z.object({
       kind: z.enum(['signature', 'fuel_slip', 'supplier_slip', 'bought_out_slip', 'vehicle_front', 'vehicle_back', 'vehicle_left',
-        'vehicle_right', 'vehicle_dashboard', 'vehicle_damage', 'handover_signature']),
+        'vehicle_right', 'vehicle_dashboard', 'vehicle_damage', 'handover_signature', 'stock_item', 'delivery_note',
+        'fleet_before', 'fleet_after', 'fleet_fault', 'fleet_slip']),
       takenAt: Iso, id: Uuid.optional(), jobId: Uuid.optional(),
     }), up.fields);
     if (f.kind === 'signature' && !f.jobId) throw new Refused(400, ['a signature belongs to a job: send jobId']);
@@ -283,6 +291,11 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
       const found = await findVehicle(c, b.barcode);
       const v = found ? (await c.query('SELECT id, registration, active FROM vehicles WHERE id = $1 FOR UPDATE', [found.id])).rows[0] : null;
       if (!v || !v.active) throw new Refused(404, ['unknown vehicle barcode']);
+      if (b.mode === 'driving') {
+        const st = (await c.query('SELECT status, status_note FROM vehicles WHERE id = $1', [v.id])).rows[0];
+        const ok = canDrive(st.status);
+        if (!ok.ok) throw new Refused(409, [ok.reason + (st.status_note ? ` (${st.status_note})` : '')]);
+      }
       const usual = (await c.query('SELECT usual_vehicle_id FROM technician_settings WHERE user_id = $1', [me])).rows[0]?.usual_vehicle_id ?? null;
       const notUsual = usual !== null && usual !== v.id;
       if (notUsual && b.mode === 'driving' && b.reason === 'usual') throw new Refused(409, ['this is not your usual vehicle: choose a reason']);

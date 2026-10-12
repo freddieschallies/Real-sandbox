@@ -64,6 +64,9 @@ export function Day() {
           ) : (
             <Body>Not scanned into a vehicle. Tap to scan the barcode.</Body>
           )}
+          {t?.vehicle?.mode === 'driving' ? (
+            <Button label="Report a fault on this vehicle" kind="quiet" onPress={() => nav.push({ name: 'fault' })} style={{ minHeight: 44 }} />
+          ) : null}
           {t?.vehicle?.handover_status === 'awaiting_approval' ? (
             <Text style={[st.small, { color: C.warn }]}>Handover awaiting your supervisor's approval</Text>
           ) : null}

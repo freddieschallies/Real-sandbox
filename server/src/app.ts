@@ -13,6 +13,7 @@ import { registerOfficeRoutes } from './routes/office.ts';
 import { registerAccessRoutes } from './routes/access.ts';
 import { registerPlatformRoutes } from './routes/platform.ts';
 import { registerStockRoutes } from './routes/stock.ts';
+import { registerFleetRoutes } from './routes/fleet.ts';
 import type { InvoiceReader } from './invoiceReader.ts';
 
 /** db must connect as the app's own database role (no superuser, no row-level-security bypass). */
@@ -33,5 +34,6 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerAccessRoutes(app, db);
   registerPlatformRoutes(app, db);
   registerStockRoutes(app, db, opts.invoiceReader ?? null);
+  registerFleetRoutes(app, db);
   return app;
 }

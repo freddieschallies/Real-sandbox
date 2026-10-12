@@ -3,9 +3,15 @@
 // type may do, or what one person may do. The effective access is worked out once per request
 // and carried on the Actor, so checks here stay simple and pure.
 
-export type LoginLevel = 'technician' | 'admin' | 'stockroom' | 'management' | 'director' | 'creator';
+export type LoginLevel = 'technician' | 'mechanic' | 'admin' | 'stockroom' | 'management' | 'director' | 'creator';
 
-export const LEVELS: LoginLevel[] = ['technician', 'admin', 'stockroom', 'management', 'director', 'creator'];
+export const LEVELS: LoginLevel[] = ['technician', 'mechanic', 'admin', 'stockroom', 'management', 'director', 'creator'];
+
+/** What each position is called on screen. The CEO assigns one position to each person. */
+export const POSITION_LABEL: Record<LoginLevel, string> = {
+  technician: 'Technician', mechanic: 'Mechanic (fleet)', admin: 'Admin', stockroom: 'Stock controller',
+  management: 'Manager', director: 'Director / CEO', creator: 'Creator (system owner)',
+};
 
 /** For actions about employees: which employees' departments it covers. */
 export type DeptScope = { kind: 'own' } | { kind: 'all' } | { kind: 'list'; ids: string[] };
@@ -41,6 +47,9 @@ export const CATALOGUE = {
   prepare_quotes_invoices:    { group: 'Office', label: 'Prepare and send quotes and invoices', scoped: false },
   set_prices:                 { group: 'Office', label: 'Set prices and rates', scoped: false },
 
+  view_fleet:                 { group: 'Fleet', label: 'See the fleet: vehicles, faults, km, mechanic job cards', scoped: false },
+  manage_fleet:               { group: 'Fleet', label: 'Run the fleet: mechanic job cards, vehicle status, faults', scoped: false },
+
   manage_stockroom:           { group: 'Stock', label: 'Receive stock into the stockroom', scoped: false },
   assign_stock:               { group: 'Stock', label: 'Assign stock to technicians', scoped: false },
   run_stocktake:              { group: 'Stock', label: 'Run stock takes', scoped: false },
@@ -72,6 +81,8 @@ const OWN: DeptScope = { kind: 'own' };
 const ALL: DeptScope = { kind: 'all' };
 
 const technician: Permissions = { view_own_work: true, create_estimate: true };
+// The mechanic is a position of his own: the fleet only, no jobs.
+const mechanic: Permissions = { view_fleet: true, manage_fleet: true };
 const admin: Permissions = {
   ...technician,
   assign_jobs: true, view_all_job_cards: true, manage_stores_equipment: true,
@@ -80,7 +91,7 @@ const admin: Permissions = {
 };
 const stockroom: Permissions = { ...admin, manage_stockroom: true, assign_stock: true, run_stocktake: true };
 const management: Permissions = {
-  ...stockroom,
+  ...stockroom, view_fleet: true,
   view_live_driving_markers: OWN, view_flags: OWN, resolve_flags: OWN, view_employee_log: OWN, write_employee_log: OWN,
   edit_technician_settings: OWN, mark_technician_left: OWN, view_former_technicians: OWN,
 };
@@ -88,11 +99,11 @@ const director: Permissions = {
   ...management,
   view_live_driving_markers: ALL, view_flags: ALL, resolve_flags: ALL, view_employee_log: ALL, write_employee_log: ALL,
   edit_technician_settings: ALL, mark_technician_left: ALL, view_former_technicians: ALL,
-  set_prices: true, view_director_digest: true, view_company_reports: true, manage_access: true,
+  set_prices: true, view_director_digest: true, view_company_reports: true, manage_access: true, manage_fleet: true,
 };
 const creator: Permissions = { ...director, manage_users: true, manage_system_settings: true, view_audit_log: true };
 
-export const DEFAULTS: Record<LoginLevel, Permissions> = { technician, admin, stockroom, management, director, creator };
+export const DEFAULTS: Record<LoginLevel, Permissions> = { technician, mechanic, admin, stockroom, management, director, creator };
 
 // ---- Changes the CEO makes -----------------------------------------------------
 

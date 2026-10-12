@@ -30,6 +30,8 @@ interface Cache {
   requests?: StockRequest[];
   /** The stock controller app's own data. */
   ctl?: unknown;
+  /** The mechanic app's own data. */
+  fleet?: unknown;
 }
 const EMPTY: Cache = { today: null, cards: {}, stock: [], flags: [], refreshedAt: null, inventory: [], invoices: [], returns: [], catalogue: [], jobStock: {} };
 
@@ -141,6 +143,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (t.status === 401) { setSession(null); sessionRef.current = null; await clear([K.session]); return; }
       if (t.status !== 200) return;
       const today = t.body as Today;
+      // The CEO may have given this person another position: open the matching app.
+      const me = await call({ method: 'GET', path: '/me' });
+      const level = me.status === 200 ? (me.body.login_level ?? me.body.user?.level) : null;
+      if (level && sessionRef.current && level !== sessionRef.current.user.level) {
+        const s2 = { ...sessionRef.current, user: { ...sessionRef.current.user, level } };
+        sessionRef.current = s2; setSession(s2); await save(K.session, s2);
+      }
       const cards: Record<string, CardView> = {};
       for (const j of today.jobs) {
         const r = await call({ method: 'GET', path: `/jobs/${j.id}` });

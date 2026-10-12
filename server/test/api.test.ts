@@ -115,6 +115,7 @@ before(async () => {
   await user('tech', 'technician');
   await user('tech2', 'technician');
   await user('stock', 'stockroom');
+  await user('mech', 'mechanic');
   await db.query('UPDATE departments SET manager_id = $1 WHERE id = $2', [ids.manager, ids.dept]);
   ids.client = (await q("INSERT INTO clients (name) VALUES ('FreshMart') RETURNING id", [])).id;
   ids.store = (await q("INSERT INTO stores (client_id, name, lat, lng) VALUES ($1, 'FreshMart Meerensee', $2, $3) RETURNING id", [ids.client, STORE.lat, STORE.lng])).id;
@@ -136,7 +137,7 @@ after(async () => {
 
 test('login: wrong password refused, right password gives a token', async () => {
   assert.equal((await call('', 'POST', '/auth/login', { email: 'tech@zsp.test', password: 'nope' })).status, 401);
-  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2', 'stock']) {
+  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2', 'stock', 'mech']) {
     const r = await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW });
     assert.equal(r.status, 200);
     tokens[who] = r.body.token;
@@ -151,7 +152,7 @@ test('nothing works until the monitoring policy is acknowledged', async () => {
   assert.equal((await call('tech', 'GET', '/me')).body.policyAcknowledged, false);
   const pol = await call('tech', 'GET', '/policy/current');
   assert.equal(pol.body.version, '1.0');
-  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2', 'stock']) {
+  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2', 'stock', 'mech']) {
     assert.equal((await call(who, 'POST', '/policy/acknowledge', { policyVersionId: ids.policy })).status, 200);
   }
   assert.equal((await call('tech', 'GET', '/jobs')).status, 200);
@@ -584,6 +585,84 @@ test('stock control: book out for a job, supplier invoice read and confirmed, us
   await assert.rejects(db.query('DELETE FROM stock_movements WHERE stock_item_id = $1', [ids.seal]), /cannot be edited/);
 });
 
+test('fleet: the mechanic sees every vehicle, faults from handovers, job cards linked to the vehicle; off-road vehicles cannot be driven', async () => {
+  assert.equal((await call('tech', 'GET', '/fleet')).status, 403, 'technicians do not run the fleet');
+  assert.equal((await call('mech', 'GET', '/jobs')).status, 200);
+  assert.equal((await call('mech', 'GET', '/jobs')).body.length, 0, 'the mechanic sees no store jobs');
+  const fleet = (await call('mech', 'GET', '/fleet')).body;
+  const v1 = fleet.find((v: { registration: string }) => v.registration === 'ND 412-778');
+  assert.equal(v1.km, 88200, 'km from the handovers');
+  assert.ok(v1.open_faults >= 1, 'the bodywork problem found at handover is a fault');
+  assert.equal((await call('manager', 'GET', '/fleet')).status, 200, 'management can look');
+  assert.equal((await call('manager', 'POST', `/fleet/vehicles/${ids.v1}/jobs`, { jobType: 'service', reason: 'Service', odometerIn: 88300, at: '2026-10-16T08:00:00+02:00' })).status, 403);
+
+  // A technician reports a safety fault on another vehicle: the mechanic hears at once.
+  const rep = await call('tech2', 'POST', `/fleet/vehicles/${ids.v2}/faults`, { description: 'Brakes pulling hard to the left', severity: 'safety', at: '2026-10-16T07:00:00+02:00' });
+  assert.equal(rep.status, 201);
+  assert.ok((await call('mech', 'GET', '/me/notifications')).body.some((n: { message: string }) => /SAFETY: ND 503-221/.test(n.message)));
+  assert.equal((await call('mech', 'GET', '/fleet/faults')).body[0].severity, 'safety', 'worst first');
+  assert.equal((await call('mech', 'POST', `/fleet/faults/${rep.body.id}/defer`, { note: 'Next week', at: '2026-10-16T07:10:00+02:00' })).status, 409, 'a safety fault cannot be deferred');
+
+  // Vehicle details.
+  assert.equal((await call('mech', 'PATCH', `/fleet/vehicles/${ids.v1}`, { make: 'Toyota', model: 'Hilux 2.4', licenceExpiry: '2026-11-01' })).status, 200);
+
+  // A mechanic job card on the vehicle: takes it off the road while it is open.
+  const detail0 = (await call('mech', 'GET', `/fleet/vehicles/${ids.v1}`)).body;
+  const bodywork = detail0.faults.find((f: { source: string; status: string }) => f.source === 'handover' && f.status === 'open');
+  assert.equal((await call('mech', 'POST', `/fleet/vehicles/${ids.v1}/jobs`, { jobType: 'service', reason: '15 000 km service and door dent', odometerIn: 88000, at: '2026-10-16T08:00:00+02:00' })).status, 409, 'odometer cannot go backwards');
+  const job = await call('mech', 'POST', `/fleet/vehicles/${ids.v1}/jobs`, { jobType: 'service', reason: '15 000 km service and door dent', odometerIn: 88250, faultIds: [bodywork.id], vehicleStatus: 'workshop', at: '2026-10-16T08:00:00+02:00' });
+  assert.equal(job.status, 201, JSON.stringify(job.body));
+  assert.equal(job.body.number, 3001);
+  assert.equal((await call('mech', 'POST', `/fleet/vehicles/${ids.v1}/jobs`, { jobType: 'repair', reason: 'Second card', odometerIn: 88250, at: '2026-10-16T08:01:00+02:00' })).status, 409, 'one open card per vehicle');
+  const drive = await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V1', mode: 'driving', at: '2026-10-16T08:30:00+02:00' });
+  assert.equal(drive.status, 409);
+  assert.match(drive.body.reasons[0], /in the workshop/);
+
+  const J = `/fleet/jobs/${job.body.id}`;
+  const early = await call('mech', 'POST', `${J}/complete`, { at: '2026-10-16T12:00:00+02:00', odometerOut: 88260, vehicleStatusAfter: 'in_service' });
+  assert.equal(early.status, 409);
+  for (const r of ['what did you find', 'labour hours', 'after photo', 'fixed or deferred', 'next service']) assert.ok(early.body.reasons.some((x: string) => x.includes(r)), r);
+
+  const after = await upload('mech', '/photos', { kind: 'fleet_after', takenAt: '2026-10-16T11:50:00+02:00' });
+  assert.equal((await call('mech', 'PATCH', J, { found: 'Oil dirty and due, rear left door dented inwards', did: 'Changed oil and filters, panel beat and resprayed the door', labourHours: 3.5, addAfterPhotoIds: [after.body.id] })).status, 200);
+  assert.equal((await call('mech', 'POST', `${J}/parts`, { description: 'Oil filter', qty: 1, unitCostCents: 18500, source: 'bought' })).status, 400, 'bought needs a slip');
+  const slip = await upload('mech', '/photos', { kind: 'fleet_slip', takenAt: '2026-10-16T09:00:00+02:00' });
+  assert.equal((await call('mech', 'POST', `${J}/parts`, { description: 'Oil filter', qty: 1, unitCostCents: 18500, source: 'bought', slipPhotoId: slip.body.id })).status, 201);
+  const done = await call('mech', 'POST', `${J}/complete`, {
+    at: '2026-10-16T12:00:00+02:00', odometerOut: 88260, faults: [{ id: bodywork.id, outcome: 'fixed' }],
+    nextServiceKm: 103260, nextServiceAt: '2027-10-16', vehicleStatusAfter: 'in_service',
+  });
+  assert.equal(done.status, 200, JSON.stringify(done.body));
+
+  const detail = (await call('mech', 'GET', `/fleet/vehicles/${ids.v1}`)).body;
+  assert.equal(detail.vehicle.status, 'in_service');
+  assert.equal(detail.vehicle.next_service_km, 103260);
+  assert.equal(detail.faults.find((f: { id: string }) => f.id === bodywork.id).status, 'fixed');
+  assert.equal(detail.jobs[0].parts_cents, 18500);
+  assert.deepEqual([...new Set(detail.km.map((k: { source: string }) => k.source))].sort(), ['fleet_job', 'handover']);
+  assert.equal(detail.licenceDue.state, 'soon');
+  assert.equal((await call('mech', 'PATCH', J, { found: 'changed later on' })).status, 409, 'completed cards are locked');
+  await assert.rejects(db.query('UPDATE fleet_jobs SET labour_hours = 1 WHERE id = $1', [job.body.id]), /completed and locked/);
+  assert.equal((await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V1', mode: 'driving', at: '2026-10-16T12:30:00+02:00' })).status, 200, 'back on the road');
+});
+
+test('the CEO assigns each person a position; it takes effect at once and is logged', async () => {
+  assert.equal((await call('manager', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'mechanic' })).status, 403, 'only whoever manages access');
+  const list = (await call('director', 'GET', '/access/positions')).body;
+  assert.ok(list.positions.some((p: { label: string }) => p.label === 'Mechanic (fleet)'));
+  const r = await call('director', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'mechanic' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.label, 'Mechanic (fleet)');
+  assert.equal((await call('tech2', 'GET', '/fleet')).status, 200, 'mechanic access straight away, same login');
+  assert.equal((await call('tech2', 'GET', '/me')).body.login_level, 'mechanic');
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'creator' })).status, 403, 'only the Creator makes a Creator');
+  const log = (await call('director', 'GET', '/access/changes')).body;
+  assert.ok(log.some((c: { action: string; change: string }) => c.action === 'position' && c.change === 'Technician → Mechanic (fleet)'));
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'technician' })).status, 200);
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.director}/position`, { position: 'technician' })).status, 200, 'the Creator can still manage access');
+  assert.equal((await call('creator', 'PUT', `/access/users/${ids.director}/position`, { position: 'director' })).status, 200);
+});
+
 test('fuel: slip required, logged against the vehicle, impossible litres flagged', async () => {
   const noSlip = await call('tech', 'POST', '/fuel', { litres: 50, amountCents: 115000, slipPhotoId: '00000000-0000-4000-8000-000000000002', at: '2026-10-15T08:00:00+02:00' });
   assert.equal(noSlip.status, 409);
@@ -672,7 +751,7 @@ test('the CEO decides access: changes apply at once, are logged, and nobody can 
   assert.equal(lock.status, 409);
   assert.equal((await call('creator', 'PUT', '/access/levels/director/manage_access', { effect: 'default' })).status, 200);
   assert.equal((await call('director', 'GET', '/access/catalogue')).status, 200);
-  const log = await call('director', 'GET', '/access/changes');
+  const log = { body: (await call('director', 'GET', '/access/changes')).body.filter((c: { action: string }) => c.action !== 'position') };
   assert.equal(log.body.length, 3, 'every change is in the history');
   assert.equal(log.body[2].change, 'granted (all departments)');
 });
