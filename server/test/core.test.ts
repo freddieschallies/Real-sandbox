@@ -1,18 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { can, type Actor } from '../src/core/permissions.ts';
+import { actorWithDefaults as A, can, departmentsFor, effectivePermissions } from '../src/core/permissions.ts';
 import * as J from '../src/core/jobCard.ts';
 import * as R from '../src/core/rules.ts';
 
 // ---- Permissions -----------------------------------------------------------
 
-const tech: Actor = { id: 't1', level: 'technician', departmentId: 'd1' };
-const admin: Actor = { id: 'a1', level: 'admin' };
-const stockroom: Actor = { id: 's1', level: 'stockroom' };
-const mgrD1: Actor = { id: 'm1', level: 'management', departmentId: 'd1' };
-const mgrD2: Actor = { id: 'm2', level: 'management', departmentId: 'd2' };
-const director: Actor = { id: 'dir', level: 'director' };
-const creator: Actor = { id: 'c', level: 'creator' };
+const tech = A('t1', 'technician', 'd1');
+const admin = A('a1', 'admin');
+const stockroom = A('s1', 'stockroom');
+const mgrD1 = A('m1', 'management', 'd1');
+const mgrD2 = A('m2', 'management', 'd2');
+const director = A('dir', 'director');
+const creator = A('c', 'creator');
 const techInD1 = { employeeId: 't1', employeeDepartmentId: 'd1' };
 
 test('technician sees own work only, and can make estimates', () => {
@@ -58,9 +58,27 @@ test('director sees all departments; creator alone runs the system', () => {
 test('pricing: directors, plus anyone given pricing access', () => {
   assert.ok(can(director, 'set_prices'));
   assert.ok(!can(admin, 'set_prices'));
-  assert.ok(can({ ...admin, extra: ['pricing'] }, 'set_prices'));
-  assert.ok(can(director, 'grant_pricing_access'));
-  assert.ok(!can(mgrD1, 'grant_pricing_access'));
+  assert.ok(can(A('a2', 'admin', null, [{ action: 'set_prices', effect: 'grant' }]), 'set_prices'));
+  assert.ok(can(director, 'manage_access'));
+  assert.ok(!can(mgrD1, 'manage_access'));
+});
+
+test('the CEO can change access: per login type and per person, departments included', () => {
+  // A manager allowed to see two other departments' flags, but not the confidential log
+  const m = A('m3', 'management', 'd1', [
+    { action: 'view_flags', effect: 'grant', scope: 'selected_departments', departmentIds: ['d1', 'd2'] },
+    { action: 'view_employee_log', effect: 'deny' },
+  ]);
+  assert.ok(can(m, 'view_flags', { employeeDepartmentId: 'd2' }));
+  assert.ok(!can(m, 'view_flags', { employeeDepartmentId: 'd3' }));
+  assert.ok(!can(m, 'view_employee_log', techInD1));
+  assert.deepEqual(departmentsFor(m, 'view_flags'), ['d1', 'd2']);
+  // All admins lose pricing view of invoices by a login-type change; one admin gets it back personally
+  const p = effectivePermissions('admin', [{ action: 'view_quotes_invoices_stock', effect: 'deny' }], [{ action: 'view_quotes_invoices_stock', effect: 'grant' }]);
+  assert.equal(p.view_quotes_invoices_stock, true);
+  assert.equal(effectivePermissions('admin', [{ action: 'view_quotes_invoices_stock', effect: 'deny' }], []).view_quotes_invoices_stock, undefined);
+  assert.deepEqual(departmentsFor(director, 'view_flags'), 'all');
+  assert.equal(departmentsFor(admin, 'view_flags'), null);
 });
 
 // ---- Job card forced path -------------------------------------------------

@@ -68,6 +68,7 @@ before(async () => {
   };
   await user('creator', 'creator');
   await user('admin', 'admin');
+  await user('director', 'director');
   await user('manager', 'management');
   await user('tech', 'technician');
   await user('tech2', 'technician');
@@ -90,7 +91,7 @@ after(async () => {
 
 test('login: wrong password refused, right password gives a token', async () => {
   assert.equal((await call('', 'POST', '/auth/login', { email: 'tech@zsp.test', password: 'nope' })).status, 401);
-  for (const who of ['creator', 'admin', 'manager', 'tech', 'tech2']) {
+  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2']) {
     const r = await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW });
     assert.equal(r.status, 200);
     tokens[who] = r.body.token;
@@ -105,7 +106,7 @@ test('nothing works until the monitoring policy is acknowledged', async () => {
   assert.equal((await call('tech', 'GET', '/me')).body.policyAcknowledged, false);
   const pol = await call('tech', 'GET', '/policy/current');
   assert.equal(pol.body.version, '1.0');
-  for (const who of ['creator', 'admin', 'manager', 'tech', 'tech2']) {
+  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2']) {
     assert.equal((await call(who, 'POST', '/policy/acknowledge', { policyVersionId: ids.policy })).status, 200);
   }
   assert.equal((await call('tech', 'GET', '/jobs')).status, 200);
@@ -366,6 +367,29 @@ test('estimates: prices only from the price list, always marked not official', a
   assert.equal(est.status, 200);
   assert.equal(est.body.label, 'Estimate only, not official');
   assert.equal(est.body.total_cents, 2 * 55000 + 32000 + 85000);
+});
+
+test('the CEO decides access: changes apply at once, are logged, and nobody can be locked out', async () => {
+  assert.equal((await call('admin', 'GET', '/access/catalogue')).status, 403);
+  assert.equal((await call('admin', 'GET', '/flags')).status, 403);
+  // CEO gives this one admin read access to flags across all departments
+  const g = await call('director', 'PUT', `/access/users/${ids.admin}/view_flags`, { effect: 'grant', scope: 'all_departments' });
+  assert.equal(g.status, 200);
+  assert.equal((await call('admin', 'GET', '/flags')).status, 200, 'applies on the very next request');
+  assert.ok((await call('admin', 'GET', '/me/notifications')).body.some((n: { kind: string }) => n.kind === 'access_changed'), 'the person is told');
+  // A scoped permission needs its departments
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/view_employee_log`, { effect: 'grant' })).status, 400);
+  // Taking manage_access from all Directors is fine while the Creator keeps it ...
+  assert.equal((await call('creator', 'PUT', '/access/levels/director/manage_access', { effect: 'deny' })).status, 200);
+  assert.equal((await call('director', 'GET', '/access/catalogue')).status, 403);
+  // ... but removing it from the Creator too would leave nobody in charge
+  const lock = await call('creator', 'PUT', '/access/levels/creator/manage_access', { effect: 'deny' });
+  assert.equal(lock.status, 409);
+  assert.equal((await call('creator', 'PUT', '/access/levels/director/manage_access', { effect: 'default' })).status, 200);
+  assert.equal((await call('director', 'GET', '/access/catalogue')).status, 200);
+  const log = await call('director', 'GET', '/access/changes');
+  assert.equal(log.body.length, 3, 'every change is in the history');
+  assert.equal(log.body[2].change, 'granted (all departments)');
 });
 
 test('a disabled login stops working immediately', async () => {

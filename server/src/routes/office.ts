@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../db.ts';
 import { audit, raiseFlag, tx } from '../db.ts';
-import { can } from '../core/permissions.ts';
+import { can, departmentsFor } from '../core/permissions.ts';
 import { DateOnly, Iso, Refused, Uuid, parse } from '../http.ts';
 import { isOnJob } from '../jobsRepo.ts';
 import { managerOf, notify } from './field.ts';
@@ -76,7 +76,7 @@ export function registerOfficeRoutes(app: FastifyInstance, db: Db) {
         [id],
       )).rows[0];
       if (!r) throw new Refused(404, ['no such supply run']);
-      if (!can(req.actor, 'resolve_flags', { employeeId: r.technician_id, employeeDepartmentId: r.department_id })) throw new Refused(403, ['only his manager or a Director can approve']);
+      if (!can(req.actor, 'resolve_flags', { employeeId: r.technician_id, employeeDepartmentId: r.department_id })) throw new Refused(403, ['you do not have approval rights for this technician']);
       if (r.status !== 'awaiting_approval') throw new Refused(409, ['this run is not waiting for approval']);
       await c.query("UPDATE supply_runs SET status = 'approved', approved_by = $2, approved_at = now() WHERE id = $1", [id, req.actor.id]);
       await notify(c, r.technician_id, 'topup_approved', 'Your van stock top-up run is approved', { supplyRunId: id });
@@ -174,9 +174,10 @@ export function registerOfficeRoutes(app: FastifyInstance, db: Db) {
 
   app.get('/flags', async req => {
     const q = parse(z.object({ status: z.enum(['open', 'explained', 'resolved', 'escalated', 'unresolved']).default('unresolved'), departmentId: Uuid.optional() }), req.query);
-    const a = req.actor;
-    if (!can(a, 'view_flags', { employeeDepartmentId: a.departmentId ?? null })) throw new Refused(403, ['only Management and above see flags']);
-    const deptFilter = a.level === 'management' ? a.departmentId : (q.departmentId ?? null);
+    const allowed = departmentsFor(req.actor, 'view_flags');
+    if (!allowed) throw new Refused(403, ['you do not have access to flags']);
+    if (q.departmentId && allowed !== 'all' && !allowed.includes(q.departmentId)) throw new Refused(403, ['you do not have access to that department']);
+    const deptFilter: string[] | null = q.departmentId ? [q.departmentId] : (allowed === 'all' ? null : allowed);
     const { rows } = await db.query(
       `SELECT f.id, f.flag_type, f.severity, f.raised_at, f.question, f.explanation, f.explained_at, f.status,
               f.details, f.job_id, j.job_number, f.vehicle_id, u.full_name AS technician, d.name AS department
@@ -184,7 +185,7 @@ export function registerOfficeRoutes(app: FastifyInstance, db: Db) {
          LEFT JOIN users u ON u.id = f.technician_id
          LEFT JOIN departments d ON d.id = u.department_id
          LEFT JOIN jobs j ON j.id = f.job_id
-        WHERE ($1::uuid IS NULL OR u.department_id = $1)
+        WHERE ($1::uuid[] IS NULL OR u.department_id = ANY($1))
           AND (CASE WHEN $2 = 'unresolved' THEN f.status IN ('open', 'explained', 'escalated') ELSE f.status::text = $2 END)
         ORDER BY f.severity DESC, f.raised_at DESC
         LIMIT 500`,

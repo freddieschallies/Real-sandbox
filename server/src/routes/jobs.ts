@@ -48,7 +48,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
   });
 
   app.post('/jobs', async (req, reply) => {
-    if (!can(req.actor, 'assign_jobs')) throw new Refused(403, ['only Admin and above can create jobs']);
+    if (!can(req.actor, 'assign_jobs')) throw new Refused(403, ['you do not have access to create jobs']);
     const b = parse(NewJob, req.body);
     if (b.jobType === 'planned_maintenance' && b.maintenanceSteps.length === 0) throw new Refused(400, ['planned maintenance needs its checklist steps']);
     const id = await tx(db, async c => {

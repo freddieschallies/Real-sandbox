@@ -9,6 +9,7 @@ import { registerUploads } from './uploads.ts';
 import { registerJobRoutes } from './routes/jobs.ts';
 import { registerFieldRoutes } from './routes/field.ts';
 import { registerOfficeRoutes } from './routes/office.ts';
+import { registerAccessRoutes } from './routes/access.ts';
 
 export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boolean; corsOrigins?: string[] }) {
   if (!opts.jwtSecret || opts.jwtSecret.length < 32) throw new Error('JWT secret must be at least 32 characters');
@@ -23,5 +24,6 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerJobRoutes(app, db);
   registerFieldRoutes(app, db);
   registerOfficeRoutes(app, db);
+  registerAccessRoutes(app, db);
   return app;
 }

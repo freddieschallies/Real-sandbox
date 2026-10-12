@@ -1,119 +1,154 @@
-// Login levels and what each one may do. Levels are stacked: each sees everything below it.
-// Stockroom sits at Admin level.
+// Who can do what. Each login type has default access (DEFAULTS below). A person with
+// "manage_access" (by default the Director/CEO and the Creator) can change what a whole login
+// type may do, or what one person may do. The effective access is worked out once per request
+// and carried on the Actor, so checks here stay simple and pure.
 
 export type LoginLevel = 'technician' | 'admin' | 'stockroom' | 'management' | 'director' | 'creator';
 
-const RANK: Record<LoginLevel, number> = {
-  technician: 0,
-  admin: 1,
-  stockroom: 1,
-  management: 2,
-  director: 3,
-  creator: 4,
-};
+export const LEVELS: LoginLevel[] = ['technician', 'admin', 'stockroom', 'management', 'director', 'creator'];
+
+/** For actions about employees: which employees' departments it covers. */
+export type DeptScope = { kind: 'own' } | { kind: 'all' } | { kind: 'list'; ids: string[] };
+export type Grant = true | DeptScope;
+export type Permissions = Partial<Record<Action, Grant>>;
 
 export interface Actor {
   id: string;
   level: LoginLevel;
   departmentId?: string | null;
-  extra?: ReadonlyArray<'pricing'>;
+  perms: Permissions;
 }
 
 export interface Subject {
-  /** The employee the data is about (technician). */
   employeeId?: string;
   employeeDepartmentId?: string | null;
 }
 
-export type Action =
-  | 'view_own_work'
-  | 'create_estimate'
-  | 'assign_jobs'
-  | 'manage_stores_equipment'
-  | 'view_quotes_invoices_stock'
-  | 'prepare_quotes_invoices'
-  | 'view_all_job_cards'
-  | 'view_live_map_positions'
-  | 'view_live_driving_markers'
-  | 'view_flags'
-  | 'resolve_flags'
-  | 'view_employee_log'
-  | 'write_employee_log'
-  | 'edit_technician_settings'
-  | 'mark_technician_left'
-  | 'view_former_technicians'
-  | 'manage_stockroom'
-  | 'assign_stock'
-  | 'run_stocktake'
-  | 'set_prices'
-  | 'grant_pricing_access'
-  | 'view_director_digest'
-  | 'view_company_reports'
-  | 'manage_users'
-  | 'manage_system_settings'
-  | 'view_audit_log'
-  | 'view_all_fuel';
+/** Every switchable permission, with how it shows on the access screen. scoped = applies per department. */
+export const CATALOGUE = {
+  view_own_work:              { group: 'Own work', label: 'See and run own jobs, timesheet, fuel', scoped: false },
+  create_estimate:            { group: 'Own work', label: 'Make on-site estimates', scoped: false },
 
-const atLeast = (a: Actor, l: LoginLevel) => RANK[a.level] >= RANK[l];
+  assign_jobs:                { group: 'Jobs', label: 'Create and assign jobs', scoped: false },
+  view_all_job_cards:         { group: 'Jobs', label: 'See all job cards', scoped: false },
+  manage_stores_equipment:    { group: 'Jobs', label: 'Manage clients, stores and equipment', scoped: false },
 
-/** True when the subject is in the actor's own department (Management is limited to its own). */
-function ownDepartment(a: Actor, s?: Subject): boolean {
-  if (!s || s.employeeDepartmentId === undefined) return false;
-  return !!a.departmentId && a.departmentId === s.employeeDepartmentId;
+  view_live_map_positions:    { group: 'Tracking', label: 'See the live map (positions)', scoped: false },
+  view_live_driving_markers:  { group: 'Tracking', label: 'See live driving markers (slow, stopped, off route)', scoped: true },
+  view_all_fuel:              { group: 'Tracking', label: 'See fuel logs for all vehicles', scoped: false },
+
+  view_quotes_invoices_stock: { group: 'Office', label: 'See quotes, invoices and stock', scoped: false },
+  prepare_quotes_invoices:    { group: 'Office', label: 'Prepare and send quotes and invoices', scoped: false },
+  set_prices:                 { group: 'Office', label: 'Set prices and rates', scoped: false },
+
+  manage_stockroom:           { group: 'Stock', label: 'Receive stock into the stockroom', scoped: false },
+  assign_stock:               { group: 'Stock', label: 'Assign stock to technicians', scoped: false },
+  run_stocktake:              { group: 'Stock', label: 'Run stock takes', scoped: false },
+
+  view_flags:                 { group: 'People', label: 'See flags and explanations', scoped: true },
+  resolve_flags:              { group: 'People', label: 'Resolve flags, approve top-up runs', scoped: true },
+  view_employee_log:          { group: 'People', label: 'Read the confidential employee log', scoped: true },
+  write_employee_log:         { group: 'People', label: 'Write in the confidential employee log', scoped: true },
+  edit_technician_settings:   { group: 'People', label: 'Technician settings (department, vehicle, home)', scoped: true },
+  mark_technician_left:       { group: 'People', label: 'Start a leaver\'s exit checklist', scoped: true },
+  view_former_technicians:    { group: 'People', label: 'See former technicians', scoped: true },
+
+  view_director_digest:       { group: 'Reports', label: 'Receive the daily digest', scoped: false },
+  view_company_reports:       { group: 'Reports', label: 'Company-wide reports and financial summaries', scoped: false },
+
+  manage_access:              { group: 'System', label: 'Decide who has access to what', scoped: false },
+  manage_users:               { group: 'System', label: 'Create and disable logins', scoped: false },
+  manage_system_settings:     { group: 'System', label: 'System settings (thresholds, tracker)', scoped: false },
+  view_audit_log:             { group: 'System', label: 'See the audit log', scoped: false },
+} as const;
+
+export type Action = keyof typeof CATALOGUE;
+export const ACTIONS = Object.keys(CATALOGUE) as Action[];
+export const isScoped = (a: Action) => CATALOGUE[a].scoped;
+
+// ---- Defaults per login type (stacked, as agreed) -----------------------------
+
+const OWN: DeptScope = { kind: 'own' };
+const ALL: DeptScope = { kind: 'all' };
+
+const technician: Permissions = { view_own_work: true, create_estimate: true };
+const admin: Permissions = {
+  ...technician,
+  assign_jobs: true, view_all_job_cards: true, manage_stores_equipment: true,
+  view_live_map_positions: true, view_all_fuel: true,
+  view_quotes_invoices_stock: true, prepare_quotes_invoices: true,
+};
+const stockroom: Permissions = { ...admin, manage_stockroom: true, assign_stock: true, run_stocktake: true };
+const management: Permissions = {
+  ...stockroom,
+  view_live_driving_markers: OWN, view_flags: OWN, resolve_flags: OWN, view_employee_log: OWN, write_employee_log: OWN,
+  edit_technician_settings: OWN, mark_technician_left: OWN, view_former_technicians: OWN,
+};
+const director: Permissions = {
+  ...management,
+  view_live_driving_markers: ALL, view_flags: ALL, resolve_flags: ALL, view_employee_log: ALL, write_employee_log: ALL,
+  edit_technician_settings: ALL, mark_technician_left: ALL, view_former_technicians: ALL,
+  set_prices: true, view_director_digest: true, view_company_reports: true, manage_access: true,
+};
+const creator: Permissions = { ...director, manage_users: true, manage_system_settings: true, view_audit_log: true };
+
+export const DEFAULTS: Record<LoginLevel, Permissions> = { technician, admin, stockroom, management, director, creator };
+
+// ---- Changes the CEO makes -----------------------------------------------------
+
+export type Effect = 'grant' | 'deny';
+export interface Override {
+  action: Action;
+  effect: Effect;
+  /** For scoped actions: own_department, all_departments or selected_departments. */
+  scope?: 'own_department' | 'all_departments' | 'selected_departments';
+  departmentIds?: string[];
 }
 
-/** Management sees its own department only; Director and Creator see everyone. */
-function teamScoped(a: Actor, s?: Subject): boolean {
-  if (atLeast(a, 'director')) return true;
-  if (a.level === 'management') return ownDepartment(a, s);
-  return false;
+function scopeOf(o: Override): Grant {
+  if (!isScoped(o.action)) return true;
+  if (o.scope === 'all_departments') return ALL;
+  if (o.scope === 'selected_departments') return { kind: 'list', ids: o.departmentIds ?? [] };
+  return OWN;
 }
+
+/** Defaults for the login type, then changes for the whole type, then changes for this one person. */
+export function effectivePermissions(level: LoginLevel, levelOverrides: Override[], userOverrides: Override[]): Permissions {
+  const p: Permissions = { ...DEFAULTS[level] };
+  for (const list of [levelOverrides, userOverrides]) {
+    for (const o of list) {
+      if (o.effect === 'deny') delete p[o.action];
+      else p[o.action] = scopeOf(o);
+    }
+  }
+  return p;
+}
+
+// ---- Checks ----------------------------------------------------------------------
 
 export function can(a: Actor, action: Action, s?: Subject): boolean {
-  switch (action) {
-    case 'view_own_work':
-      return !s?.employeeId || s.employeeId === a.id || atLeast(a, 'admin');
-    case 'create_estimate':
-      return true;
+  if (action === 'view_own_work' && s?.employeeId && s.employeeId !== a.id) return can(a, 'view_all_job_cards');
+  const g = a.perms[action];
+  if (!g) return false;
+  if (g === true) return true;
+  if (!s || s.employeeDepartmentId === undefined) return false;
+  const dept = s.employeeDepartmentId;
+  if (g.kind === 'all') return true;
+  if (!dept) return false;
+  if (g.kind === 'own') return !!a.departmentId && a.departmentId === dept;
+  return g.ids.includes(dept);
+}
 
-    case 'assign_jobs':
-    case 'manage_stores_equipment':
-    case 'view_quotes_invoices_stock':
-    case 'prepare_quotes_invoices':
-    case 'view_all_job_cards':
-    case 'view_live_map_positions':
-    case 'view_all_fuel':
-      return atLeast(a, 'admin');
+/** For lists: 'all', the department ids the person may see for this action, or null for none. */
+export function departmentsFor(a: Actor, action: Action): 'all' | string[] | null {
+  const g = a.perms[action];
+  if (!g) return null;
+  if (g === true || g.kind === 'all') return 'all';
+  if (g.kind === 'own') return a.departmentId ? [a.departmentId] : null;
+  return g.ids.length ? g.ids : null;
+}
 
-    case 'manage_stockroom':
-    case 'assign_stock':
-    case 'run_stocktake':
-      return a.level === 'stockroom' || atLeast(a, 'management');
-
-    case 'view_live_driving_markers':
-      return atLeast(a, 'management');
-
-    case 'view_flags':
-    case 'resolve_flags':
-    case 'view_employee_log':
-    case 'write_employee_log':
-    case 'edit_technician_settings':
-    case 'mark_technician_left':
-    case 'view_former_technicians':
-      return teamScoped(a, s);
-
-    case 'set_prices':
-      return atLeast(a, 'director') || (a.extra ?? []).includes('pricing');
-    case 'grant_pricing_access':
-      return a.level === 'director';
-
-    case 'view_director_digest':
-    case 'view_company_reports':
-      return atLeast(a, 'director');
-
-    case 'manage_users':
-    case 'manage_system_settings':
-    case 'view_audit_log':
-      return a.level === 'creator';
-  }
+/** Convenience for tests and tools: an actor with the defaults of a login type. */
+export function actorWithDefaults(id: string, level: LoginLevel, departmentId: string | null = null, overrides: Override[] = []): Actor {
+  return { id, level, departmentId, perms: effectivePermissions(level, [], overrides) };
 }

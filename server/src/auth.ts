@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import type { Db } from './db.ts';
 import { audit } from './db.ts';
-import type { Actor, LoginLevel } from './core/permissions.ts';
+import { CATALOGUE, effectivePermissions, type Actor, type LoginLevel, type Override } from './core/permissions.ts';
 
 declare module 'fastify' {
   interface FastifyRequest { actor: Actor }
@@ -12,19 +12,28 @@ declare module '@fastify/jwt' {
   interface FastifyJWT { payload: { sub: string }; user: { sub: string } }
 }
 
-/** Loads the actor fresh from the database on every request, so a disabled login stops working at once. */
+/** Loads the actor fresh from the database on every request, so a disabled login or an access change applies at once. */
 export async function loadActor(db: Db, userId: string): Promise<Actor | null> {
-  const { rows } = await db.query(
-    `SELECT u.id, u.login_level, u.department_id, u.login_enabled,
-            COALESCE(array_agg(p.permission) FILTER (WHERE p.permission IS NOT NULL), '{}') AS extra
-       FROM users u LEFT JOIN user_permissions p ON p.user_id = u.id
-      WHERE u.id = $1
-      GROUP BY u.id`,
-    [userId],
-  );
+  const { rows } = await db.query('SELECT id, login_level, department_id, login_enabled FROM users WHERE id = $1', [userId]);
   const r = rows[0];
   if (!r || !r.login_enabled) return null;
-  return { id: r.id, level: r.login_level as LoginLevel, departmentId: r.department_id, extra: r.extra };
+  const level = r.login_level as LoginLevel;
+  const o = await db.query(
+    `SELECT level, user_id, action, effect, scope, department_ids FROM access_overrides
+      WHERE level = $1 OR user_id = $2`,
+    [level, userId],
+  );
+  const toOverride = (x: { action: string; effect: string; scope: string | null; department_ids: string[] }): Override => ({
+    action: x.action as Override['action'], effect: x.effect as Override['effect'],
+    scope: (x.scope ?? undefined) as Override['scope'], departmentIds: x.department_ids,
+  });
+  const known = (x: { action: string }) => x.action in CATALOGUE;
+  const perms = effectivePermissions(
+    level,
+    o.rows.filter(x => x.level && known(x)).map(toOverride),
+    o.rows.filter(x => x.user_id && known(x)).map(toOverride),
+  );
+  return { id: r.id, level, departmentId: r.department_id, perms };
 }
 
 export async function hasAcknowledgedPolicy(db: Db, userId: string): Promise<boolean> {
