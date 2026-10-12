@@ -1,6 +1,7 @@
 // The office screen (control base), for Admin, Management, Directors and the CEO. Made for a desktop
 // browser: menu, list and detail side by side. Works on a phone too, one screen at a time.
 import { BottomTabs } from '../BottomTabs.tsx';
+import { BrandLogo } from '../brand.tsx';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -128,6 +129,7 @@ export function OfficeApp() {
     <View style={{ backgroundColor: K.band, paddingTop: ins.top, borderBottomWidth: 4, borderBottomColor: K.stripe }}>
       <View style={{ paddingHorizontal: S.pad, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
         {!wide && sel ? <Pressable onPress={close} accessibilityRole="button" accessibilityLabel="Back" hitSlop={10}><Text style={{ color: K.bandText, fontSize: 34 }}>‹</Text></Pressable> : null}
+        <BrandLogo />
         <View style={{ flex: 1 }}>
           <Text style={{ color: K.bandText, fontSize: 22, fontWeight: '800' }}>Office</Text>
           <Text style={{ color: K.bandText, opacity: 0.75 }}>{s.session?.user.name} · {s.session?.user.level === 'creator' ? 'CEO' : s.session?.user.level === 'admin' ? 'Admin' : s.session?.user.level === 'director' ? 'Director' : s.session?.user.level === 'hr' ? 'HR' : 'Department manager'} · {s.session?.company.name}</Text>

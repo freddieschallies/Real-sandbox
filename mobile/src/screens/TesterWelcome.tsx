@@ -67,6 +67,7 @@ const STEPS: [string, string[]][] = [
     'Ask the CEO to give her the stockroom: a Stockroom tab appears at the top and she has the stock controller\'s full screens.',
   ]],
   ['As the CEO (Lilanie)', [
+    'The company logo is in the header of every screen and on every quote, invoice and timesheet. Change it under Accounts → Company ("Change the logo"); each company sets its own.',
     'Everything: the office, plus Stockroom and Fleet tabs at the top to open those screens.',
     'People: open a person for their picture, the vehicle they are in, where they are, the job they are busy with and who with, contact details, and (CEO only) personal details. A dropdown sets their position and a technician\'s trade.',
     'Staff record: on Ayanda\'s profile, add an issue or a warning (a warning needs the action taken and the reason). Delete one: it goes, but a line says who deleted a record and when. HR does this too; give Zanele "HR" work to let her as well.',

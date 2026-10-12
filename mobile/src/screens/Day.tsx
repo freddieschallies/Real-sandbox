@@ -1,4 +1,5 @@
 // My day: the vehicle he's in, flags to answer, and today's jobs in the order they matter.
+import { BrandLogo } from '../brand.tsx';
 import React, { useEffect, useState } from 'react';
 import { RefreshControl, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -41,6 +42,7 @@ export function Day() {
   return (
     <View style={[st.screen, { paddingTop: ins.top }]}>
       <View style={st.header}>
+        <BrandLogo height={32} />
         <View style={{ flex: 1 }}>
           <Text style={st.title} numberOfLines={1}>{s.session?.user.name ?? 'My day'}</Text>
           <Text style={st.sub}>{dateText}</Text>

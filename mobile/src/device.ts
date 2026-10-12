@@ -14,6 +14,14 @@ export async function takePhoto(): Promise<Photo | null> {
   return { uri: a.uri, mime: a.mimeType && ['image/jpeg', 'image/png', 'image/webp'].includes(a.mimeType) ? a.mimeType : 'image/jpeg' };
 }
 
+/** Choose a picture that is already on the phone or computer (a logo, a scan). */
+export async function pickImage(): Promise<Photo | null> {
+  const r = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.9 });
+  if (r.canceled || !r.assets?.[0]) return null;
+  const a = r.assets[0];
+  return { uri: a.uri, mime: a.mimeType && ['image/jpeg', 'image/png', 'image/webp'].includes(a.mimeType) ? a.mimeType : 'image/jpeg' };
+}
+
 /** One position reading, for Arrived. Returns null if the technician refuses or it fails. */
 export async function positionNow(): Promise<{ lat: number; lng: number } | null> {
   try {

@@ -5,6 +5,7 @@ import { DemoWorkshop, seedWorkshop, type DemoWorkshopState } from './demoWorksh
 import { DemoDocs, seedDocs, type DemoDocsState } from './demoDocs.ts';
 import { DemoVan, seedVan, type DemoVanState } from './demoVan.ts';
 import { DemoTimes, type DemoTimesState } from './demoTimes.ts';
+import { DEMO_LOGO } from './demoLogo.ts';
 import { DemoOffice, seedOffice, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
@@ -32,6 +33,8 @@ export interface DemoState {
   stockControl?: DemoStockState;
   vanStock?: DemoVanState;
   times?: DemoTimesState;
+  /** A logo the CEO uploaded in the demo, instead of the ZSP one. */
+  logoPhotoId?: string;
   fleet?: DemoFleetState;
   who?: { id: string; name: string; level: string };
   fuel: { litres: number; at: string }[];
@@ -462,7 +465,11 @@ export class DemoTransport implements Transport {
     const q = new URLSearchParams(req.path.split('?')[1] ?? '');
     const get = req.method === 'GET';
     if (p === '/office/company' && get) return ok(d.company());
-    if (p === '/office/company') return this.does('prices') ? done(d.setCompany(b)) : refuse(403, 'only the CEO (prices and rates) sets the company details');
+    if (p === '/office/company') {
+      if (!this.does('prices')) return refuse(403, 'only the CEO (prices and rates) sets the company details');
+      if (b.logoPhotoId) this.state.logoPhotoId = b.logoPhotoId;
+      return done(d.setCompany(b));
+    }
     if (p === '/office/rates') return this.does('prices') ? done(d.setRates(b)) : refuse(403, 'only the CEO sets rates');
     if (p === '/office/to-invoice') return ok(d.toInvoice());
     if (p === '/quotes' && get) return ok(d.quotes(q.get('status')));
@@ -679,6 +686,7 @@ export class DemoTransport implements Transport {
     if (vr) return vr;
     const tr = this.timesRoute(p, req, b);
     if (tr) return tr;
+    if (p === '/company/brand') return ok({ name: 'ZSP (demo)', logoPhotoId: this.state.logoPhotoId ?? null, logoDataUri: this.state.logoPhotoId ? null : DEMO_LOGO });
     const off = this.officeRoute(p, req, b);
     if (off) return off;
 

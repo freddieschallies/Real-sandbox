@@ -1430,6 +1430,20 @@ test('daily timesheets: made by the app, the previous day submitted by the techn
   assert.equal((await db.query("SELECT status FROM flags WHERE id = $1", [missing.rows[0].id])).rows[0].status, 'resolved');
 });
 
+test('company logo: the CEO sets it and everyone in the company sees it; other photos stay private', async () => {
+  const logo = await upload('director', '/photos', { kind: 'logo', takenAt: '2026-10-12T08:00:00+02:00' });
+  assert.equal(logo.status, 201);
+  const cur = (await call('director', 'GET', '/office/company')).body.profile ?? {};
+  assert.equal((await call('admin', 'PUT', '/office/company', { legalName: 'ZSP', logoPhotoId: logo.body.id })).status, 403, 'not the admin');
+  assert.equal((await call('director', 'PUT', '/office/company', { ...{ legalName: cur.legal_name ?? 'Zululand Service Providers' }, logoPhotoId: logo.body.id })).status, 200);
+  const brand = (await call('tech', 'GET', '/company/brand')).body;
+  assert.equal(brand.logoPhotoId, logo.body.id, 'the technician sees the logo');
+  const pic = async (who: string, id: string) => (await app.inject({ method: 'GET', url: `/photos/${id}`, headers: { authorization: `Bearer ${tokens[who]}` } })).statusCode;
+  assert.equal(await pic('tech', logo.body.id), 200);
+  const sig = await upload('director', '/photos', { kind: 'fuel_slip', takenAt: '2026-10-12T08:00:00+02:00' });
+  assert.equal(await pic('tech', sig.body.id), 403, 'other photos stay private');
+});
+
 test('estimates: prices only from the price list, always marked not official', async () => {
   const J = `/jobs/${ids.job3}`;
   const item = (await call('tech', 'GET', J)).body.items[0].id;

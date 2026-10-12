@@ -109,7 +109,21 @@ function Switchable() {
 /** Test build only: the bar to switch between the three apps, shown once someone is in. */
 function TesterBarSlot() {
   const s = useStore();
-  return s.session && !s.needsPolicy ? <TesterBar /> : null;
+  if (!s.session || s.needsPolicy) return null;
+  return (
+    <>
+      <TesterBar />
+      {s.demoNoSignal ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#5A3A00' }}>
+          <Text style={{ color: '#FFE2A8', flex: 1, fontWeight: '700' }}>Pretending there is no signal: work waits on the phone and screens may not load.</Text>
+          <Pressable onPress={() => s.setDemoNoSignal(false)} accessibilityRole="button" accessibilityLabel="Turn the signal back on"
+            style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: '#FFE2A8' }}>
+            <Text style={{ color: '#3A2600', fontWeight: '800' }}>Signal back on</Text>
+          </Pressable>
+        </View>
+      ) : null}
+    </>
+  );
 }
 
 /** The shared test build: demo only, with a short guide instead of the sign-in screen. */

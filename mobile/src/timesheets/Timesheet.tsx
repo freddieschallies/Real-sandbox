@@ -10,6 +10,7 @@ import { nowIso } from '../device.ts';
 import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, Screen, Select, st } from '../ui.tsx';
 import { C } from '../theme.ts';
 import { TITLE as FLAG_TITLE } from '../screens/Flags.tsx';
+import { currentLogo } from '../brand.tsx';
 import type { Day, Pay } from '../../../server/src/core/timesheet.ts';
 
 export interface SheetFlag { id: string; flag_type: string; question: string | null; explanation: string | null; status: string; resolution_note: string | null }
@@ -283,7 +284,7 @@ function printSheets(d: Export, title: string, company: string): boolean {
     const jobs = x.jobs.map(j => `<tr><td>${j.jobNumber}</td><td>${esc(j.store)}${j.helper ? ' (helping)' : ''}<br><small>${esc(j.fault)}</small></td><td>${time(j.go)}</td><td>${time(j.arrived)}</td><td>${time(j.ended)}</td>
 <td class=r>${hm(j.travelMin)}</td><td class=r>${hm(j.workMin)}</td><td class=r>${hm(j.pausedMin)}</td><td>${esc(j.result)}${j.pauses.length ? `<br><small>${esc(j.pauses.map(p => `${p.label} ${hm(p.minutes)}`).join(', '))}</small>` : ''}</td></tr>`).join('');
     const flags = s.flags.map(f => `<li><b>${esc(FLAG_TITLE[f.flag_type] ?? f.flag_type)}</b>: ${esc(f.question)} <i>(${esc(flagStatus(f))})</i></li>`).join('');
-    return `<section><div class=bar></div><div class=head><div><h1>${esc(company)}</h1><div>Daily timesheet</div></div><div class=t>${esc(s.label)}</div></div>
+    return `<section><div class=bar></div><div class=head>${currentLogo() ? `<img src="${currentLogo()}" style="height:48px;background:#fff;padding:3px;border-radius:4px;margin-right:12px">` : ''}<div style="flex:1"><h1>${esc(company)}</h1><div>Daily timesheet</div></div><div class=t>${esc(s.label)}</div></div>
 <div class=body><div class=two><div><b>Technician</b> ${esc(t.full_name)}<br><b>Department</b> ${esc(t.department ?? '–')}</div>
 <div><b>Started</b> ${time(x.start)} · <b>Last job finished</b> ${time(x.end)}<br><b>Vehicle</b> ${esc(x.vehicles.join(', ') || '–')}<br><b>Status</b> ${s.submitted ? `Submitted ${esc(new Date(s.submitted.at).toLocaleString('en-ZA'))}` : s.status === 'none' ? 'No work recorded' : 'NOT SUBMITTED'}</div></div>
 <table class=tot><tr><th>Travelled</th><th>Worked</th><th>Paused</th><th>Not accounted for</th><th>Normal time</th><th>Overtime 1.5×</th><th>Double time 2×</th></tr><tr><td>${hm(x.travelMin)}</td><td>${hm(x.workMin)}</td><td>${hm(x.pausedMin)}</td><td${x.unaccountedMin >= 30 ? ' class=bad' : ''}>${hm(x.unaccountedMin)}</td><td>${hm(s.pay?.normalMin ?? 0)}</td><td>${hm(s.pay?.overtimeMin ?? 0)}</td><td>${hm(s.pay?.doubleMin ?? 0)}</td></tr></table>${s.pay?.holiday ? `<p><b>${esc(s.pay.holiday)}</b>: public holiday, double time.</p>` : s.pay?.dayType === 'sunday' ? '<p><b>Sunday</b>: double time.</p>' : ''}

@@ -204,6 +204,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const signIn = useCallback(async (mode: 'demo' | 'server', baseUrl: string, email: string, password: string): Promise<ActionResult> => {
     httpRef.current = mode === 'server' ? new HttpTransport(baseUrl) : null;
+    // Signing in (or switching who you are in the test drive) always starts with signal.
+    if (demoRef.current) demoRef.current.noSignal = false;
+    setDemoNoSignalState(false);
     sessionRef.current = { mode, baseUrl, token: '', user: { id: '', name: '', level: '' }, company: { id: '', name: '' } };
     try {
       const r = await transport().send({ method: 'POST', path: '/auth/login', json: { email, password } });

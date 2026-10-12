@@ -4,6 +4,7 @@ import { KitPeople, StockPersonView, type StockPerson } from '../staff/Staff.tsx
 import { OrderList, PartDetail, Thumb, useOrderList } from './Parts.tsx';
 import { WorkshopAdd, WorkshopItem, WorkshopList, useWorkshop } from '../fleet/Workshop.tsx';
 import { BottomTabs } from '../BottomTabs.tsx';
+import { BrandLogo } from '../brand.tsx';
 import React, { useState } from 'react';
 import { Image, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -95,6 +96,7 @@ export function StockroomApp() {
           <Text style={{ color: K.bandText, fontSize: 34 }}>‹</Text>
         </Pressable>
       ) : null}
+      <BrandLogo />
       <View style={{ flex: 1 }}>
         <Text style={{ color: K.bandText, fontSize: 22, fontWeight: '800' }}>Stockroom</Text>
         <Text style={{ color: K.bandText, opacity: 0.8 }}>{s.session?.user.name} · {s.session?.company.name}</Text>

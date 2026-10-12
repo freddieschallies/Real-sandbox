@@ -1,6 +1,7 @@
 // The mechanic's app: the fleet only. Everything hangs off a vehicle: its details, km, faults and
 // the mechanic's own job cards. Phone: tabs at the bottom. Desktop: menu, list and detail side by side.
 import { BottomTabs } from '../BottomTabs.tsx';
+import { BrandLogo } from '../brand.tsx';
 import React, { useEffect, useState } from 'react';
 import { Image, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -79,6 +80,7 @@ export function FleetApp() {
       {sel && (!wide || stack.length > 1) ? (
         <Pressable onPress={back} accessibilityRole="button" accessibilityLabel="Back" hitSlop={10}><Text style={{ color: K.bandText, fontSize: 34 }}>‹</Text></Pressable>
       ) : null}
+      <BrandLogo />
       <View style={{ flex: 1 }}>
         <Text style={{ color: K.bandText, fontSize: 22, fontWeight: '800' }}>Fleet</Text>
         <Text style={{ color: K.bandText, opacity: 0.8 }}>{s.session?.user.name} · {s.session?.user.level === 'mechanic' ? 'Mechanic' : s.session?.user.level === 'creator' ? 'CEO' : 'Fleet'}</Text>

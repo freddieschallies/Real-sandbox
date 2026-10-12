@@ -1,9 +1,12 @@
 // Quotes, invoices and the link to Sage Pastel Partner, for whoever the CEO gave quotes and invoices.
 // A quote or invoice is made here on the company letterhead, sent, and then exported in an import
 // batch for Pastel, so the books stay in Pastel.
+import { BrandLogo, brandChanged, currentLogo, useBrand } from '../brand.tsx';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { useStore } from '../state.tsx';
+import { rememberPhoto } from '../photo.ts';
+import { nowIso, pickImage } from '../device.ts';
 import * as D from '../../../server/src/core/documents.ts';
 import * as P from '../../../server/src/core/pastel.ts';
 import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, st } from '../ui.tsx';
@@ -82,6 +85,7 @@ export function Paper({ kind, doc, lines, totals, company }: { kind: 'quote' | '
     <View style={{ backgroundColor: '#FFFFFF', borderRadius: 6, overflow: 'hidden' }}>
       <View style={{ height: 10, backgroundColor: K.stripe }} />
       <View style={{ backgroundColor: '#111111', paddingHorizontal: 20, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+        <BrandLogo height={44} />
         <View style={{ flex: 1 }}>
           <Text style={{ color: '#FFFFFF', fontSize: 22, fontWeight: '900', letterSpacing: 1 }}>{co.trading_name || co.legal_name || 'Company name'}</Text>
           {co.trading_name && co.legal_name ? <Text style={{ color: '#DDD', fontSize: 12 }}>{co.legal_name}</Text> : null}
@@ -149,7 +153,7 @@ function printDoc(kind: 'quote' | 'invoice', doc: any, lines: Line[], totals: an
 .head h1{margin:0;font-size:22px;letter-spacing:1px}.head .t{color:#E8701A;font-weight:900;font-size:20px}.body{padding:20px 24px}.two{display:flex;justify-content:space-between;gap:20px}
 table{width:100%;border-collapse:collapse;margin-top:14px}th{text-align:left;border-top:2px solid #111;border-bottom:1px solid #ccc;padding:6px 4px}td{border-bottom:1px solid #eee;padding:6px 4px}.r{text-align:right}
 .tot{text-align:right;margin-top:8px}.tot b{font-size:16px}.foot{background:#111;color:#eee;font-size:11px;padding:10px 24px}@media print{.noprint{display:none}}</style></head><body>
-<div class=bar></div><div class=head><div><h1>${esc(co.trading_name || co.legal_name)}</h1>${co.trading_name ? `<div>${esc(co.legal_name)}</div>` : ''}</div><div class=t>${kind === 'quote' ? 'QUOTATION' : 'TAX INVOICE'}</div></div>
+<div class=bar></div><div class=head>${currentLogo() ? `<img src="${currentLogo()}" style="height:56px;background:#fff;padding:4px;border-radius:4px;margin-right:14px">` : ''}<div style="flex:1"><h1>${esc(co.trading_name || co.legal_name)}</h1>${co.trading_name ? `<div>${esc(co.legal_name)}</div>` : ''}</div><div class=t>${kind === 'quote' ? 'QUOTATION' : 'TAX INVOICE'}</div></div>
 <div class=body><div class=two><div><b>${kind === 'quote' ? 'Quote for' : 'Invoice to'}</b><br>${esc(doc.client)}<br>${esc(doc.store)}<br>${esc(doc.store_address)}</div>
 <div><b>${kind === 'quote' ? 'Quote no.' : 'Invoice no.'}</b> ${kind === 'quote' ? doc.quote_number : doc.invoice_number}<br><b>Date</b> ${day(doc.sent_at ?? doc.created_at)}<br>
 ${kind === 'quote' ? `<b>Valid until</b> ${day(doc.valid_until)}` : `<b>Due</b> ${day(doc.due_date)}`}${doc.client_ref ? `<br><b>Your order no.</b> ${esc(doc.client_ref)}` : ''}${doc.job_number ? `<br><b>Job</b> ${doc.job_number}` : ''}</div></div>
@@ -554,6 +558,7 @@ function CompanyForm({ b, done }: { b: Books; done: () => void }) {
   return (
     <Card>
       <Text style={st.small}>Printed on every quote and invoice (the letterhead), and the rates that new lines start from.</Text>
+      <LogoPicker />
       {field('legalName', 'Registered name')}{field('tradingName', 'Trading name')}{field('regNo', 'Registration number')}{field('vatNo', 'VAT number')}
       {field('address', 'Address')}{field('phone', 'Phone')}{field('email', 'Email')}{field('bankDetails', 'Banking details (on invoices)', true)}
       {field('quoteTerms', 'Terms on quotes', true)}{field('invoiceTerms', 'Terms on invoices', true)}
@@ -570,5 +575,35 @@ function CompanyForm({ b, done }: { b: Books; done: () => void }) {
         setAns(r2); if (r2.ok) done();
       }} />
     </Card>
+  );
+}
+
+/** The company logo: shown in the app's header and on every letterhead. */
+function LogoPicker() {
+  const s = useStore();
+  const { logo } = useBrand();
+  const [msg, setMsg] = useState<string | null>(null);
+  return (
+    <View style={{ gap: 8 }}>
+      <Label>Company logo</Label>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        {logo ? <BrandLogo height={48} /> : <Text style={st.small}>No logo yet: the company name shows on its own.</Text>}
+        <Button label={logo ? 'Change the logo' : 'Add the logo'} kind="secondary" onPress={async () => {
+          const p = await pickImage();
+          if (!p) return;
+          const id = s.newId();
+          rememberPhoto(s, id, p.uri);
+          const up = await s.ask({ method: 'POST', path: '/photos', upload: { fields: { kind: 'logo', takenAt: nowIso(), id }, fileUri: p.uri, mime: p.mime } });
+          if (!up || up.status >= 300) { setMsg('The logo could not be sent: try again with signal.'); return; }
+          const cur = (await s.ask({ method: 'GET', path: '/office/company' }))?.body?.profile ?? {};
+          const r = await s.ask({ method: 'PUT', path: '/office/company', json: { legalName: cur.legal_name ?? s.session?.company.name ?? 'Company', tradingName: cur.trading_name ?? null, regNo: cur.reg_no ?? null,
+            vatNo: cur.vat_no ?? null, address: cur.address ?? null, phone: cur.phone ?? null, email: cur.email ?? '', bankDetails: cur.bank_details ?? null, quoteTerms: cur.quote_terms ?? null,
+            invoiceTerms: cur.invoice_terms ?? null, vatPct: Number(cur.vat_pct ?? 15), quoteValidDays: Number(cur.quote_valid_days ?? 30), invoiceDueDays: Number(cur.invoice_due_days ?? 30), logoPhotoId: id } });
+          setMsg(r && r.status < 300 ? 'Logo saved: it shows for everyone in the company.' : ((r?.body as { reasons?: string[] })?.reasons ?? ['not saved']).join('; '));
+          brandChanged();
+        }} />
+      </View>
+      {msg ? <Text style={st.small}>{msg}</Text> : null}
+    </View>
   );
 }

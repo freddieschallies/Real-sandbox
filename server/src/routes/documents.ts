@@ -61,6 +61,13 @@ export function registerDocumentRoutes(app: FastifyInstance) {
 
   // ---- The company's details and rates (the CEO) ----------------------------------------------
 
+  // The company's name and logo for the app's header and letterheads: every signed-in person.
+  app.get('/company/brand', async req => {
+    const p = (await req.db.query('SELECT legal_name, trading_name, logo_photo_id FROM company_profile')).rows[0];
+    const c = (await req.db.query('SELECT name FROM companies WHERE id = current_company()')).rows[0];
+    return { name: p?.trading_name || p?.legal_name || c?.name || '', logoPhotoId: p?.logo_photo_id ?? null };
+  });
+
   app.get('/office/company', async req => {
     see(req);
     return { profile: await profile(req.db), rates: await rates(req.db), rateKeys: D.RATE_KEYS.map(k => ({ key: k, label: D.RATE_LABEL[k] })) };
@@ -76,6 +83,7 @@ export function registerDocumentRoutes(app: FastifyInstance) {
       vatPct: z.number().min(0).max(30).default(15), quoteValidDays: z.number().int().min(1).max(365).default(30), invoiceDueDays: z.number().int().min(0).max(365).default(30),
       logoPhotoId: Uuid.nullish(),
     }), req.body);
+    if (b.logoPhotoId && !(await req.db.query("SELECT 1 FROM photos WHERE id = $1 AND kind = 'logo'", [b.logoPhotoId])).rowCount) throw new Refused(409, ['upload the logo first']);
     await req.db.query(
       `INSERT INTO company_profile (legal_name, trading_name, reg_no, vat_no, address, phone, email, bank_details, quote_terms, invoice_terms, vat_pct, quote_valid_days, invoice_due_days, logo_photo_id, updated_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
