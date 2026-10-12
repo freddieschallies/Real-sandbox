@@ -2,13 +2,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useStore } from '../state.tsx';
 import { nowIso, takePhoto } from '../device.ts';
-import type { Booking, Fault, FleetJob, FleetVehicle, Position, Technician, VehicleDetail } from './types.ts';
+import type { Booking, DailyCheckDay, Fault, FleetJob, FleetVehicle, Position, Technician, VehicleDetail } from './types.ts';
 
 export interface FleetData {
   vehicles: FleetVehicle[]; faults: Fault[]; jobs: FleetJob[]; details: Record<string, VehicleDetail>; loadedAt: string | null;
-  bookings: Booking[]; positions: Position[]; techs: Technician[];
+  bookings: Booking[]; positions: Position[]; techs: Technician[]; checks: DailyCheckDay | null;
 }
-const EMPTY: FleetData = { vehicles: [], faults: [], jobs: [], details: {}, loadedAt: null, bookings: [], positions: [], techs: [] };
+const EMPTY: FleetData = { vehicles: [], faults: [], jobs: [], details: {}, loadedAt: null, bookings: [], positions: [], techs: [], checks: null };
 export type Shot = { id: string; uri: string; mime: string };
 
 export function useFleet() {
@@ -30,8 +30,9 @@ export function useFleet() {
         get<FleetVehicle[]>('/fleet'), get<Fault[]>('/fleet/faults'), get<FleetJob[]>('/fleet/jobs?status=open'),
         get<Booking[]>('/fleet/bookings'), get<Position[]>('/fleet/positions'), get<Technician[]>('/fleet/technicians'),
       ]);
+      const checks = await get<DailyCheckDay>('/fleet/daily-checks');
       if (!vehicles) return;
-      save(x => ({ ...x, vehicles, faults: faults ?? x.faults, jobs: jobs ?? x.jobs, bookings: bookings ?? x.bookings, positions: positions ?? x.positions, techs: techs ?? x.techs, loadedAt: new Date().toISOString() }));
+      save(x => ({ ...x, vehicles, faults: faults ?? x.faults, jobs: jobs ?? x.jobs, bookings: bookings ?? x.bookings, positions: positions ?? x.positions, techs: techs ?? x.techs, checks: checks ?? x.checks, loadedAt: new Date().toISOString() }));
     } finally { setLoading(false); }
   }, [s, save]);
 

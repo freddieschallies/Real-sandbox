@@ -23,6 +23,7 @@ const STEPS: [string, string[]][] = [
   ]],
   ['As mechanic (Bongani)', [
     'Vehicles: five vans; one in the workshop, one off the road, one with an expired licence disc.',
+    'Daily checks: odometer, oil, water and tyres on each vehicle in service. Oil added must be noted in litres; ND 503-221 already needed oil twice this week, so top it up again and see it flagged.',
     'Faults: Thabo\'s reports and handover problems land here, worst first.',
     'Open ND 412-778, start a job card for the windscreen crack, fill it in and complete it.',
     'Take ND 412-778 off the road (Status), then sign in as Thabo and try to drive it: it is refused.',

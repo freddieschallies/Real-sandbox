@@ -1,7 +1,7 @@
 // The demo's pretend fleet for the mechanic, following the same rules as the server (core/fleet.ts).
 // ND 412-778 (veh-1) is the technician's demo van, so what Thabo does shows up here.
 import * as F from '../../server/src/core/fleet.ts';
-import type { Booking, Fault, FleetJob, FleetVehicle, Position, Technician, TimeSlot, VehicleDetail } from './fleet/types.ts';
+import type { Booking, DailyCheck, DailyCheckDay, Fault, FleetJob, FleetVehicle, Position, Technician, TimeSlot, VehicleDetail } from './fleet/types.ts';
 
 type V = Omit<VehicleDetail['vehicle'], 'km' | 'driver' | 'open_faults' | 'safety_faults' | 'open_job' | 'serviceDue' | 'licenceDue'>;
 type Job = Omit<FleetJob, 'faults' | 'parts' | 'registration'> & { odometer_out: number | null; completed_at: string | null; next_service_km?: number | null; next_service_at?: string | null };
@@ -18,6 +18,7 @@ export interface DemoFleetState {
   spots?: Record<string, { lat: number; lng: number; moving: boolean; at: string }>;
   /** Who is in which vehicle (other than Thabo, who lives in the demo's own state). */
   crew?: Record<string, { vehicle_id: string; mode: 'driving' | 'riding_along' } | null>;
+  checks?: (DailyCheck & { vehicle_id: string })[];
 }
 
 export const DEMO_TECHS = [
@@ -81,11 +82,24 @@ export function seedFleet(): DemoFleetState {
         status: 'booked', booked_at: d(-1), booked_by: MECH_NAME, fleet_job_id: null, cancelled_note: null },
     ],
     spots: seedSpots(),
+    checks: seedChecks(),
     crew: { 'tech-2': { vehicle_id: 'veh-2', mode: 'driving' }, 'tech-3': { vehicle_id: 'veh-5', mode: 'driving' }, 'tech-4': { vehicle_id: 'veh-2', mode: 'riding_along' } },
   };
 }
 
 const MECH_NAME = 'Bongani Khumalo';
+function seedChecks(): NonNullable<DemoFleetState['checks']> {
+  const c = (vehicle_id: string, ago: number, km: number, extra: Partial<DailyCheck> = {}): DailyCheck & { vehicle_id: string } => ({
+    id: `dc-${vehicle_id}-${ago}`, vehicle_id, check_date: day(-ago), checked_at: d(-ago), by: MECH_NAME, odometer_km: km,
+    oil: 'ok', oil_litres: null, water: 'ok', water_litres: null, tyres: 'ok', notes: null, ...extra,
+  });
+  return [
+    // ND 503-221 has needed oil twice this week: one more top-up and it is flagged.
+    c('veh-2', 2, 117900, { oil: 'topped_up', oil_litres: 0.5 }), c('veh-2', 3, 117750), c('veh-2', 5, 117500, { oil: 'topped_up', oil_litres: 0.5 }),
+    c('veh-1', 1, 87400), c('veh-1', 2, 87310, { tyres: 'pressure_adjusted' }),
+    c('veh-5', 0, 45120), c('veh-5', 1, 44980, { water: 'topped_up', water_litres: 1 }),
+  ];
+}
 function seedSpots(): NonNullable<DemoFleetState['spots']> {
   const at = new Date(Date.now() - 3 * 60_000).toISOString();
   return {
@@ -122,6 +136,8 @@ export class DemoFleet {
     return {
       ...v, km, driver: this.s.drivers[v.id] ?? null, open_faults: open.length, safety_faults: open.filter(f => f.severity === 'safety').length,
       open_job: job ? { id: job.id, number: job.number, type: job.job_type } : null,
+      checked_today: (() => { const c = this.checksRaw().find(x => x.vehicle_id === v.id && x.check_date === today());
+        return c ? { oil: c.oil, oilLitres: c.oil_litres, water: c.water, tyres: c.tyres, at: c.checked_at } : null; })(),
       serviceDue: F.serviceDue(v, km, today()), licenceDue: F.licenceDue(v.licence_expiry, today()),
     };
   }
@@ -155,6 +171,7 @@ export class DemoFleet {
       })),
       km: this.s.km.filter(k => k.vehicle_id === id).sort((a, b) => b.read_at.localeCompare(a.read_at)),
       inspections: [],
+      dailyChecks: this.checksRaw().filter(c => c.vehicle_id === id).sort((a, b) => b.check_date.localeCompare(a.check_date)).slice(0, 30),
     } satisfies VehicleDetail);
   }
 
@@ -386,5 +403,44 @@ export class DemoFleet {
     }
     if (techId !== 'me') this.crew()[techId] = null;
     return good({ released: true });
+  }
+
+  // ---- Daily checks ------------------------------------------------------------------------------
+
+  private checksRaw() { return this.s.checks ?? (this.s.checks = seedChecks()); }
+
+  checksFor(date = today()): DailyCheckDay {
+    const rows = this.s.vehicles.map(v => {
+      const c = this.checksRaw().find(x => x.vehicle_id === v.id && x.check_date === date);
+      return { ...(c ?? {}), id: c?.id ?? null, vehicle_id: v.id, registration: v.registration, status: v.status, required: v.status === 'in_service' };
+    }).sort((a, b) => Number(!b.id && b.required) - Number(!a.id && a.required) || a.registration.localeCompare(b.registration));
+    const due = rows.filter(r => r.required);
+    return { date, done: due.filter(r => r.id).length, due: due.length, vehicles: rows };
+  }
+
+  dailyCheck(vehicleId: string, b: F.DailyCheckDraft & { id?: string }): Res {
+    const v = this.veh(vehicleId);
+    if (!v) return bad(404, 'no such vehicle');
+    const missing = F.missingOnDailyCheck(b, this.latestKm(vehicleId));
+    if (missing.length) return bad(409, ...missing);
+    if (this.checksRaw().some(x => x.vehicle_id === vehicleId && x.check_date === today())) return bad(409, `${v.registration} was already checked today`);
+    const id = b.id ?? `dc-${Date.now()}`;
+    this.checksRaw().push({ id, vehicle_id: vehicleId, check_date: today(), checked_at: new Date().toISOString(), by: MECH, odometer_km: b.odometerKm!,
+      oil: b.oil!, oil_litres: b.oil === 'topped_up' ? b.oilLitres! : null, water: b.water!, water_litres: b.water === 'topped_up' ? b.waterLitres ?? null : null,
+      tyres: b.tyres!, notes: b.notes?.trim() || null });
+    this.recordKm(vehicleId, b.odometerKm!, 'daily_check', MECH);
+    const faults = F.faultsFromDailyCheck(b);
+    for (const f of faults) this.s.faults.push({ id: `flt-${Date.now()}-${f.severity}`, vehicle_id: vehicleId, description: f.description, severity: f.severity, source: 'mechanic', status: 'open', reported_at: new Date().toISOString(), reported_by_name: MECH });
+    let oilWarning: string | null = null;
+    if (b.oil === 'topped_up') {
+      const since = day(-F.OIL_WATCH_DAYS);
+      const w = F.oilWatch(this.checksRaw().filter(x => x.vehicle_id === vehicleId && x.oil === 'topped_up' && x.check_date > since).map(x => ({ litres: x.oil_litres ?? 0 })));
+      const already = this.s.faults.some(f => f.vehicle_id === vehicleId && (f.status === 'open' || f.status === 'in_progress') && f.description.startsWith('Using oil:'));
+      if (w.flag && !already) {
+        this.s.faults.push({ id: `flt-${Date.now()}-oil`, vehicle_id: vehicleId, description: w.text, severity: 'urgent', source: 'mechanic', status: 'open', reported_at: new Date().toISOString(), reported_by_name: MECH });
+        oilWarning = w.text;
+      }
+    }
+    return good({ id, faults: faults.map(f => f.description), oilWarning }, 201);
   }
 }

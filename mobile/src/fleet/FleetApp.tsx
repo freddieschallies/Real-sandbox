@@ -12,11 +12,11 @@ import { C, S } from '../theme.ts';
 import { useFleet, type Shot } from './useFleet.ts';
 import type { Fault, FleetJob, FleetVehicle } from './types.ts';
 import { DUE, K, SEV, STATUS, TYPE_LABEL, dayName, km, today, when, SLOT_LABEL } from './common.ts';
-import { AssignScreen, BookingScreen, BookingsList, FleetMap, NewBooking, TechList } from './FleetExtra.tsx';
+import { AssignScreen, BookingScreen, BookingsList, DailyCheckHistory, DailyCheckScreen, DailyChecksCard, FleetMap, NewBooking, TechList } from './FleetExtra.tsx';
 
 type Tab = 'vehicles' | 'map' | 'bookings' | 'faults' | 'jobs' | 'techs';
 export type Sel = { kind: 'vehicle'; id: string } | { kind: 'job'; id: string } | { kind: 'newjob'; vehicleId: string; bookingId?: string } | { kind: 'report'; vehicleId: string }
-  | { kind: 'booking'; id: string } | { kind: 'newbooking'; vehicleId?: string } | { kind: 'assign'; techId?: string; vehicleId?: string };
+  | { kind: 'booking'; id: string } | { kind: 'check'; vehicleId: string } | { kind: 'newbooking'; vehicleId?: string } | { kind: 'assign'; techId?: string; vehicleId?: string };
 
 export function FleetApp() {
   const s = useStore();
@@ -44,7 +44,7 @@ export function FleetApp() {
 
   const list = (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 40 }}>
-      {tab === 'vehicles' ? <VehicleList vehicles={v} open={id => open({ kind: 'vehicle', id })} /> : null}
+      {tab === 'vehicles' ? <><DailyChecksCard f={f} open={open} /><VehicleList vehicles={v} open={id => open({ kind: 'vehicle', id })} /></> : null}
       {tab === 'faults' ? <FaultList faults={f.d.faults} open={id => open({ kind: 'vehicle', id })} /> : null}
       {tab === 'jobs' ? <JobList jobs={f.d.jobs} open={id => open({ kind: 'job', id })} /> : null}
       {tab === 'map' ? <FleetMap f={f} open={open} /> : null}
@@ -60,6 +60,7 @@ export function FleetApp() {
     if (sel.kind === 'vehicle') return <VehicleScreen key={sel.id} id={sel.id} f={f} open={open} />;
     if (sel.kind === 'job') { const j = f.d.jobs.find(x => x.id === sel.id); return j ? <JobScreen key={j.id} j={j} f={f} done={back} /> : <Body quiet>Job card completed.</Body>; }
     if (sel.kind === 'newjob') return <NewJob key={sel.vehicleId} vehicleId={sel.vehicleId} bookingId={sel.bookingId} f={f} done={back} />;
+    if (sel.kind === 'check') return <DailyCheckScreen key={sel.vehicleId} vehicleId={sel.vehicleId} f={f} open={open} done={back} />;
     if (sel.kind === 'booking') return <BookingScreen key={sel.id} id={sel.id} f={f} open={open} done={back} />;
     if (sel.kind === 'newbooking') return <NewBooking key={sel.vehicleId ?? 'any'} vehicleId={sel.vehicleId} f={f} done={back} />;
     if (sel.kind === 'assign') return <AssignScreen key={`${sel.techId}-${sel.vehicleId}`} techId={sel.techId} vehicleId={sel.vehicleId} f={f} done={back} />;
@@ -140,6 +141,8 @@ function VehicleCard({ x, onPress }: { x: FleetVehicle; onPress: () => void }) {
         {x.safety_faults ? <Pill text={`${x.safety_faults} safety fault${x.safety_faults > 1 ? 's' : ''}`} tone="bad" /> : null}
         {x.open_faults - x.safety_faults > 0 ? <Pill text={`${x.open_faults - x.safety_faults} fault${x.open_faults - x.safety_faults > 1 ? 's' : ''}`} tone="warn" /> : null}
         {x.open_job ? <Pill text={`Job card ${x.open_job.number}`} tone="info" /> : null}
+        {x.status === 'in_service' ? (x.checked_today ? <Pill text={x.checked_today.oil === 'topped_up' ? `Checked · oil +${x.checked_today.oilLitres} L` : 'Checked today'} tone={x.checked_today.oil === 'topped_up' ? 'warn' : 'good'} />
+          : <Pill text="Daily check due" tone="warn" />) : null}
         {x.serviceDue.state === 'soon' || x.serviceDue.state === 'overdue' ? <Pill text={x.serviceDue.state === 'overdue' ? 'Service overdue' : 'Service soon'} tone={DUE[x.serviceDue.state]} /> : null}
         {x.licenceDue.state === 'soon' || x.licenceDue.state === 'overdue' ? <Pill text={x.licenceDue.state === 'overdue' ? 'Licence expired' : 'Licence soon'} tone={DUE[x.licenceDue.state]} /> : null}
       </View>
@@ -229,6 +232,7 @@ function VehicleScreen({ id, f, open }: { id: string; f: FleetHook; open: (s: Se
           <Text style={st.small}>{booking.place} · {booking.reason}</Text>
         </Card>
       ) : null}
+      {v.status === 'in_service' && !sum.checked_today ? <Button label="Do today's daily check" onPress={() => open({ kind: 'check', vehicleId: id })} /> : null}
       {sum.open_job ? <Button label={`Open job card ${sum.open_job.number}`} onPress={() => open({ kind: 'job', id: sum.open_job!.id })} />
         : <Button label="New job card" onPress={() => open({ kind: 'newjob', vehicleId: id, bookingId: booking?.id })} />}
       <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
@@ -259,12 +263,15 @@ function VehicleScreen({ id, f, open }: { id: string; f: FleetHook; open: (s: Se
         </Card>
       )) : <Body quiet>No job cards yet.</Body>}
 
+      <Heading>Daily checks</Heading>
+      {d.dailyChecks?.length ? <DailyCheckHistory rows={d.dailyChecks.slice(0, 10)} /> : <Body quiet>No daily checks yet.</Body>}
+
       <Heading>Km history</Heading>
       <Card>
         {d.km.slice(0, 15).map((k, n) => (
           <View key={n} style={{ flexDirection: 'row', gap: 8 }}>
             <Text style={[st.body, { fontWeight: '700', minWidth: 110 }]}>{km(k.km)}</Text>
-            <Text style={[st.small, { flex: 1 }]}>{when(k.read_at)} · {k.source === 'handover' ? 'handover' : k.source === 'fleet_job' ? 'job card' : k.source === 'release' ? 'released' : 'mechanic'} · {k.by}</Text>
+            <Text style={[st.small, { flex: 1 }]}>{when(k.read_at)} · {k.source === 'handover' ? 'handover' : k.source === 'fleet_job' ? 'job card' : k.source === 'release' ? 'released' : k.source === 'daily_check' ? 'daily check' : 'mechanic'} · {k.by}</Text>
           </View>
         ))}
         {!d.km.length ? <Body quiet>No readings yet.</Body> : null}

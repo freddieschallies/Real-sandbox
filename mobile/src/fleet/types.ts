@@ -1,4 +1,4 @@
-import type { Due, FaultSeverity, FleetJobType, VehicleStatus } from '../../../server/src/core/fleet.ts';
+import type { Due, FaultSeverity, FleetJobType, FluidResult, TyreResult, VehicleStatus } from '../../../server/src/core/fleet.ts';
 
 export interface FleetVehicle {
   id: string; registration: string; description: string | null; make: string | null; model: string | null; year: number | null;
@@ -6,6 +6,7 @@ export interface FleetVehicle {
   km: number | null; driver: string | null; open_faults: number; safety_faults: number;
   open_job: { id: string; number: number; type: FleetJobType } | null;
   serviceDue: Due; licenceDue: Due;
+  checked_today?: { oil: FluidResult; oilLitres: number | null; water: FluidResult; tyres: TyreResult; at: string } | null;
 }
 
 export interface Fault {
@@ -28,6 +29,7 @@ export interface VehicleDetail {
   faults: Fault[];
   jobs: { id: string; number: number; job_type: FleetJobType; status: string; reason: string; opened_at: string; completed_at: string | null; odometer_in: number; odometer_out: number | null; found_text: string | null; did_text: string | null; labour_hours: number | null; mechanic: string; parts_cents: number }[];
   km: { km: number; read_at: string; source: string; by: string }[];
+  dailyChecks?: DailyCheck[];
   inspections: { id: string; inspected_at: string; odometer_km: number; fuel_level: string; problems: string[]; new_problems: string[]; driver: string }[];
 }
 
@@ -41,3 +43,12 @@ export interface Position {
   recorded_at: string | null; minutesAgo: number | null; driver: string | null;
 }
 export interface Technician { id: string; full_name: string; mode: 'driving' | 'riding_along' | null; vehicle_id: string | null; registration: string | null }
+
+export interface DailyCheck {
+  id: string; check_date: string; checked_at: string; by: string; odometer_km: number; oil: FluidResult; oil_litres: number | null;
+  water: FluidResult; water_litres: number | null; tyres: TyreResult; notes: string | null;
+}
+export interface DailyCheckDay {
+  date: string; done: number; due: number;
+  vehicles: ({ vehicle_id: string; registration: string; status: VehicleStatus; required: boolean } & Partial<Omit<DailyCheck, 'id'>> & { id: string | null })[];
+}

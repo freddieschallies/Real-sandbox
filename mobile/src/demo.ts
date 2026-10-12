@@ -157,6 +157,7 @@ export class DemoTransport implements Transport {
   private fleet(): DemoFleet {
     const fl = this.state.fleet ?? (this.state.fleet = seedFleet());
     if (!fl.bookings) { const fresh = seedFleet(); Object.assign(fl, { bookings: fresh.bookings, spots: fresh.spots, crew: fresh.crew }); }
+    if (!fl.checks) fl.checks = seedFleet().checks;
     return new DemoFleet(fl);
   }
 
@@ -330,6 +331,8 @@ export class DemoTransport implements Transport {
     // Fleet (mechanic). Technicians may report faults; the rest is the mechanic's.
     if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/faults$/))) return this.fleetResult(this.fleet().reportFault(m[1], b, this.who.name, this.who.level === 'mechanic'));
     if (p.startsWith('/fleet') && this.who.level !== 'mechanic' && !this.state.fleetDuty?.[this.who.id]) return refuse(403, 'mechanic only');
+    if (p === '/fleet/daily-checks') return ok(this.fleet().checksFor());
+    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/daily-check$/))) return this.fleetResult(this.fleet().dailyCheck(m[1], b));
     if (p === '/fleet/bookings') return ok(this.fleet().bookings());
     if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/bookings$/))) return this.fleetResult(this.fleet().book(m[1], b));
     if ((m = p.match(/^\/fleet\/bookings\/([^/]+)\/move$/))) return this.fleetResult(this.fleet().move(m[1], b));

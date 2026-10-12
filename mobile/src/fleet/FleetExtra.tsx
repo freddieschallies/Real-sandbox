@@ -454,3 +454,131 @@ export function AssignScreen({ techId, vehicleId, f, done }: { techId?: string; 
     </ScrollView>
   );
 }
+
+// ---- Daily checks --------------------------------------------------------------------------------
+
+const FLUID = { ok: 'OK', topped_up: 'Topped up', problem: 'Problem' } as const;
+const TYRES = { ok: 'OK', pressure_adjusted: 'Pressure adjusted', problem: 'Problem' } as const;
+const OIL_CHIPS = ['0.25', '0.5', '1', '2'] as const;
+
+/** The summary at the top of the Vehicles list. */
+export function DailyChecksCard({ f, open }: { f: FleetHook; open: Open }) {
+  const c = f.d.checks;
+  if (!c) return null;
+  const next = c.vehicles.find(v => v.required && !v.id);
+  const all = c.done >= c.due;
+  return (
+    <Card style={{ borderColor: all ? C.good : C.warn, borderWidth: 2 }} accessibilityLabel="Daily checks">
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>Daily checks today</Text>
+        <Pill text={`${c.done} of ${c.due}`} tone={all ? 'good' : 'warn'} />
+      </View>
+      <Text style={st.small}>Oil, water and tyres on every vehicle in service. Oil added is always noted.</Text>
+      {next ? <Button label={`Check ${next.registration}`} onPress={() => open({ kind: 'check', vehicleId: next.vehicle_id })} style={{ minHeight: 48 }} />
+        : <Text style={[st.body, { color: C.good }]}>All done for today.</Text>}
+    </Card>
+  );
+}
+
+export function DailyCheckScreen({ vehicleId, f, open, done }: { vehicleId: string; f: FleetHook; open: Open; done: () => void }) {
+  const s = useStore();
+  const v = f.d.vehicles.find(x => x.id === vehicleId);
+  const hist = f.d.details[vehicleId]?.dailyChecks ?? [];
+  React.useEffect(() => { f.loadVehicle(vehicleId); }, [vehicleId]);
+  const [kmText, setKm] = useState('');
+  const [oil, setOil] = useState<F.FluidResult>();
+  const [oilL, setOilL] = useState('');
+  const [water, setWater] = useState<F.FluidResult>();
+  const [waterL, setWaterL] = useState('');
+  const [tyres, setTyres] = useState<F.TyreResult>();
+  const [notes, setNotes] = useState('');
+  const [reasons, setReasons] = useState<string[] | null>(null);
+  const num = (t: string) => (t.trim() === '' ? null : Number(t.replace(',', '.').replace(/\s/g, '')));
+  const draft: F.DailyCheckDraft = { odometerKm: num(kmText), oil, oilLitres: oil === 'topped_up' ? num(oilL) : null, water, waterLitres: water === 'topped_up' ? num(waterL) : null, tyres, notes };
+
+  // Warn before saving if this top-up makes three in a week, or 2 litres.
+  const since = new Date(Date.now() - F.OIL_WATCH_DAYS * 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+  const recent = hist.filter(h => h.oil === 'topped_up' && h.check_date > since).map(h => ({ litres: h.oil_litres ?? 0 }));
+  const watch = oil === 'topped_up' && (draft.oilLitres ?? 0) > 0 ? F.oilWatch([...recent, { litres: draft.oilLitres! }]) : null;
+  const checkedToday = !!v?.checked_today;
+
+  const save = () => {
+    const missing = F.missingOnDailyCheck(draft, v?.km ?? null);
+    if (checkedToday) missing.push(`${v!.registration} was already checked today`);
+    if (missing.length) { setReasons(missing); return; }
+    f.act(`Daily check ${v!.registration}`, 'POST', `/fleet/vehicles/${vehicleId}/daily-check`, { id: s.newId(), ...draft, notes: notes.trim() || null, at: nowIso() }, () => {
+      const next = f.d.checks?.vehicles.find(x => x.required && !x.id && x.vehicle_id !== vehicleId);
+      done();
+      if (next) open({ kind: 'check', vehicleId: next.vehicle_id });
+    });
+  };
+
+  if (!v) return <ScrollView contentContainerStyle={scroll}><Body quiet>Vehicle not found.</Body></ScrollView>;
+  return (
+    <ScrollView contentContainerStyle={scroll}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text style={{ color: C.text, fontSize: 28, fontWeight: '800', letterSpacing: 1, flex: 1 }}>{v.registration}</Text>
+        <Pill text="Daily check" tone="info" />
+      </View>
+      <Body quiet>{[v.make, v.model].filter(Boolean).join(' ')}{v.driver ? ` · ${v.driver}` : ''}</Body>
+      {checkedToday ? <Notice tone="good" title="Already checked today" lines={['One check per vehicle per day. It is locked once saved.']} /> : null}
+      {recent.length ? <Notice tone="warn" title={`Oil added ${recent.length} time${recent.length > 1 ? 's' : ''} this week`} lines={[`${recent.reduce((n, r) => n + r.litres, 0)} L in total. Look for leaks or blue smoke.`]} /> : null}
+
+      <Field label="Odometer (km)" value={kmText} onChangeText={setKm} keyboardType="number-pad" hint={v.km != null ? `Last reading ${km(v.km)}` : undefined} />
+
+      <Heading>Oil</Heading>
+      <Choice options={['ok', 'topped_up', 'problem'] as const} value={oil} onChange={setOil} labels={FLUID} />
+      {oil === 'topped_up' ? (
+        <Card style={{ borderColor: C.warn }}>
+          <Label>How much oil did you add? (must be noted)</Label>
+          <Choice options={OIL_CHIPS} value={OIL_CHIPS.find(c => c === oilL)} onChange={setOilL} labels={{ '0.25': '¼ L', '0.5': '½ L', '1': '1 L', '2': '2 L' }} />
+          <Field label="Litres" value={oilL} onChangeText={setOilL} keyboardType="decimal-pad" placeholder="e.g. 0.5" />
+        </Card>
+      ) : null}
+      {watch?.flag ? <Notice tone="bad" title="This engine is using oil" lines={[watch.text, 'Saving raises it as a fault and tells the driver\'s manager.']} /> : null}
+
+      <Heading>Water / coolant</Heading>
+      <Choice options={['ok', 'topped_up', 'problem'] as const} value={water} onChange={setWater} labels={FLUID} />
+      {water === 'topped_up' ? <Field label="Litres added (if you know)" value={waterL} onChangeText={setWaterL} keyboardType="decimal-pad" /> : null}
+
+      <Heading>Tyres</Heading>
+      <Choice options={['ok', 'pressure_adjusted', 'problem'] as const} value={tyres} onChange={setTyres} labels={TYRES} />
+
+      <Field label={[oil, water, tyres].includes('problem') ? 'What is the problem? (becomes a fault)' : 'Notes (optional)'} value={notes} onChangeText={setNotes} multiline
+        placeholder="e.g. front right tyre worn on the inside edge" />
+
+      {reasons ? <Notice tone="bad" title="Not yet. Still needed:" lines={reasons} /> : null}
+      <Button label="Save daily check" onPress={save} disabled={checkedToday} />
+
+      {hist.length ? (
+        <>
+          <Heading>Last checks</Heading>
+          <DailyCheckHistory rows={hist.slice(0, 7)} />
+        </>
+      ) : null}
+    </ScrollView>
+  );
+}
+
+export function DailyCheckHistory({ rows }: { rows: import('./types.ts').DailyCheck[] }) {
+  return (
+    <Card>
+      {rows.map(h => {
+        const bad = [h.oil, h.water, h.tyres].includes('problem');
+        return (
+          <View key={h.id} style={{ gap: 2, paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: C.line }}>
+            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+              <Text style={[st.body, { fontWeight: '700', minWidth: 96 }]}>{dayName(h.check_date)}</Text>
+              <Text style={[st.small, { flex: 1 }]}>{km(h.odometer_km)} · {h.by}</Text>
+              {bad ? <Pill text="Problem" tone="bad" /> : null}
+            </View>
+            <Text style={[st.small, { color: h.oil === 'topped_up' ? C.warn : h.oil === 'problem' ? C.bad : C.quiet }]}>
+              Oil: {h.oil === 'topped_up' ? `topped up ${h.oil_litres} L` : FLUID[h.oil].toLowerCase()} · Water: {h.water === 'topped_up' ? `topped up${h.water_litres ? ` ${h.water_litres} L` : ''}` : FLUID[h.water].toLowerCase()} · Tyres: {TYRES[h.tyres].toLowerCase()}
+            </Text>
+            {h.notes ? <Text style={st.small}>{h.notes}</Text> : null}
+          </View>
+        );
+      })}
+    </Card>
+  );
+}
