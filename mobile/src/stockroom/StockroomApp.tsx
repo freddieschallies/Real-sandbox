@@ -3,6 +3,7 @@
 import { KitPeople, StockPersonView, type StockPerson } from '../staff/Staff.tsx';
 import { OrderList, PartDetail, Thumb, useOrderList } from './Parts.tsx';
 import { WorkshopAdd, WorkshopItem, WorkshopList, useWorkshop } from '../fleet/Workshop.tsx';
+import { BottomTabs } from '../BottomTabs.tsx';
 import React, { useState } from 'react';
 import { Image, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -131,15 +132,7 @@ export function StockroomApp() {
       {header}
       <View style={{ flex: 1 }}>{detail ?? list}</View>
       {!sel ? (
-        <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: C.line, paddingBottom: ins.bottom, backgroundColor: C.panel }}>
-          {tabs.map(t => (
-            <Pressable key={t.key} onPress={() => { if (tab === 'live') room.seenActivity(); setTab(t.key); }} accessibilityRole="tab" accessibilityState={{ selected: tab === t.key }}
-              style={{ flex: 1, alignItems: 'center', paddingVertical: 10, minHeight: 56, borderTopWidth: 3, borderTopColor: tab === t.key ? K.band : 'transparent' }}>
-              <Text style={{ color: tab === t.key ? C.text : C.quiet, fontWeight: '700', fontSize: 12, textAlign: 'center' }}>{t.label}</Text>
-              {t.count ? <Text style={{ color: C.warn, fontWeight: '800' }}>{t.count}</Text> : null}
-            </Pressable>
-          ))}
-        </View>
+        <BottomTabs tabs={tabs} current={tab} onSelect={k => { if (tab === 'live') room.seenActivity(); setTab(k); }} accent={K.band} bottom={ins.bottom} />
       ) : null}
     </View>
   );

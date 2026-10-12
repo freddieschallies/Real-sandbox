@@ -3,6 +3,7 @@ import { ActivityIndicator, Platform, Pressable, Text, View, useWindowDimensions
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StoreProvider, useStore } from './src/state.tsx';
+import { Button } from './src/ui.tsx';
 import { NavProvider, useNav } from './src/nav.tsx';
 import { OfficeApp, isOffice } from './src/office/OfficeApp.tsx';
 import { QueriesScreen } from './src/screens/QueriesScreen.tsx';
@@ -134,7 +135,7 @@ export default function App() {
       <StoreProvider>
         <View style={{ flex: 1, backgroundColor: C.bg }}>
           {TESTER ? <TesterBarSlot /> : null}
-          <FleetViewProvider><Frame><Switchable /></Frame></FleetViewProvider>
+          <ScreenGuard><FleetViewProvider><Frame><Switchable /></Frame></FleetViewProvider></ScreenGuard>
         </View>
         <StatusBar style="light" />
       </StoreProvider>
@@ -145,4 +146,27 @@ export default function App() {
 function FleetViewProvider({ children }: { children: React.ReactNode }) {
   const [on, set] = React.useState<View3>('main');
   return <FleetView.Provider value={{ on, set }}>{children}</FleetView.Provider>;
+}
+
+/** If a screen fails to draw, say so and offer a way out instead of a blank page. */
+class ScreenGuard extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error) { console.error('screen error', error); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <GuardMessage error={this.state.error} retry={() => this.setState({ error: null })} />;
+  }
+}
+function GuardMessage({ error, retry }: { error: Error; retry: () => void }) {
+  const s = useStore();
+  return (
+    <View style={{ flex: 1, padding: 24, gap: 14, justifyContent: 'center', backgroundColor: C.bg }}>
+      <Text style={{ color: C.text, fontSize: 22, fontWeight: '800' }}>This screen could not open</Text>
+      <Text style={{ color: C.quiet }}>{error.message}</Text>
+      <Button label="Try again" onPress={retry} />
+      {TESTER ? <Button label="Start over with fresh demo data" kind="secondary" onPress={async () => { await s.resetDemo(); retry(); }} /> : null}
+      <Button label="Sign out" kind="quiet" onPress={async () => { await s.signOut(); retry(); }} />
+    </View>
+  );
 }

@@ -1,5 +1,6 @@
 // The mechanic's app: the fleet only. Everything hangs off a vehicle: its details, km, faults and
 // the mechanic's own job cards. Phone: tabs at the bottom. Desktop: menu, list and detail side by side.
+import { BottomTabs } from '../BottomTabs.tsx';
 import React, { useEffect, useState } from 'react';
 import { Image, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -116,15 +117,7 @@ export function FleetApp() {
       {header}
       <View style={{ flex: 1 }}>{detail ?? list}</View>
       {!sel ? (
-        <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: C.line, paddingBottom: ins.bottom, backgroundColor: C.panel }}>
-          {tabs.map(t => (
-            <Pressable key={t.key} onPress={() => setTab(t.key)} accessibilityRole="tab" accessibilityState={{ selected: tab === t.key }}
-              style={{ flex: 1, alignItems: 'center', paddingVertical: 10, paddingHorizontal: 2, minHeight: 56, borderTopWidth: 3, borderTopColor: tab === t.key ? K.band : 'transparent' }}>
-              <Text numberOfLines={1} style={{ color: tab === t.key ? C.text : C.quiet, fontWeight: '700', fontSize: 12 }}>{t.label}</Text>
-              {t.count ? <Text style={{ color: C.warn, fontWeight: '800' }}>{t.count}</Text> : null}
-            </Pressable>
-          ))}
-        </View>
+        <BottomTabs tabs={tabs} current={tab} onSelect={k => setTab(k)} accent={K.band} bottom={ins.bottom} />
       ) : null}
     </View>
   );

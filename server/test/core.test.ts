@@ -422,3 +422,17 @@ test('timesheet day: travel, work, paused and not accounted from what the app re
   assert.equal(T.buildDay([], []).activity, false);
   assert.deepEqual(T.daysBetween('2026-10-30', '2026-11-02'), ['2026-10-30', '2026-10-31', '2026-11-01', '2026-11-02']);
 });
+
+test('pay: normal, overtime (1.5x) and double time (Sundays and public holidays)', async () => {
+  const T = await import('../src/core/timesheet.ts');
+  const day = (travel: number, work: number) => ({ ...T.buildDay([], []), travelMin: travel, workMin: work });
+  const mon = T.payOf(day(90, 480), '2026-10-12');
+  assert.deepEqual([mon.paidMin, mon.normalMin, mon.overtimeMin, mon.doubleMin], [570, 480, 90, 0], 'weekday: 8 hours normal, the rest overtime');
+  assert.equal(T.payOf(day(60, 180), '2026-10-10').overtimeMin, 240, 'Saturday: overtime');
+  assert.equal(T.payOf(day(60, 180), '2026-10-11').doubleMin, 240, 'Sunday: double time');
+  assert.equal(T.payOf(day(0, 300), '2026-09-24').dayType, 'holiday', 'Heritage Day');
+  assert.equal(T.publicHoliday('2026-04-03'), 'Good Friday');
+  assert.equal(T.publicHoliday('2026-04-06'), 'Family Day');
+  assert.equal(T.publicHoliday('2026-08-10'), "National Women's Day (observed)", 'a Sunday holiday moves to Monday');
+  assert.equal(T.payOf(day(0, 600), '2026-10-12', { weekdayNormalMin: 540, saturdayNormalMin: 0 }).overtimeMin, 60, 'company setting');
+});

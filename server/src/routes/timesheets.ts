@@ -5,7 +5,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { audit, raiseFlag, tx, type Q } from '../db.ts';
-import { departmentsFor } from '../core/permissions.ts';
+import { can, departmentsFor } from '../core/permissions.ts';
 import * as T from '../core/timesheet.ts';
 import { DateOnly, Iso, Refused, Uuid, parse } from '../http.ts';
 
@@ -42,11 +42,17 @@ async function flagsOn(c: Q, techId: string, date: string) {
       WHERE technician_id = $1 AND ((raised_at AT TIME ZONE 'Africa/Johannesburg')::date = $2::date OR details->>'workDate' = $2::text) ORDER BY raised_at`, [techId, date])).rows;
 }
 
-/** One technician's sheet for one day: what he submitted, or what the app has for the day so far. */
-async function sheetFor(c: Q, techId: string, date: string) {
+async function rulesOf(c: Q): Promise<T.PayRules> {
+  const r = (await c.query('SELECT weekday_normal_min, saturday_normal_min FROM timesheet_settings')).rows[0];
+  return r ? { weekdayNormalMin: r.weekday_normal_min, saturdayNormalMin: r.saturday_normal_min } : T.DEFAULT_PAY;
+}
+
+/** One technician's sheet for one day: what he submitted, or what the app has for the day so far, with the pay split. */
+async function sheetFor(c: Q, techId: string, date: string, rules?: T.PayRules) {
   const ts = (await c.query('SELECT submitted_at, sheet, note FROM timesheets WHERE technician_id = $1 AND work_date = $2', [techId, date])).rows[0];
   const day: T.Day = ts?.sheet ?? await dayOf(c, techId, date);
-  return { date, label: dayLabel(date), weekday: T.isWeekday(date), submitted: ts ? { at: ts.submitted_at, note: ts.note } : null, day, flags: await flagsOn(c, techId, date) };
+  return { date, label: dayLabel(date), weekday: T.isWeekday(date), submitted: ts ? { at: ts.submitted_at, note: ts.note } : null, day,
+    pay: T.payOf(day, date, rules ?? await rulesOf(c)), flags: await flagsOn(c, techId, date) };
 }
 
 /** The finished days he still owes a timesheet for: the last week, weekdays and any day he worked. */
@@ -54,12 +60,12 @@ async function owed(c: Q, techId: string) {
   const u = (await c.query("SELECT (created_at AT TIME ZONE 'Africa/Johannesburg')::date::text AS since FROM users WHERE id = $1", [techId])).rows[0];
   const today = sast();
   const from = [addDays(today, -7), u?.since ?? today].sort()[1];
-  const out: { date: string; label: string; day: T.Day; overdue: boolean }[] = [];
+  const out: { date: string; label: string; day: T.Day; pay: T.Pay; overdue: boolean }[] = [];
   for (const date of T.daysBetween(from, addDays(today, -1))) {
     if ((await c.query('SELECT 1 FROM timesheets WHERE technician_id = $1 AND work_date = $2', [techId, date])).rowCount) continue;
     const day = await dayOf(c, techId, date);
     if (!T.isWeekday(date) && !day.activity) continue;
-    out.push({ date, label: dayLabel(date), day, overdue: date < addDays(today, -1) || sastHour() >= 10 });
+    out.push({ date, label: dayLabel(date), day, pay: T.payOf(day, date, await rulesOf(c)), overdue: date < addDays(today, -1) || sastHour() >= 10 });
   }
   return out;
 }
@@ -75,9 +81,10 @@ export function registerTimesheetRoutes(app: FastifyInstance) {
         const has = await c.query("SELECT 1 FROM flags WHERE technician_id = $1 AND flag_type = 'timesheet_missing' AND details->>'workDate' = $2", [req.actor.id, d.date]);
         if (!has.rowCount) await raiseFlag(c, { type: 'timesheet_missing', technicianId: req.actor.id, question: `Your timesheet for ${d.label} was not submitted. Check it and submit it now.`, details: { workDate: d.date } });
       }
+      const rules = await rulesOf(c);
       const recent = (await c.query(
         `SELECT work_date::text AS date, submitted_at, note, sheet FROM timesheets WHERE technician_id = $1 ORDER BY work_date DESC LIMIT 14`, [req.actor.id])).rows
-        .map(r => ({ date: r.date, label: dayLabel(r.date), submitted: { at: r.submitted_at, note: r.note }, day: r.sheet }));
+        .filter(r => r.sheet).map(r => ({ date: r.date, label: dayLabel(r.date), submitted: { at: r.submitted_at, note: r.note }, day: r.sheet, pay: T.payOf(r.sheet, r.date, rules), flags: [] }));
       return { due, recent, explainFromMin: T.EXPLAIN_FROM_MIN };
     });
   });
@@ -108,6 +115,23 @@ export function registerTimesheetRoutes(app: FastifyInstance) {
     });
   });
 
+  // ---- Normal hours (for overtime) ----------------------------------------------------------------
+  app.get('/timesheets/settings', async req => {
+    if (!departmentsFor(req.actor, 'view_timesheets') && req.actor.level !== 'technician') throw new Refused(403, ['timesheets are for HR and department managers']);
+    return { ...(await rulesOf(req.db)), canEdit: can(req.actor, 'assign_departments') || can(req.actor, 'manage_access') };
+  });
+  app.put('/timesheets/settings', async req => {
+    if (!can(req.actor, 'assign_departments') && !can(req.actor, 'manage_access')) throw new Refused(403, ['only HR or the CEO sets the normal hours']);
+    const b = parse(z.object({ weekdayNormalMin: z.number().int().min(60).max(720), saturdayNormalMin: z.number().int().min(0).max(720) }), req.body);
+    return tx(req.db, async c => {
+      await c.query(`INSERT INTO timesheet_settings (weekday_normal_min, saturday_normal_min, updated_by) VALUES ($1, $2, $3)
+                     ON CONFLICT (company_id) DO UPDATE SET weekday_normal_min = EXCLUDED.weekday_normal_min, saturday_normal_min = EXCLUDED.saturday_normal_min, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+        [b.weekdayNormalMin, b.saturdayNormalMin, req.actor.id]);
+      await audit(c, req.actor.id, 'timesheet_settings', 'company', null, b);
+      return b;
+    });
+  });
+
   // ---- HR's export ------------------------------------------------------------------------------
   // Individual or group (a department, or everyone), for a day, a week or a month (up to 31 days).
   app.get('/timesheets', async (req: FastifyRequest<{ Querystring: Record<string, string> }>) => {
@@ -125,25 +149,28 @@ export function registerTimesheetRoutes(app: FastifyInstance) {
             AND ($3::uuid IS NULL OR u.id = $3) AND ($4::uuid IS NULL OR u.department_id = $4)
           ORDER BY d.name NULLS LAST, u.full_name`, [scope === 'all', scope === 'all' ? [] : scope, q.userId ?? null, q.departmentId ?? null])).rows;
       if (q.userId && !techs.length) throw new Refused(403, ['not one of your technicians']);
+      const rules = await rulesOf(c);
       const technicians = [];
       for (const t of techs) {
         const days: (Awaited<ReturnType<typeof sheetFor>> & { status: string })[] = [];
         for (const date of dates) {
           if (date > today) continue;
-          const sh = await sheetFor(c, t.id, date);
+          const sh = await sheetFor(c, t.id, date, rules);
           if (!sh.submitted && !sh.day.activity && !sh.weekday && !sh.flags.length) continue;
           days.push({ ...sh, status: sh.submitted ? 'submitted' : date === today ? 'today' : sh.day.activity || sh.weekday ? 'not_submitted' : 'none' });
         }
         const sum = (k: 'travelMin' | 'workMin' | 'pausedMin' | 'unaccountedMin') => days.reduce((n, d) => n + d.day[k], 0);
+        const pay = (k: 'paidMin' | 'normalMin' | 'overtimeMin' | 'doubleMin') => days.reduce((n, d) => n + d.pay[k], 0);
         technicians.push({
           id: t.id, full_name: t.full_name, department: t.department, days,
           totals: { travelMin: sum('travelMin'), workMin: sum('workMin'), pausedMin: sum('pausedMin'), unaccountedMin: sum('unaccountedMin'),
+            paidMin: pay('paidMin'), normalMin: pay('normalMin'), overtimeMin: pay('overtimeMin'), doubleMin: pay('doubleMin'),
             jobs: days.reduce((n, d) => n + d.day.jobs.length, 0), flags: days.reduce((n, d) => n + d.flags.length, 0),
             submitted: days.filter(d => d.status === 'submitted').length, notSubmitted: days.filter(d => d.status === 'not_submitted').length },
         });
       }
       await audit(c, req.actor.id, 'timesheets_viewed', 'timesheets', null, q);
-      return { from: q.from, to: q.to, generatedAt: new Date().toISOString(), technicians };
+      return { from: q.from, to: q.to, generatedAt: new Date().toISOString(), rules, technicians };
     });
   });
 }

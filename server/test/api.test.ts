@@ -1390,6 +1390,14 @@ test('daily timesheets: made by the app, the previous day submitted by the techn
   assert.equal(j1.workMin, 150 - 30, 'on site less the time out for parts');
   assert.ok(Array.isArray(day.flags), 'flags of the day are on the sheet');
   assert.ok(tech.totals.workMin >= 120);
+  assert.equal(day.pay.dayType, 'weekday');
+  assert.equal(day.pay.normalMin + day.pay.overtimeMin, day.day.travelMin + day.day.workMin, 'paid: normal plus overtime');
+  assert.ok('overtimeMin' in tech.totals && 'doubleMin' in tech.totals);
+  assert.equal((await call('manager', 'PUT', '/timesheets/settings', { weekdayNormalMin: 540, saturdayNormalMin: 0 })).status, 403, 'HR or the CEO sets the hours');
+  assert.equal((await call('hr', 'PUT', '/timesheets/settings', { weekdayNormalMin: 60, saturdayNormalMin: 0 })).status, 200);
+  const ot = (await call('hr', 'GET', `/timesheets?from=2026-10-12&to=2026-10-12&userId=${ids.tech}`)).body.technicians[0].days[0].pay;
+  assert.equal(ot.normalMin, 60, 'one normal hour, the rest overtime');
+  await call('hr', 'PUT', '/timesheets/settings', { weekdayNormalMin: 480, saturdayNormalMin: 0 });
   assert.equal((await call('manager', 'GET', '/timesheets?from=2026-10-12&to=2026-10-12')).status, 200, 'his manager sees his department');
   assert.equal((await call('admin', 'GET', '/timesheets?from=2026-10-12&to=2026-10-12')).status, 403, 'not the admin');
   assert.equal((await call('hr', 'GET', '/timesheets?from=2026-10-01&to=2026-11-15')).status, 400, 'up to a month at a time');

@@ -5,7 +5,7 @@ import * as T from '../../server/src/core/timesheet.ts';
 import type { Flag } from './types.ts';
 import type { DemoOfficeState } from './demoOffice.ts';
 
-export interface DemoTimesState { submitted: Record<string, { at: string; note: string | null; day: T.Day }>; seeded?: boolean }
+export interface DemoTimesState { submitted: Record<string, { at: string; note: string | null; day: T.Day }>; seeded?: boolean; rules?: T.PayRules }
 export interface RealVisit { jobId: string; jobNumber: number; store: string; fault: string; techIds: string[]; visits: { goAt?: string; arrivedAt?: string; startedAt?: string; endedAt?: string; state: string; pauses: { reason: string; at: string; resumedAt?: string }[] }[] }
 
 type Res = { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] };
@@ -32,7 +32,7 @@ export class DemoTimes {
     if (!t.seeded) {
       // Ayanda has not submitted his last few days: flagged, as the server does.
       for (const date of this.missingSeed('tech-3')) {
-        if (!this.flags.some(f => f.flag_type === 'timesheet_missing' && f.tech === 'tech-3' && f.details.workDate === date)) {
+        if (!this.flags.some(f => f.flag_type === 'timesheet_missing' && f.tech === 'tech-3' && f.details?.workDate === date)) {
           this.flags.push({ id: `flag-ts-tech-3-${date}`, flag_type: 'timesheet_missing', severity: 'normal', raised_at: `${addDays(date, 1)}T10:00:00+02:00`, status: 'open',
             question: `Your timesheet for ${dayLabel(date)} was not submitted. Check it and submit it now.`, explanation: null, details: { workDate: date }, tech: 'tech-3' });
         }
@@ -50,9 +50,9 @@ export class DemoTimes {
 
   /** What the app has for him on that day. */
   dayOf(techId: string, date: string): T.Day {
-    const real = this.real.filter(r => r.techIds.includes(techId)).flatMap(r => r.visits.filter(v => v.goAt && sastDateOf(v.goAt) === date).map(v => ({
+    const real = this.real.filter(r => r.techIds.includes(techId)).flatMap(r => (r.visits ?? []).filter(v => v.goAt && sastDateOf(v.goAt) === date).map(v => ({
       jobId: r.jobId, jobNumber: r.jobNumber, store: r.store, fault: r.fault, goAt: v.goAt ?? null, arrivedAt: v.arrivedAt ?? null, startedAt: v.startedAt ?? null, endedAt: v.endedAt ?? null,
-      pauses: v.pauses.map(p => ({ reason: p.reason as T.PauseReason, at: p.at, resumedAt: p.resumedAt ?? null })), state: v.state, helper: r.techIds[0] !== techId,
+      pauses: (v.pauses ?? []).map(p => ({ reason: p.reason as T.PauseReason, at: p.at, resumedAt: p.resumedAt ?? null })), state: v.state, helper: r.techIds[0] !== techId,
     })));
     if (real.length || date >= sast()) return T.buildDay(real, []);
     return this.synth(techId, date);
@@ -105,9 +105,18 @@ export class DemoTimes {
     return { at: `${addDays(date, 1)}T07:${String(5 + Math.floor(r() * 40)).padStart(2, '0')}:00+02:00`, note: day.unaccountedMin >= T.EXPLAIN_FROM_MIN ? NOTES[Math.floor(r() * NOTES.length)] : null, day };
   }
 
+  rules(): T.PayRules { return this.t.rules ?? T.DEFAULT_PAY; }
+  setRules(b: { weekdayNormalMin?: number; saturdayNormalMin?: number }): Res {
+    const w = Number(b.weekdayNormalMin), sa = Number(b.saturdayNormalMin);
+    if (!(w >= 60 && w <= 720) || !(sa >= 0 && sa <= 720)) return bad(400, 'hours like 8:00 (between 1 and 12 hours on a weekday)');
+    this.t.rules = { weekdayNormalMin: w, saturdayNormalMin: sa };
+    return good(this.t.rules);
+  }
+
   sheet(techId: string, date: string) {
     const sub = this.submitted(techId, date);
-    return { date, label: dayLabel(date), weekday: T.isWeekday(date), submitted: sub ? { at: sub.at, note: sub.note } : null, day: sub?.day ?? this.dayOf(techId, date), flags: this.flagsOn(techId, date) };
+    const day = sub?.day ?? this.dayOf(techId, date);
+    return { date, label: dayLabel(date), weekday: T.isWeekday(date), submitted: sub ? { at: sub.at, note: sub.note } : null, day, pay: T.payOf(day, date, this.rules()), flags: this.flagsOn(techId, date) };
   }
 
   mine(techId: string) {
@@ -120,7 +129,7 @@ export class DemoTimes {
       due.push({ ...this.sheet(techId, date), overdue: date < addDays(today, -1) || Number(new Date().toLocaleString('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', hour12: false })) >= 10 });
     }
     for (const d of due.filter(x => x.overdue)) {
-      if (!this.flags.some(f => f.flag_type === 'timesheet_missing' && (f.tech ?? 'me') === techId && f.details.workDate === d.date)) {
+      if (!this.flags.some(f => f.flag_type === 'timesheet_missing' && (f.tech ?? 'me') === techId && f.details?.workDate === d.date)) {
         this.flags.push({ id: `flag-ts-${techId}-${d.date}`, flag_type: 'timesheet_missing', severity: 'normal', raised_at: new Date().toISOString(), status: 'open',
           question: `Your timesheet for ${d.label} was not submitted. Check it and submit it now.`, explanation: null, details: { workDate: d.date }, ...(techId === 'me' ? {} : { tech: techId }) });
       }
@@ -137,7 +146,7 @@ export class DemoTimes {
     const note = b.note?.trim() || null;
     if (day.unaccountedMin >= T.EXPLAIN_FROM_MIN && (!note || note.length < 5)) return bad(400, `say what the ${T.hm(day.unaccountedMin)} not accounted for was`);
     this.t.submitted[`${techId}|${date}`] = { at: b.at ?? new Date().toISOString(), note, day };
-    for (const f of this.flags) if (f.flag_type === 'timesheet_missing' && (f.tech ?? 'me') === techId && f.details.workDate === date && f.status !== 'resolved') Object.assign(f, { status: 'resolved', resolution_note: 'Timesheet submitted' });
+    for (const f of this.flags) if (f.flag_type === 'timesheet_missing' && (f.tech ?? 'me') === techId && f.details?.workDate === date && f.status !== 'resolved') Object.assign(f, { status: 'resolved', resolution_note: 'Timesheet submitted' });
     return good({ date, day });
   }
 
@@ -147,14 +156,16 @@ export class DemoTimes {
     if (dates.length > 31) return bad(400, 'at most 31 days at a time');
     const today = sast();
     return good({
-      from, to, generatedAt: new Date().toISOString(),
+      from, to, generatedAt: new Date().toISOString(), rules: this.rules(),
       technicians: techs.map(t => {
         const days = dates.filter(d => d <= today).map(d => this.sheet(t.id, d))
           .filter(s => s.submitted || s.day.activity || s.weekday || s.flags.length)
           .map(s => ({ ...s, status: s.submitted ? 'submitted' : s.day.activity || s.weekday ? 'not_submitted' : 'none' }));
         const sum = (k: 'travelMin' | 'workMin' | 'pausedMin' | 'unaccountedMin') => days.reduce((n, d) => n + d.day[k], 0);
+        const pay = (k: 'paidMin' | 'normalMin' | 'overtimeMin' | 'doubleMin') => days.reduce((n, d) => n + d.pay[k], 0);
         return { id: t.id, full_name: this.name(t.id), department: t.department, days,
           totals: { travelMin: sum('travelMin'), workMin: sum('workMin'), pausedMin: sum('pausedMin'), unaccountedMin: sum('unaccountedMin'),
+            paidMin: pay('paidMin'), normalMin: pay('normalMin'), overtimeMin: pay('overtimeMin'), doubleMin: pay('doubleMin'),
             jobs: days.reduce((n, d) => n + d.day.jobs.length, 0), flags: days.reduce((n, d) => n + d.flags.length, 0),
             submitted: days.filter(d => d.status === 'submitted').length, notSubmitted: days.filter(d => d.status === 'not_submitted').length } };
       }),

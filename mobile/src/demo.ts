@@ -211,7 +211,7 @@ export class DemoTransport implements Transport {
   /** Daily timesheets: the technician's own, and HR's export. */
   private timesRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
-    if (!(p === '/me/timesheets' || p.startsWith('/me/timesheets/') || p === '/timesheets')) return null;
+    if (!(p === '/me/timesheets' || p.startsWith('/me/timesheets/') || p === '/timesheets' || p === '/timesheets/settings')) return null;
     const t = this.times();
     const save = (r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }) => { this.persist(this.state); return r.ok ? ok(r.body) : refuse(r.status, ...r.reasons); };
     if (p === '/me/timesheets') { if (this.who.level !== 'technician') return ok({ due: [], recent: [], explainFromMin: 30 }); const r = t.mine(this.who.id); this.persist(this.state); return ok(r); }
@@ -219,6 +219,11 @@ export class DemoTransport implements Transport {
     if ((m = p.match(/^\/me\/timesheets\/(\d{4}-\d{2}-\d{2})$/))) return ok(t.sheet(this.who.id, m[1]));
     // HR (everyone) or a department manager (his own technicians).
     const all = this.does('hr') || ['director', 'creator'].includes(this.who.level);
+    if (p === '/timesheets/settings') {
+      const canEdit = this.does('hr') || this.does('access');
+      if (req.method === 'PUT') return canEdit ? save(t.setRules(b)) : refuse(403, 'only HR or the CEO sets the normal hours');
+      return ok({ ...t.rules(), canEdit });
+    }
     if (!all && this.who.level !== 'management') return refuse(403, 'timesheets are for HR and department managers');
     const v = this.vans();
     const q = new URLSearchParams(req.path.split('?')[1] ?? '');
@@ -634,6 +639,14 @@ export class DemoTransport implements Transport {
   async send(req: Request): Promise<Response> {
     if (this.noSignal) throw new Offline('demo: no signal');
     await new Promise(r => setTimeout(r, 25));
+    // A slip in the demo must never leave a screen blank: answer with the error instead.
+    try { return await this.handle(req); } catch (e) {
+      console.error('demo error', req.method, req.path, e);
+      return { status: 500, body: { error: 'demo error', reasons: [`the test drive hit a problem (${(e as Error)?.message ?? e}); Reset the demo on the welcome screen if it keeps happening`] } };
+    }
+  }
+
+  private async handle(req: Request): Promise<Response> {
     const b = (req.json ?? {}) as any;
     const p = req.path.split('?')[0];
     let m: RegExpMatchArray | null;

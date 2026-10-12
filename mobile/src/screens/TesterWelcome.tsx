@@ -49,7 +49,7 @@ const STEPS: [string, string[]][] = [
     'Flags: a van that is short of the list stays flagged until the stockroom tops it up, then closes by itself.',
   ]],
   ['As HR (Precious)', [
-    'Timesheets: daily, weekly or monthly, for one person, a department or everyone, with every job and flag on each sheet. Ayanda has not submitted his last days. Print or save as PDF (one page per sheet, on the letterhead), or download for Excel. In this test drive the browser may block the print window and the download; the real app saves them.',
+    'Timesheets: daily, weekly or monthly, for one person, a department or everyone, with every job and flag on each sheet, and normal time, overtime (1.5×) and double time (Sundays and public holidays). She sets the normal day (8 hours to start). Ayanda has not submitted his last days. Print or save as PDF (one page per sheet, on the letterhead), or download for Excel. In this test drive the browser may block the print window and the download; the real app saves them.',
     'People: set anyone\'s position (technician, admin, department manager, stock controller) and a technician\'s trade. Mechanic, HR, director and CEO stay with the CEO.',
     'Departments: every department with its manager and the technicians under him. Move a technician to another department, or give Plumbing a manager. Each person is in one department; a manager runs one department, so moving Pieter takes him off Refrigeration.',
     'Staff records: open anyone under People to add an issue or a warning, or delete one (a line keeps who deleted it and when).',
