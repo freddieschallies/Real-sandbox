@@ -5,10 +5,13 @@ import { Text, TextInput, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { Body, Button, Card, Heading, Label, Notice, Pill, Select, Toggle, st } from '../ui.tsx';
 import { C } from '../theme.ts';
+import { DeptLogo } from './DeptLogo.tsx';
+import { pickImage } from '../device.ts';
+import { rememberPhoto } from '../photo.ts';
 
 export interface DeptData {
   canManage: boolean;
-  departments: { id: string; name: string; active?: boolean; manager_id: string | null; manager: string | null; technicians: number; staff?: number; van_lines: number }[];
+  departments: { id: string; name: string; active?: boolean; logo_photo_id?: string | null; manager_id: string | null; manager: string | null; technicians: number; staff?: number; van_lines: number }[];
   /** The usual departments not set up yet (Refrigeration, for one), to add with a tap. */
   missing?: string[];
   managers: { id: string; full_name: string; login_level: string }[];
@@ -31,6 +34,7 @@ export function DepartmentsBoard({ openPerson }: { openPerson?: (id: string) => 
   const { d, load } = useDepartments();
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; lines: string[] } | null>(null);
   const [name, setName] = useState('');
+  const [editing, setEditing] = useState<string | null>(null);
   if (!d) return <Body quiet>Loading…</Body>;
   const members = d.members ?? [];
   // Switched-off departments only show in the list of departments the business has.
@@ -39,6 +43,20 @@ export function DepartmentsBoard({ openPerson }: { openPerson?: (id: string) => 
     const r = await s.ask({ method: 'POST', path: '/departments', json: { name: n } });
     if (r && r.status < 300) { setMsg({ tone: 'good', lines: [`${n} department switched on. Give it a manager and technicians.`] }); load(); return true; }
     setMsg({ tone: 'bad', lines: reasons(r) }); return false;
+  };
+  const change = async (x: DeptData['departments'][number], json: { name?: string; logoPhotoId?: string }, done: string) => {
+    const r = await s.ask({ method: 'PUT', path: `/departments/${x.id}`, json });
+    if (r && r.status < 300) { setMsg({ tone: 'good', lines: [done] }); load(); return true; }
+    setMsg({ tone: 'bad', lines: reasons(r) }); return false;
+  };
+  const newLogo = async (x: DeptData['departments'][number]) => {
+    const p = await pickImage();
+    if (!p) return;
+    const id = s.newId();
+    rememberPhoto(s, id, p.uri);
+    const up = await s.ask({ method: 'POST', path: '/photos', upload: { fields: { kind: 'logo', takenAt: new Date().toISOString(), id }, fileUri: p.uri, mime: p.mime } });
+    if (!up || up.status >= 300) { setMsg({ tone: 'bad', lines: ['The logo could not be sent: try again with signal.'] }); return; }
+    await change(x, { logoPhotoId: id }, `${x.name} has a new logo.`);
   };
   const toggle = async (x: DeptData['departments'][number], v: boolean) => {
     const r = await s.ask({ method: 'PUT', path: `/departments/${x.id}`, json: { active: v } });
@@ -80,10 +98,13 @@ export function DepartmentsBoard({ openPerson }: { openPerson?: (id: string) => 
         const office = members.filter(m => m.department_id === x.id && !['technician', 'management'].includes(m.login_level));
         return (
           <Card key={x.id} accessibilityLabel={`Department ${x.name}`}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <DeptLogo name={x.name} photoId={x.logo_photo_id} size={40} />
               <Text style={{ color: C.text, fontSize: 20, fontWeight: '800', flex: 1 }}>{x.name}</Text>
               {!x.manager_id ? <Pill text="No manager" tone="warn" /> : null}
+              {d.canManage ? <Button label="Edit" kind="quiet" onPress={() => setEditing(editing === x.id ? null : x.id)} /> : null}
             </View>
+            {d.canManage && editing === x.id ? <EditDept x={x} rename={n => change(x, { name: n }, `${x.name} is now called ${n}, everywhere.`)} logo={() => newLogo(x)} /> : null}
             {d.canManage ? (
               <Select label={`Manager of ${x.name}`} value={x.manager_id ?? ''} placeholder="No manager yet"
                 options={[...managers.map(m => ({ value: m.id, label: `${m.full_name}${m.department_id && m.department_id !== x.id ? ` (now ${d.departments.find(y => y.id === m.department_id)?.name ?? 'elsewhere'})` : ''}` })), { value: '', label: 'No manager' }]}
@@ -130,5 +151,20 @@ export function DepartmentsBoard({ openPerson }: { openPerson?: (id: string) => 
         </Card>
       ) : null}
     </>
+  );
+}
+
+/** HR or the CEO renames a department or changes its logo; it changes in every list and screen. */
+function EditDept({ x, rename, logo }: { x: DeptData['departments'][number]; rename: (n: string) => Promise<boolean>; logo: () => void }) {
+  const [n, setN] = useState(x.name);
+  return (
+    <View style={{ gap: 8, borderTopWidth: 1, borderTopColor: C.line, paddingTop: 8 }}>
+      <Label>Name</Label>
+      <TextInput value={n} onChangeText={setN} style={st.input} accessibilityLabel={`New name for ${x.name}`} placeholderTextColor={C.quiet} />
+      <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+        <Button label="Save name" kind="secondary" disabled={n.trim().length < 2 || n.trim() === x.name} onPress={() => rename(n.trim())} />
+        <Button label={x.logo_photo_id ? 'Change the logo' : 'Add a logo'} kind="secondary" onPress={logo} />
+      </View>
+    </View>
   );
 }

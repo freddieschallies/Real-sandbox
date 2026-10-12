@@ -22,6 +22,8 @@ export interface Profile {
   record?: { read: boolean; write: boolean };
   departmentId?: string | null; manager?: string | null; team?: { id: string; full_name: string; department: string }[];
   kit?: { read: boolean; write: boolean };
+  /** HR or the CEO may end this person's employment. */ canTerminate?: boolean;
+  status?: string;
 }
 
 const time = (iso: string) => new Date(iso).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' });

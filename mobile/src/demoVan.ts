@@ -6,7 +6,7 @@ import type { Flag } from './types.ts';
 import type { DemoOfficeState } from './demoOffice.ts';
 import type { DemoStockState } from './demoStock.ts';
 
-export interface DemoDepartment { id: string; name: string; managerId: string | null; active?: boolean }
+export interface DemoDepartment { id: string; name: string; managerId: string | null; active?: boolean; logoPhotoId?: string | null }
 export interface DemoVanState {
   departments: DemoDepartment[];
   /** Department of each person (technicians mostly). */
@@ -38,7 +38,7 @@ const bad = (status: number, ...reasons: string[]): Res => ({ ok: false, status,
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 export class DemoVan {
-  constructor(public v: DemoVanState, private o: DemoOfficeState, private st: DemoStockState, private flags: Flag[]) {}
+  constructor(public v: DemoVanState, private o: DemoOfficeState, private st: DemoStockState, private flags: Flag[]) { this.syncNames(); }
 
   private name(id: string | null) { return id ? this.o.people.find(p => p.id === id)?.full_name ?? id : null; }
   private person(id: string) { return this.o.people.find(p => p.id === id); }
@@ -102,7 +102,7 @@ export class DemoVan {
     return {
       canManage,
       missing: STANDARD_DEPARTMENTS.filter(x => !this.v.departments.some(d => d.name.toLowerCase() === x.name.toLowerCase())).map(x => x.name),
-      departments: [...this.v.departments].sort((a, b) => a.name.localeCompare(b.name)).map(d => ({ id: d.id, name: d.name, active: d.active !== false, manager_id: d.managerId, manager: this.name(d.managerId), technicians: this.techsIn(d.id).length, staff: Object.entries(this.v.memberOf).filter(([u, dep]) => dep === d.id && this.person(u)).length, van_lines: Object.keys(this.v.lists[d.id] ?? {}).length })),
+      departments: [...this.v.departments].sort((a, b) => a.name.localeCompare(b.name)).map(d => ({ id: d.id, name: d.name, active: d.active !== false, logo_photo_id: d.logoPhotoId ?? null, manager_id: d.managerId, manager: this.name(d.managerId), technicians: this.techsIn(d.id).length, staff: Object.entries(this.v.memberOf).filter(([u, dep]) => dep === d.id && this.person(u)).length, van_lines: Object.keys(this.v.lists[d.id] ?? {}).length })),
       managers: this.o.people.filter(p => ['management', 'director', 'creator'].includes(p.login_level)).map(p => ({ id: p.id, full_name: p.full_name, login_level: p.login_level })),
       members: this.o.people.filter(p => !['director', 'creator'].includes(p.login_level)).sort((a, b) => a.full_name.localeCompare(b.full_name))
         .map(p => ({ id: p.id, full_name: p.full_name, login_level: p.login_level, trade: p.trade ?? null, department_id: this.v.memberOf[p.id] ?? null })),
@@ -138,7 +138,9 @@ export class DemoVan {
     if (b.managerId) this.makeManager(b.managerId, id);
     return good({ id });
   }
-  updateDept(id: string, b: { name?: string; managerId?: string | null; active?: boolean }): Res {
+  /** Each person's department as the office lists show it: always the department's current name. */
+  private syncNames() { for (const p of this.o.people) { const d = this.deptOf(p.id); if (d) p.department = d.name; } }
+  updateDept(id: string, b: { name?: string; managerId?: string | null; active?: boolean; logoPhotoId?: string | null }): Res {
     const d = this.dept(id);
     if (!d) return bad(404, 'no such department');
     if (b.active === false && d.active !== false) {
@@ -153,7 +155,9 @@ export class DemoVan {
       if (name.length < 2) return bad(400, 'the department name');
       if (this.v.departments.some(x => x.id !== id && x.name.toLowerCase() === name.toLowerCase())) return bad(409, `there is already a ${name} department`);
       d.name = name;
+      this.syncNames();
     }
+    if (b.logoPhotoId !== undefined) d.logoPhotoId = b.logoPhotoId;
     let replaced: string | null = null;
     if (b.managerId) replaced = this.makeManager(b.managerId, id);
     else if (b.managerId === null && d.managerId) { if (this.person(d.managerId)?.login_level === 'management') this.v.memberOf[d.managerId] = null; d.managerId = null; }
@@ -170,6 +174,7 @@ export class DemoVan {
       return good({ userId, departmentId, manages: departmentId, replaced, van: null });
     }
     this.v.memberOf[userId] = departmentId;
+    this.syncNames();
     const r = this.check(userId, by);
     return good({ userId, departmentId, manages: null, replaced: null, van: { complete: r.complete, shortLines: r.shortLines } });
   }
@@ -183,7 +188,7 @@ export class DemoVan {
       .sort((a, b) => Number(editable(b.id)) - Number(editable(a.id)) || a.name.localeCompare(b.name));
     return {
       departments: depts.map(d => ({
-        id: d.id, name: d.name, manager: this.name(d.managerId), canEdit: editable(d.id),
+        id: d.id, name: d.name, logo_photo_id: d.logoPhotoId ?? null, manager: this.name(d.managerId), canEdit: editable(d.id),
         lines: Object.entries(this.v.lists[d.id] ?? {}).map(([id, qty]) => { const it = this.item(id)!; return { stockItemId: id, code: it.code, description: it.description, unit: it.unit, qty }; })
           .sort((a, b) => a.description.localeCompare(b.description)),
         techs: this.techsIn(d.id).map(t => { const r = this.report(t.id); return { id: t.id, full_name: t.full_name, complete: r.complete, shortLines: r.shortLines }; }),

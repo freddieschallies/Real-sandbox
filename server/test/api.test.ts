@@ -1274,7 +1274,8 @@ test('HR: puts technicians and department managers in one department each, keeps
   assert.equal(me.work.hr, true);
   assert.equal(me.work.jobs, false);
   assert.equal((await call('hr', 'GET', '/people')).status, 200, 'HR sees people');
-  assert.equal((await call('hr', 'GET', `/people/${ids.tech}`)).body.personal, null, 'personal details stay with the CEO');
+  assert.ok((await call('hr', 'GET', `/people/${ids.tech}`)).body.personal, 'HR keeps the personal details too');
+  assert.equal((await call('manager', 'GET', `/people/${ids.tech}`)).body.personal, null, 'not the department manager');
   assert.equal((await call('hr', 'GET', `/people/${ids.tech}/record`)).status, 200, 'and the staff records');
   assert.equal((await call('hr', 'GET', '/office/overview')).status, 403, 'not jobs');
   // HR sets technician, admin, department manager and stock controller; the rest stay with the CEO.
@@ -1467,6 +1468,17 @@ test('departments: switched off and on; people moved out first; nobody put in on
   assert.ok(!after.missing.includes('Service'), 'set up, just off');
   assert.equal((await call('director', 'PUT' as 'POST', `/access/users/${ids.tech2}/department`, { departmentId: svc.body.id })).status, 409, 'nobody into a department that is off');
   assert.ok(!(await call('director', 'GET', '/van-stock')).body.departments.some((x: { id: string }) => x.id === svc.body.id), 'no van list for a department that is off');
+  // HR renames a department and gives it a logo; every list shows the new name.
+  assert.equal((await call('hr', 'PUT' as 'POST', `/departments/${ids.dept}`, { name: 'Cold rooms' })).status, 200);
+  assert.equal((await call('director', 'GET', `/people/${ids.tech}`)).body.department, 'Cold rooms', 'the profile shows the new name');
+  assert.ok((await call('director', 'GET', '/van-stock')).body.departments.some((x: { name: string }) => x.name === 'Cold rooms'), 'so do the van stock lists');
+  const pic = await upload('hr', '/photos', { kind: 'vehicle_front', takenAt: '2026-10-12T08:00:00+02:00' });
+  assert.equal((await call('hr', 'PUT' as 'POST', `/departments/${ids.dept}`, { logoPhotoId: pic.body.id })).status, 400, 'a logo picture only');
+  const logo = await upload('hr', '/photos', { kind: 'logo', takenAt: '2026-10-12T08:00:00+02:00' });
+  assert.equal((await call('hr', 'PUT' as 'POST', `/departments/${ids.dept}`, { logoPhotoId: logo.body.id })).status, 200);
+  assert.equal((await call('director', 'GET', `/people/${ids.tech}`)).body.departmentLogo, logo.body.id);
+  assert.equal((await call('admin', 'PUT' as 'POST', `/departments/${ids.dept}`, { name: 'X dept' })).status, 403, 'not the admin');
+  await call('hr', 'PUT' as 'POST', `/departments/${ids.dept}`, { name: 'Refrigeration' });
   const on = await call('hr', 'POST', '/departments', { name: 'service' });
   assert.equal(on.status, 200); assert.equal(on.body.id, svc.body.id, 'adding it again switches the same one back on');
   assert.equal((await call('hr', 'POST', '/departments', { name: 'Service' })).status, 409, 'already there');
@@ -1488,6 +1500,62 @@ test('timesheets: only the CEO fills in one the technician did not submit, marke
   assert.ok(sheet.technicians[0].days[0].submitted.filledBy, 'shows who filled it in');
   assert.equal((await call('director', 'GET', `/timesheets?from=${date}&to=${date}`)).body.canFill, true);
   assert.equal((await db.query("SELECT count(*)::int AS n FROM notifications WHERE recipient_id = $1 AND kind = 'timesheet'", [ids.tech2])).rows[0].n, 1, 'the technician is told');
+});
+
+test('HR edits profiles and ends employment: the person leaves every list, the login stops, and HR keeps the record', async () => {
+  assert.equal((await call('hr', 'GET', `/people/${ids.tech2}`)).body.canEdit, true, 'HR edits profiles');
+  assert.ok((await call('hr', 'GET', `/people/${ids.tech2}`)).body.personal, 'and sees personal details');
+  assert.equal((await call('hr', 'PUT' as 'POST', `/people/${ids.tech2}/profile`, { phone: '082 000 1111', emergencyName: 'Mother' })).status, 200);
+  assert.equal((await call('admin', 'PUT' as 'POST', `/people/${ids.tech2}/profile`, { phone: '1' })).status, 403, 'not the admin');
+  // Someone to let go: a new technician with a pair of boots on his name.
+  const leaver = (await db.query("INSERT INTO users (full_name, email, login_level, password_hash) VALUES ('Leaver Tech', 'leaver@zsp.test', 'technician', $1) RETURNING id", [await hashPassword(PW)])).rows[0].id;
+  await db.query("INSERT INTO logins (email, user_id, company_id) VALUES ('leaver@zsp.test', $1, $2)", [leaver, ids.company]);
+  await db.query("INSERT INTO person_kit (user_id, kind, name, issued_by) VALUES ($1, 'ppe', 'Safety boots', $2)", [leaver, ids.hr]);
+  assert.equal((await call('admin', 'POST', `/people/${leaver}/terminate`, { date: '2026-10-12', reason: 'resigned' })).status, 403, 'not the admin');
+  assert.equal((await call('hr', 'POST', `/people/${ids.director}/terminate`, { date: '2026-10-12', reason: 'resigned' })).status, 403, 'not the CEO');
+  assert.equal((await call('hr', 'POST', `/people/${leaver}/terminate`, { date: '2026-10-12', reason: 'other' })).status, 400, 'other needs a reason');
+  const t = await call('hr', 'POST', `/people/${leaver}/terminate`, { date: '2026-10-12', reason: 'resigned', note: 'Moved to Durban' });
+  assert.equal(t.status, 200);
+  assert.equal(t.body.onName.kit.length, 1, 'what is still on his name is kept');
+  assert.equal((await call('hr', 'POST', `/people/${leaver}/terminate`, { date: '2026-10-12', reason: 'resigned' })).status, 409, 'once');
+  assert.ok(!(await call('director', 'GET', '/people')).body.people.some((x: { id: string }) => x.id === leaver), 'off the people list');
+  assert.ok(!(await call('hr', 'GET', '/departments')).body.members.some((x: { id: string }) => x.id === leaver), 'off the departments');
+  assert.equal((await call('', 'POST', '/auth/login', { email: 'leaver@zsp.test', password: PW })).status, 401, 'the login stops');
+  const gone = (await call('hr', 'GET', '/people/terminated')).body;
+  assert.equal(gone[0].full_name, 'Leaver Tech'); assert.equal(gone[0].reasonLabel, 'Resigned'); assert.equal(gone[0].items_on_name, 1);
+  assert.equal((await call('admin', 'GET', '/people/terminated')).status, 403);
+  const prof = (await call('hr', 'GET', `/people/${leaver}`)).body;
+  assert.equal(prof.termination.reason, 'resigned'); assert.equal(prof.canEdit, false, 'the record stays as it was');
+  assert.equal((await call('hr', 'GET', `/people/${leaver}/record`)).status, 200, 'his staff record is still there');
+  assert.equal((await db.query("SELECT count(*)::int AS n FROM notifications WHERE kind = 'terminated'")).rows[0].n, 1, 'the stockroom is told to collect');
+  await assert.rejects(db.query('DELETE FROM terminations WHERE user_id = $1', [leaver]), 'the record cannot be deleted');
+});
+
+test('technicians submit quotes: on a job not finished, or from scratch with a job card for reference; the office prices and sends', async () => {
+  const open = await call('admin', 'POST', '/jobs', { jobType: 'breakdown', storeId: ids.store, faultReported: 'Cold room door seal torn', scheduledDate: '2026-10-13', leadTechnicianId: ids.tech });
+  const opts = (await call('tech', 'GET', '/me/quote-options')).body;
+  assert.ok(opts.stores.some((x: { id: string }) => x.id === ids.store), 'the stores to quote for');
+  assert.ok(opts.jobs.some((x: { id: string; open: boolean }) => x.id === open.body.id && x.open), 'his open jobs');
+  assert.ok(opts.jobs.some((x: { id: string; open: boolean }) => x.id === ids.job && !x.open), 'and his finished ones, for reference');
+  assert.equal((await call('admin', 'GET', '/me/quote-options')).body.stores.length > 0, true);
+  const work = { labourHours: 2, stockLines: [{ stockItemId: ids.seal, qty: 1 }], boughtOutLines: [{ description: 'Door gasket 1.8 m', qty: 1, estimatedPriceCents: 85000 }] };
+  assert.equal((await call('tech', 'POST', '/me/quotes', { jobId: open.body.id, title: 'Replace door seal' })).status, 400, 'the work is needed');
+  assert.equal((await call('tech2', 'POST', '/me/quotes', { jobId: open.body.id, title: 'Replace door seal', ...work })).status, 403, 'only on his own jobs');
+  assert.equal((await call('tech', 'POST', '/me/quotes', { jobId: ids.job, title: 'More work', ...work })).status, 409, 'not on a finished job');
+  const onJob = await call('tech', 'POST', '/me/quotes', { jobId: open.body.id, title: 'Replace door seal', notes: 'Seal torn along the bottom', ...work });
+  assert.equal(onJob.status, 201);
+  assert.equal((await call('tech2', 'POST', '/me/quotes', { storeId: ids.store, referenceJobId: ids.job, title: 'New fridge', ...work })).status, 403, 'link his own job cards only');
+  const fresh = await call('tech', 'POST', '/me/quotes', { storeId: ids.store, referenceJobId: ids.job, title: 'Second ice machine for the deli', ...work });
+  assert.equal(fresh.status, 201);
+  const list = (await call('admin', 'GET', '/quotes')).body;
+  const q1 = list.find((x: { id: string }) => x.id === onJob.body.id);
+  assert.equal(q1.from_technician, true); assert.equal(q1.status, 'draft', 'a draft for the office');
+  const q2 = (await call('admin', 'GET', `/quotes/${fresh.body.id}`)).body;
+  assert.equal(q2.quote.reference_job_number, list.find((x: { id: string }) => x.id === fresh.body.id).reference_job_number);
+  assert.ok(q2.quote.reference_job_number, 'the job card linked for reference');
+  assert.equal(q2.lines.find((l: { kind: string }) => l.kind === 'bought_out').unit_price_cents ?? q2.lines.find((l: { kind: string }) => l.kind === 'bought_out').unitPriceCents, 85000);
+  assert.equal((await call('tech', 'GET', '/me/quotes')).body.length, 2, 'he sees what he submitted');
+  assert.equal((await call('mech', 'POST', '/me/quotes', { storeId: ids.store, title: 'x', ...work })).status, 403, 'not the mechanic');
 });
 
 test('phone menus: the CEO or an admin pins tabs per position; everyone gets their own position\'s choice', async () => {
@@ -1543,7 +1611,7 @@ test('the CEO decides access: changes apply at once, are logged, and nobody can 
   assert.equal(lock.status, 409);
   assert.equal((await call('creator', 'PUT', '/access/levels/director/manage_access', { effect: 'default' })).status, 200);
   assert.equal((await call('director', 'GET', '/access/catalogue')).status, 200);
-  const log = { body: (await call('director', 'GET', '/access/changes')).body.filter((c: { action: string }) => !c.action.startsWith('work:') && !['position', 'fleet_duty', 'stock_duty', 'trade', 'department'].includes(c.action)) };
+  const log = { body: (await call('director', 'GET', '/access/changes')).body.filter((c: { action: string }) => !c.action.startsWith('work:') && !['position', 'fleet_duty', 'stock_duty', 'trade', 'department', 'terminated'].includes(c.action)) };
   assert.equal(log.body.length, 3, 'every change is in the history');
   assert.equal(log.body[2].change, 'granted (all departments)');
 });

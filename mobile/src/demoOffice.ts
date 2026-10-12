@@ -41,6 +41,11 @@ function seedProfiles(): Record<string, DemoProfile> {
   ]);
 }
 
+export interface DemoLeaver {
+  person: DemoPerson; date: string; reason: string; note: string | null; position: string; department: string | null; by: string;
+  onName: { kit: { kind: string; name: string; detail: string | null; qty: number }[]; stock: { code: string; description: string; qty: number }[] };
+}
+export const END_REASONS: Record<string, string> = { resigned: 'Resigned', dismissed: 'Dismissed', retrenched: 'Retrenched', contract_ended: 'Contract ended', retired: 'Retired', other: 'Other' };
 export interface DemoRecord { id: string; employeeId: string; type: string; happenedOn: string; what: string; action: string | null; reason: string | null; author: string; createdAt: string }
 export const ENTRY_TYPES: Record<string, string> = {
   observation: 'Issue / note', verbal_warning: 'Verbal warning', written_warning: 'Written warning', final_written_warning: 'Final written warning', commendation: 'Commendation',
@@ -62,6 +67,8 @@ export interface DemoOfficeState {
   changes: { at: string; by: string; person: string; action: string; change: string }[];
   /** Work the CEO switched on or off per person, over what their position gives. */
   work?: Record<string, Partial<Record<WorkArea, boolean>>>;
+  /** People whose employment ended: off every list, kept for HR with the record. */
+  leavers?: DemoLeaver[];
   /** Contact and personal details per person (made-up demo numbers). */
   profiles?: Record<string, DemoProfile>;
   /** Staff records: CEO and HR only. */
@@ -272,10 +279,11 @@ export class DemoOffice {
   /** One person's profile; `crew` says who is in which vehicle, `spot` where a vehicle is. */
   profile(id: string, canEdit: boolean, flags: { record: { read: boolean; write: boolean }; kit: { read: boolean; write: boolean } }, crew: { id: string; full_name: string; vehicle_id: string | null; registration: string | null; mode: 'driving' | 'riding_along' | null }[],
     spot: (vehicleId: string) => { lat: number | null; lng: number | null; speed_kmh: number | null; ignition: boolean | null; minutesAgo: number | null } | null): Res {
-    const p = this.o.people.find(x => x.id === id);
+    const left = this.o.leavers?.find(l => l.person.id === id);
+    const p = this.o.people.find(x => x.id === id) ?? left?.person;
     if (!p) return bad(404, 'no such person');
     const f = { ...blank(), ...this.profiles()[id] };
-    const mine = crew.find(c => c.id === id);
+    const mine = left ? undefined : crew.find(c => c.id === id);
     const open = this.src.jobs.filter(j => !['closed', 'cancelled'].includes(j.card.status) && ((j.meta.lead_id ?? 'me') === id || (j.meta.helper_ids ?? []).includes(id)));
     const rank = (st: string) => (st === 'in_progress' ? 0 : st === 'continue_later' ? 1 : 2);
     const j = open.sort((a, b) => rank(a.card.status) - rank(b.card.status) || a.meta.scheduled_date.localeCompare(b.meta.scheduled_date))[0];
@@ -306,7 +314,9 @@ export class DemoOffice {
 
   private recs() { return this.o.records ?? (this.o.records = seedRecords()); }
   record(id: string, canWrite: boolean): Res {
-    if (!this.o.people.some(p => p.id === id)) return bad(404, 'no such person');
+    const left = (this.o.leavers ?? []).some(l => l.person.id === id);
+    if (!this.o.people.some(p => p.id === id) && !left) return bad(404, 'no such person');
+    if (left) canWrite = false;
     const entries = this.recs().filter(r => r.employeeId === id).sort((a, b) => b.happenedOn.localeCompare(a.happenedOn) || b.createdAt.localeCompare(a.createdAt))
       .map(r => ({ id: r.id, entry_type: r.type, typeLabel: ENTRY_TYPES[r.type] ?? r.type, happened_on: r.happenedOn, what_happened: r.what, action_taken: r.action, reason: r.reason, corrects_entry_id: null, job_number: null, author: r.author, created_at: r.createdAt }));
     const n = (t: string) => entries.filter(e => e.entry_type === t).length;
@@ -384,4 +394,19 @@ export class DemoOffice {
     this.o.changes.unshift({ at: new Date().toISOString(), by: this.name('office'), person: p.full_name, action: `work:${area}`, change: `${WORK_AREAS[area]}: ${on ? 'on' : 'off'}` });
     return good({ userId: id, area, on, work: this.workOf(id) });
   }
+}
+
+export function terminate(o: DemoOfficeState, id: string, b: { date?: string; reason?: string; note?: string }, by: string, openJobs: number[],
+  onName: DemoLeaver['onName'], department: string | null): { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] } {
+  const p = o.people.find(x => x.id === id);
+  if (!p) return (o.leavers ?? []).some(l => l.person.id === id) ? { ok: false, status: 409, reasons: ['already with the terminated staff'] } : { ok: false, status: 404, reasons: ['no such person'] };
+  if (['director', 'creator'].includes(p.login_level)) return { ok: false, status: 403, reasons: ["the CEO's position is not ended here"] };
+  if (!b.date || !/^\d{4}-\d{2}-\d{2}$/.test(b.date)) return { ok: false, status: 400, reasons: ['the last day'] };
+  if (!b.reason || !END_REASONS[b.reason]) return { ok: false, status: 400, reasons: ['why the employment ended'] };
+  if (b.reason === 'other' && (!b.note || b.note.trim().length < 3)) return { ok: false, status: 400, reasons: ['say what the reason is'] };
+  if (openJobs.length) return { ok: false, status: 409, reasons: [`give ${p.full_name.split(' ')[0]}'s open jobs to someone else first: ${openJobs.map(n => `#${n}`).join(', ')}`] };
+  o.people = o.people.filter(x => x.id !== id);
+  (o.leavers ??= []).unshift({ person: p, date: b.date, reason: b.reason, note: b.note?.trim() || null, position: POSITION_LABEL[p.login_level], department, by, onName });
+  o.changes.unshift({ at: new Date().toISOString(), by, person: p.full_name, action: 'terminated', change: `Employment ended ${b.date}: ${END_REASONS[b.reason]}` });
+  return { ok: true, body: { id, status: 'left', onName } };
 }

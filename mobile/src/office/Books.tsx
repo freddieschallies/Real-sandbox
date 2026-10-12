@@ -182,10 +182,11 @@ export function QuoteList({ b, open, add }: { b: Books; open: (id: string) => vo
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <Text style={[st.body, { fontWeight: '800' }]}>Q{q.quote_number}</Text>
             <Text style={[st.body, { flex: 1 }]} numberOfLines={1}>{q.store}</Text>
+            {(q as { from_technician?: boolean }).from_technician && q.status === 'draft' ? <Pill text="From technician" tone="info" /> : null}
             <Pill text={STATUS[q.status]?.t ?? q.status} tone={STATUS[q.status]?.tone ?? 'quiet'} />
           </View>
           <Body numberOfLines={1}>{q.title}</Body>
-          <Text style={st.small}>{q.client}{q.job_number ? ` · job ${q.job_number}` : ''} · {R(q.total_cents)} incl. VAT{q.status === 'sent' && q.valid_until ? ` · valid until ${day(q.valid_until)}` : ''}</Text>
+          <Text style={st.small}>{q.client}{q.job_number ? ` · job ${q.job_number}` : ''}{(q as { reference_job_number?: number | null }).reference_job_number ? ` · see job card ${(q as { reference_job_number?: number }).reference_job_number}` : ''}{(q as { from_technician?: boolean }).from_technician ? ` · by ${(q as { created_by?: string }).created_by}` : ''} · {R(q.total_cents)} incl. VAT{q.status === 'sent' && q.valid_until ? ` · valid until ${day(q.valid_until)}` : ''}</Text>
         </Card>
       ))}
       {!list.length ? <Body quiet>No quotes here.</Body> : null}
@@ -257,7 +258,8 @@ export function QuoteDetail({ b, id, techs }: { b: Books; id: string; techs: { i
         <Pill text={STATUS[q.status]?.t ?? q.status} tone={STATUS[q.status]?.tone ?? 'quiet'} />
         {q.pastel_batch_id ? <Pill text="In Pastel" tone="good" /> : null}
       </View>
-      <Text style={st.small}>{q.client} · {q.store}{q.job_number ? ` · job ${q.job_number}` : ''} · made by {q.created_by_name}</Text>
+      <Text style={st.small}>{q.client} · {q.store}{q.job_number ? ` · job ${q.job_number}` : ''} · {(q as { from_technician?: boolean }).from_technician ? 'submitted from site by' : 'made by'} {q.created_by_name}</Text>
+      {(q as { from_technician?: boolean }).from_technician && q.status === 'draft' ? <Notice tone="info" title="From a technician on site" lines={['Check the work, fill in any missing prices, then send it.', ...((q as { reference_job_number?: number | null }).reference_job_number ? [`He linked job card ${(q as { reference_job_number?: number }).reference_job_number} for reference.`] : [])]} /> : null}
       {q.resulting_job_number ? <Notice tone="good" title={`Accepted: job ${q.resulting_job_number} opened`} lines={q.decision_note ? [q.decision_note] : []} /> : null}
       {q.status === 'declined' ? <Notice tone="bad" title="Declined" lines={[q.decision_note ?? '']} /> : null}
       {draft ? (

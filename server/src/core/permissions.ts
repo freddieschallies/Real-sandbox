@@ -206,6 +206,11 @@ export function workOf(p: Permissions): Record<WorkArea, boolean> {
   return Object.fromEntries(Object.entries(WORK_AREAS).map(([k, a]) => [k, a.actions.every(x => !!p[x as Action])])) as Record<WorkArea, boolean>;
 }
 
+/** Who edits people's profiles (contact and personal details) and ends their employment: the CEO and HR. */
+export function editsProfiles(a: Actor): boolean {
+  return can(a, 'manage_access') || can(a, 'assign_departments');
+}
+
 /**
  * Who may open people's profiles (contact details, where they are). The office does; the stock
  * controller does not: the stockroom sees only names with their stock, tools and PPE.

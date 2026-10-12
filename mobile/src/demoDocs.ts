@@ -9,6 +9,8 @@ export interface DemoQuote {
   id: string; quote_number: number; status: 'draft' | 'sent' | 'accepted' | 'declined' | 'cancelled'; title: string; notes: string | null; client_ref: string | null;
   job_id: string | null; store_id: string | null; created_at: string; sent_at: string | null; valid_until: string | null; accepted_at: string | null; declined_at: string | null;
   decision_note: string | null; resulting_job_id: string | null; created_by: string; vat_pct: number; lines: Line[]; pastel_batch_id: string | null;
+  /** Submitted by a technician (for the office to check, price and send); a job card linked for reference. */
+  from_technician?: boolean; reference_job_id?: string | null; created_by_id?: string;
 }
 export interface DemoInvoice {
   id: string; invoice_number: number; status: 'draft' | 'sent' | 'paid' | 'cancelled'; job_id: string; notes: string | null; client_ref: string | null; created_at: string;
@@ -108,14 +110,14 @@ export class DemoDocs {
       const ex = this.exVat(q.lines);
       return { id: q.id, quote_number: q.quote_number, status: q.status, title: q.title, created_at: q.created_at, sent_at: q.sent_at, valid_until: q.valid_until,
         accepted_at: q.accepted_at, declined_at: q.declined_at, vat_pct: q.vat_pct, job_number: this.job(q.job_id)?.meta.job_number ?? null, job_id: q.job_id, ...this.who(q),
-        created_by: q.created_by, ex_vat_cents: ex, total_cents: D.totals([{ qty: 1, unitPriceCents: ex }], q.vat_pct).totalCents };
+        created_by: q.created_by, from_technician: !!q.from_technician, reference_job_number: this.job(q.reference_job_id ?? null)?.meta.job_number ?? null, ex_vat_cents: ex, total_cents: D.totals([{ qty: 1, unitPriceCents: ex }], q.vat_pct).totalCents };
     }).sort((a, b) => Number(b.status === 'draft') - Number(a.status === 'draft') || b.quote_number - a.quote_number);
   }
   quote(id: string): Res {
     const q = this.d.quotes.find(x => x.id === id);
     if (!q) return bad(404, 'no such quote');
     return good({ quote: { ...q, lines: undefined, job_number: this.job(q.job_id)?.meta.job_number ?? null, ...this.who(q), created_by_name: q.created_by,
-      resulting_job_number: this.job(q.resulting_job_id)?.meta.job_number ?? null }, lines: q.lines, totals: D.totals(q.lines, q.vat_pct), company: this.d.profile });
+      resulting_job_number: this.job(q.resulting_job_id)?.meta.job_number ?? null, reference_job_number: this.job(q.reference_job_id ?? null)?.meta.job_number ?? null, from_technician: !!q.from_technician }, lines: q.lines, totals: D.totals(q.lines, q.vat_pct), company: this.d.profile });
   }
   newQuote(b: { jobId?: string; storeId?: string; title: string; clientRef?: string; notes?: string; lines?: D.DocLine[] }): Res {
     if (!b.jobId && !b.storeId) return bad(400, 'a job or a store');
@@ -127,6 +129,36 @@ export class DemoDocs {
       resulting_job_id: null, created_by: this.src.name, vat_pct: Number(this.d.profile?.vat_pct ?? 15), pastel_batch_id: null,
       lines: (b.lines ?? []).filter(l => l.qty > 0).map(l => ({ ...l, id: nid('dl') })) });
     return good({ id, quoteNumber: number }, 201);
+  }
+  /** A technician's quote: on one of his jobs not finished, or new for a store with a job card for reference. */
+  techQuote(b: { jobId?: string; storeId?: string; referenceJobId?: string; title?: string; notes?: string; labourHours?: number; stockLines?: { stockItemId: string; qty: number }[]; boughtOutLines?: { description: string; qty: number; estimatedPriceCents?: number }[] },
+    tech: { id: string; name: string }, mine: { id: string; status: string }[], part: (id: string) => { description: string; sellingPriceCents: number | null } | null): Res {
+    if (!b.jobId && !b.storeId) return bad(400, 'the job, or the store it is for');
+    if (!b.title || b.title.trim().length < 3) return bad(400, 'what the quote is for');
+    const hours = Number(b.labourHours ?? 0), stock = b.stockLines ?? [], bought = (b.boughtOutLines ?? []).filter(l => l.description?.trim().length >= 2 && l.qty > 0);
+    if (!hours && !stock.length && !bought.length) return bad(400, 'add the work: labour hours, parts or items to buy');
+    if (b.jobId) {
+      const j = mine.find(x => x.id === b.jobId);
+      if (!j) return bad(403, 'you are not on that job');
+      if (j.status === 'closed') return bad(409, 'that job is finished: start a new quote and link the job card for reference');
+    } else if (!this.src.stores.some(x => x.id === b.storeId)) return bad(400, 'unknown store');
+    if (b.referenceJobId && !mine.some(x => x.id === b.referenceJobId)) return bad(403, 'link one of your own job cards');
+    const lines: D.DocLine[] = [];
+    if (hours) lines.push({ kind: 'labour', description: 'Labour', qty: hours, unitPriceCents: this.d.rates.labour_per_hour ?? 0 });
+    for (const l of stock) { const it = part(l.stockItemId); if (!it) return bad(400, 'unknown part'); lines.push({ kind: 'stock', description: it.description, qty: l.qty, unitPriceCents: it.sellingPriceCents ?? 0, stockItemId: l.stockItemId }); }
+    for (const l of bought) lines.push({ kind: 'bought_out', description: l.description.trim(), qty: l.qty, unitPriceCents: Math.max(0, Math.round(l.estimatedPriceCents ?? 0)) });
+    const id = nid('quote');
+    const number = this.d.nextQuote++;
+    this.d.quotes.unshift({ id, quote_number: number, status: 'draft', title: b.title.trim(), notes: b.notes?.trim() || null, client_ref: null, job_id: b.jobId ?? null,
+      store_id: b.jobId ? null : b.storeId ?? null, created_at: new Date().toISOString(), sent_at: null, valid_until: null, accepted_at: null, declined_at: null, decision_note: null,
+      resulting_job_id: null, created_by: tech.name, created_by_id: tech.id, vat_pct: Number(this.d.profile?.vat_pct ?? 15), pastel_batch_id: null,
+      from_technician: true, reference_job_id: b.jobId ? null : b.referenceJobId ?? null, lines: lines.map(l => ({ ...l, id: nid('dl') })) });
+    return good({ id, quoteNumber: number, unpriced: lines.filter(l => !l.unitPriceCents).map(l => l.description) }, 201);
+  }
+  myQuotes(techId: string) {
+    return this.d.quotes.filter(q => q.from_technician && q.created_by_id === techId).map(q => ({
+      id: q.id, quote_number: q.quote_number, status: q.status, title: q.title, created_at: q.created_at, job_number: this.job(q.job_id)?.meta.job_number ?? null,
+      reference_job_number: this.job(q.reference_job_id ?? null)?.meta.job_number ?? null, store: this.who(q).store, ex_vat_cents: this.exVat(q.lines) }));
   }
   editQuote(id: string, b: { title: string; clientRef?: string | null; notes?: string | null; lines: D.DocLine[] }): Res {
     const q = this.d.quotes.find(x => x.id === id);

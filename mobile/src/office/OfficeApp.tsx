@@ -19,6 +19,7 @@ import { DepartmentCard, VanCard, VanLists } from '../vanstock/VanStock.tsx';
 import { TeamMap } from '../team/TeamMap.tsx';
 import { DepartmentsBoard } from '../hr/Departments.tsx';
 import { TimesheetsExport } from '../timesheets/Timesheet.tsx';
+import { EndEmployment, LeaverDetail, TerminatedStaff } from '../hr/Terminated.tsx';
 import { Avatar, ProfileDetails, ProfileTop, useProfile } from './Profile.tsx';
 import { Accounts, InvoiceDetail, InvoiceList, NewQuote, QuoteDetail, QuoteList, useBooks } from './Books.tsx';
 import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries.tsx';
@@ -26,7 +27,7 @@ import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob
 
 const K = { band: '#121212', bandText: '#F7F3EC', stripe: '#E8701A' };
 type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'stores' | 'settings';
-type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | null;
+type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
   cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
@@ -114,7 +115,7 @@ export function OfficeApp() {
       {tab === 'timesheets' ? <TimesheetsExport /> : null}
       {tab === 'departments' ? <DepartmentsBoard openPerson={canPeople ? id => go('people', { kind: 'person', id }) : undefined} /> : null}
       {tab === 'vans' ? <VanLists openTech={id => setSel({ kind: 'van', id })} /> : null}
-      {tab === 'people' ? <PeopleList o={o} open={id => setSel({ kind: 'person', id })} /> : null}
+      {tab === 'people' ? <PeopleList key={`people-${sel?.kind === 'leaver' ? sel.id : ''}`} o={o} open={id => setSel({ kind: 'person', id })} openLeaver={id => setSel({ kind: 'leaver', id })} /> : null}
       {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
       {tab === 'settings' ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
@@ -137,7 +138,9 @@ export function OfficeApp() {
     if (sel.kind === 'flag') return wrap(<FlagDetail key={sel.id} id={sel.id} o={o} done={close} />);
     if (sel.kind === 'handover') return wrap(<HandoverDetail key={sel.id} id={sel.id} o={o} done={close} />);
     if (sel.kind === 'van') return wrap(<><Heading>{o.d.people?.people.find(y => y.id === sel.id)?.full_name ?? 'Van'}</Heading><VanCard key={sel.id} userId={sel.id} /></>);
-    if (sel.kind === 'person') return wrap(<PersonDetail key={sel.id} id={sel.id} o={o} ask={does('jobs') ? toId => setSel({ kind: 'newquery', toId }) : undefined} />);
+    if (sel.kind === 'person') return wrap(<PersonDetail key={sel.id} id={sel.id} o={o} ask={does('jobs') ? toId => setSel({ kind: 'newquery', toId }) : undefined}
+      ended={() => { o.load(); setSel({ kind: 'leaver', id: sel.id }); }} />);
+    if (sel.kind === 'leaver') return wrap(<LeaverDetail key={sel.id} id={sel.id} />);
     return wrap(<NewStore o={o} done={close} />);
   })();
 
@@ -663,7 +666,7 @@ function HandoverDetail({ id, o, done }: { id: string; o: OfficeHook; done: () =
 
 // ---- People (the CEO's positions) -------------------------------------------------------------------
 
-function PeopleList({ o, open }: { o: OfficeHook; open: (id: string) => void }) {
+function PeopleList({ o, open, openLeaver }: { o: OfficeHook; open: (id: string) => void; openLeaver: (id: string) => void }) {
   const p = o.d.people;
   const [q, setQ] = useState('');
   if (!p) return <Body quiet>Loading…</Body>;
@@ -685,11 +688,12 @@ function PeopleList({ o, open }: { o: OfficeHook; open: (id: string) => void }) 
           ))}
         </View>
       ))}
+      {p.canManage || p.canSetPositions ? <TerminatedStaff open={openLeaver} /> : null}
     </>
   );
 }
 
-function PersonDetail({ id, o, ask }: { id: string; o: OfficeHook; ask?: (toId: string) => void }) {
+function PersonDetail({ id, o, ask, ended }: { id: string; o: OfficeHook; ask?: (toId: string) => void; ended: () => void }) {
   const p = o.d.people;
   const x = p?.people.find(y => y.id === id);
   const [ans, setAns] = useState<Answer | null>(null);
@@ -748,6 +752,7 @@ function PersonDetail({ id, o, ask }: { id: string; o: OfficeHook; ask?: (toId: 
           })}
         </Card>
       )}
+      {prof.p?.canTerminate ? <EndEmployment id={x.id} name={x.full_name} done={ended} /> : null}
     </>
   );
 }

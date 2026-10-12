@@ -133,6 +133,8 @@ export function Job({ jobId }: { jobId: string }) {
         <Button label="Store manager sign-off" onPress={() => nav.push({ name: 'signoff', jobId })} />
       ) : null}
 
+      {state !== 'closed' && v.status !== 'closed' ? <Button label="Submit a quote for this job" kind="quiet" onPress={() => nav.push({ name: 'quote', jobId })} /> : null}
+
       {state === 'closed' ? <Notice tone="good" title="Job closed and locked" lines={[v.manager_name ? `Signed by ${v.manager_name}` : 'Closed without signature – the office has been told.']} /> : null}
     </Screen>
   );

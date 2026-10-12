@@ -47,7 +47,7 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
   app.get('/departments', async req => {
     if (!seesPeople(req.actor) && !can(req.actor, 'assign_stock')) throw new Refused(403, ['departments are not part of your work']);
     const departments = (await req.db.query(
-      `SELECT d.id, d.name, d.active, d.manager_id, m.full_name AS manager,
+      `SELECT d.id, d.name, d.active, d.logo_photo_id, d.manager_id, m.full_name AS manager,
               (SELECT count(*) FROM users u WHERE u.department_id = d.id AND u.login_level = 'technician' AND u.status <> 'left')::int AS technicians,
               (SELECT count(*) FROM users u WHERE u.department_id = d.id AND u.status <> 'left')::int AS staff,
               (SELECT count(*) FROM van_stock_lists l WHERE l.department_id = d.id)::int AS van_lines
@@ -64,7 +64,7 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
     return { canManage: assigns(req.actor), departments, managers, members, missing };
   });
 
-  const Dept = z.object({ name: z.string().trim().min(2, 'the department name').max(60), managerId: Uuid.nullish(), active: z.boolean().optional() });
+  const Dept = z.object({ name: z.string().trim().min(2, 'the department name').max(60), managerId: Uuid.nullish(), active: z.boolean().optional(), logoPhotoId: Uuid.nullish() });
   async function checkManager(c: Q, managerId: string | null | undefined) {
     if (!managerId) return;
     const m = (await c.query("SELECT login_level FROM users WHERE id = $1 AND status <> 'left'", [managerId])).rows[0];
@@ -107,6 +107,11 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
       if (b.name && (await c.query('SELECT 1 FROM departments WHERE lower(name) = lower($1) AND id <> $2', [b.name, id])).rowCount) throw new Refused(409, [`there is already a ${b.name} department`]);
       if (b.name) await c.query('UPDATE departments SET name = $2 WHERE id = $1', [id, b.name]);
       if (b.active !== undefined) await c.query('UPDATE departments SET active = $2 WHERE id = $1', [id, b.active]);
+      if (b.logoPhotoId !== undefined) {
+        // A department's logo is a logo picture, like the company's: everyone in the company may see it.
+        if (b.logoPhotoId && (await c.query("SELECT kind FROM photos WHERE id = $1", [b.logoPhotoId])).rows[0]?.kind !== 'logo') throw new Refused(400, ['upload the picture as a logo first']);
+        await c.query('UPDATE departments SET logo_photo_id = $2 WHERE id = $1', [id, b.logoPhotoId]);
+      }
       let replaced: string | null = null;
       if (b.managerId) replaced = await makeManager(c, b.managerId, id);
       else if (b.managerId === null && d.manager_id) {
@@ -153,7 +158,7 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
     if (!all && !scope) throw new Refused(403, ['van stock lists are not part of your work']);
     return tx(req.db, async c => {
       const depts = (await c.query(
-        `SELECT d.id, d.name, m.full_name AS manager FROM departments d LEFT JOIN users m ON m.id = d.manager_id
+        `SELECT d.id, d.name, d.logo_photo_id, m.full_name AS manager FROM departments d LEFT JOIN users m ON m.id = d.manager_id
           WHERE d.active AND ($1::boolean OR d.id = ANY($2)) ORDER BY (d.id = ANY($2)) DESC, d.name`, [all, scope === 'all' ? [] : scope ?? []])).rows;
       const out = [];
       for (const d of depts) {

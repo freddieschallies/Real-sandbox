@@ -3,7 +3,9 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { audit, tx, type Q } from '../db.ts';
-import { POSITION_LABEL, TRADES, can, departmentsFor, type LoginLevel, type Trade, seesPeople } from '../core/permissions.ts';
+import { POSITION_LABEL, TRADES, can, departmentsFor, editsProfiles, type LoginLevel, type Trade, seesPeople } from '../core/permissions.ts';
+import { vanOf } from '../vanRepo.ts';
+import { notify } from './field.ts';
 import { DateOnly, Refused, Uuid, parse } from '../http.ts';
 import { kitAllowed, recordsAllowed } from './staff.ts';
 
@@ -17,7 +19,7 @@ export function registerPeopleRoutes(app: FastifyInstance) {
     const id = parse(Uuid, req.params.id);
     const db = req.db;
     const u = (await db.query(
-      `SELECT u.id, u.full_name, u.email, u.phone, u.login_level, u.trade, u.status, u.department_id, d.name AS department, p.photo_id, p.emergency_name, p.emergency_phone,
+      `SELECT u.id, u.full_name, u.email, u.phone, u.login_level, u.trade, u.status, u.department_id, d.name AS department, d.logo_photo_id AS department_logo, p.photo_id, p.emergency_name, p.emergency_phone,
               p.id_number, to_char(p.date_of_birth, 'YYYY-MM-DD') AS date_of_birth, p.home_address, to_char(p.start_date, 'YYYY-MM-DD') AS start_date, p.notes
          FROM users u LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.id = $1`, [id])).rows[0];
     if (u) {
@@ -30,14 +32,20 @@ export function registerPeopleRoutes(app: FastifyInstance) {
     if (!u) throw new Refused(404, ['no such person']);
 
     const now = await nowOf(db, id);
-    const personal = can(req.actor, 'manage_access');
+    // The CEO and HR see and edit personal details; HR keeps the record of someone who has left.
+    const personal = editsProfiles(req.actor);
+    const termination = u.status === 'left' ? (await db.query(
+      `SELECT to_char(t.terminated_on, 'YYYY-MM-DD') AS date, t.reason, t.note, t.position, t.department, t.on_name, b.full_name AS by
+         FROM terminations t JOIN users b ON b.id = t.terminated_by WHERE t.user_id = $1`, [id])).rows[0] ?? null : null;
     return {
       id: u.id, full_name: u.full_name, position: POSITION_LABEL[u.login_level as LoginLevel], login_level: u.login_level, trade: u.trade,
-      tradeLabel: u.trade ? TRADES[u.trade as Trade] : null, department: u.department, departmentId: u.department_id, manager: u.manager, team: u.team, status: u.status, photo_id: u.photo_id,
+      tradeLabel: u.trade ? TRADES[u.trade as Trade] : null, department: u.department, departmentId: u.department_id, departmentLogo: u.department_logo ?? null, manager: u.manager, team: u.team, status: u.status, photo_id: u.photo_id,
       now,
       contact: { phone: u.phone, email: u.email, emergency_name: u.emergency_name, emergency_phone: u.emergency_phone },
       personal: personal ? { id_number: u.id_number, date_of_birth: u.date_of_birth, home_address: u.home_address, start_date: u.start_date, notes: u.notes } : null,
-      canEdit: personal,
+      canEdit: personal && u.status !== 'left',
+      canTerminate: personal && u.status !== 'left' && !['director', 'creator'].includes(u.login_level) && u.id !== req.actor.id,
+      termination: termination && (personal || can(req.actor, 'manage_access')) ? termination : termination ? { date: termination.date } : null,
       record: recordsAllowed(req.actor, { id: u.id, department_id: u.department_id }),
       kit: kitAllowed(req.actor, u.id),
     };
@@ -65,7 +73,7 @@ export function registerPeopleRoutes(app: FastifyInstance) {
   });
 
   app.put('/people/:id/profile', async (req: FastifyRequest<{ Params: { id: string } }>) => {
-    if (!can(req.actor, 'manage_access')) throw new Refused(403, ['only whoever manages access edits profiles']);
+    if (!editsProfiles(req.actor)) throw new Refused(403, ['only HR or the CEO edits profiles']);
     const id = parse(Uuid, req.params.id);
     const t = (n: number) => z.string().trim().max(n).nullish();
     const b = parse(z.object({
@@ -92,6 +100,56 @@ export function registerPeopleRoutes(app: FastifyInstance) {
       await audit(c, req.actor.id, 'profile_edited', 'user', id, { fields: Object.keys(b).filter(k => (b as Record<string, unknown>)[k] !== undefined) });
       return { id };
     });
+  });
+}
+
+const REASONS = { resigned: 'Resigned', dismissed: 'Dismissed', retrenched: 'Retrenched', contract_ended: 'Contract ended', retired: 'Retired', other: 'Other' } as const;
+
+export function registerTerminationRoutes(app: FastifyInstance) {
+  // HR (or the CEO) ends someone's employment. They come off every list and their login stops; what
+  // was on their name is kept with the record and the stockroom is told to collect it.
+  app.post('/people/:id/terminate', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    if (!editsProfiles(req.actor)) throw new Refused(403, ['only HR or the CEO ends someone\'s employment']);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ date: DateOnly, reason: z.enum(Object.keys(REASONS) as [keyof typeof REASONS, ...(keyof typeof REASONS)[]]), note: z.string().trim().max(2000).optional() }), req.body);
+    if (id === req.actor.id) throw new Refused(409, ['you cannot end your own employment here']);
+    if (b.reason === 'other' && (!b.note || b.note.length < 3)) throw new Refused(400, ['say what the reason is']);
+    return tx(req.db, async c => {
+      const u = (await c.query(`SELECT u.full_name, u.login_level, u.status, d.name AS department FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.id = $1 FOR UPDATE OF u`, [id])).rows[0];
+      if (!u) throw new Refused(404, ['no such person']);
+      if (u.status === 'left') throw new Refused(409, [`${u.full_name} is already with the terminated staff`]);
+      if (['director', 'creator'].includes(u.login_level)) throw new Refused(403, ['the CEO\'s position is not ended here']);
+      const open = (await c.query("SELECT job_number FROM jobs WHERE lead_technician_id = $1 AND status NOT IN ('closed', 'cancelled') ORDER BY job_number", [id])).rows.map(r => r.job_number);
+      if (open.length) throw new Refused(409, [`give ${u.full_name.split(' ')[0]}'s open jobs to someone else first: ${open.map(n => `#${n}`).join(', ')}`]);
+      // What is still on his name, for the stockroom to collect.
+      const kit = (await c.query("SELECT kind, name, detail, qty::float AS qty FROM person_kit WHERE user_id = $1 AND status = 'issued' ORDER BY kind, name", [id])).rows;
+      const van = [...(await vanOf(c, id)).entries()].filter(([, q]) => q > 0);
+      const items = van.length ? (await c.query('SELECT id, code, description FROM stock_items WHERE id = ANY($1)', [van.map(([k]) => k)])).rows : [];
+      const stock = van.map(([k, q]) => ({ code: items.find(i => i.id === k)?.code ?? '', description: items.find(i => i.id === k)?.description ?? '', qty: q }));
+      await c.query(`INSERT INTO terminations (user_id, terminated_on, reason, note, position, department, on_name, terminated_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [id, b.date, b.reason, b.note || null, POSITION_LABEL[u.login_level as LoginLevel], u.department, JSON.stringify({ kit, stock }), req.actor.id]);
+      await c.query("UPDATE departments SET manager_id = NULL WHERE manager_id = $1", [id]);
+      await c.query("UPDATE users SET status = 'left', login_enabled = false, department_id = NULL WHERE id = $1", [id]);
+      await c.query('INSERT INTO access_changes (changed_by, user_id, action, change) VALUES ($1, $2, $3, $4)', [req.actor.id, id, 'terminated', `Employment ended ${b.date}: ${REASONS[b.reason]}`]);
+      await audit(c, req.actor.id, 'employment_ended', 'user', id, { date: b.date, reason: b.reason });
+      if (kit.length || stock.length) {
+        const what = [...kit.map(k => `${k.name}${k.qty !== 1 ? ` ×${k.qty}` : ''}`), ...stock.map(s => `${s.description} ×${s.qty}`)].join(', ');
+        for (const s of (await c.query("SELECT id FROM users WHERE login_level = 'stockroom' AND status <> 'left'")).rows) {
+          await notify(c, s.id, 'terminated', `${u.full_name} has left the company. Collect what is still on his name: ${what}.`, { userId: id });
+        }
+      }
+      return { id, status: 'left', onName: { kit, stock } };
+    });
+  });
+
+  // HR's Terminated staff: everyone whose employment ended, with the record.
+  app.get('/people/terminated', async req => {
+    if (!editsProfiles(req.actor)) throw new Refused(403, ['terminated staff are kept by HR']);
+    return (await req.db.query(
+      `SELECT u.id, u.full_name, p.photo_id, to_char(t.terminated_on, 'YYYY-MM-DD') AS date, t.reason, t.note, t.position, t.department, b.full_name AS by,
+              (jsonb_array_length(COALESCE(t.on_name->'kit', '[]')) + jsonb_array_length(COALESCE(t.on_name->'stock', '[]')))::int AS items_on_name
+         FROM terminations t JOIN users u ON u.id = t.user_id JOIN users b ON b.id = t.terminated_by LEFT JOIN user_profiles p ON p.user_id = u.id
+        ORDER BY t.terminated_on DESC, u.full_name`)).rows.map(r => ({ ...r, reasonLabel: REASONS[r.reason as keyof typeof REASONS] }));
   });
 }
 

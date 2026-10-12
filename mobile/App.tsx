@@ -1,3 +1,4 @@
+import { MyQuotesScreen, TechQuoteScreen } from './src/screens/TechQuotes.tsx';
 import React from 'react';
 import { ActivityIndicator, Platform, Pressable, Text, View, useWindowDimensions } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -53,6 +54,8 @@ function Current() {
     case 'queries': return <QueriesScreen />;
     case 'kit': return <MyKitScreen />;
     case 'timesheets': return <MyTimesheetsScreen />;
+    case 'quotes': return <MyQuotesScreen />;
+    case 'quote': return <TechQuoteScreen key={route.jobId ?? 'new'} jobId={route.jobId} />;
   }
 }
 

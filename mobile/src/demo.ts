@@ -9,7 +9,7 @@ import { DEMO_LOGO } from './demoLogo.ts';
 import { EXAMPLE_TECH, REAL, realDeep } from './demoReal.ts';
 import { APP_OF, MAX_PINNED, MENU_LABEL, MENU_LEVELS, MENU_TABS, cleanPinned, usualTabs } from '../../server/src/core/phoneMenu.ts';
 import type { LoginLevel } from '../../server/src/core/permissions.ts';
-import { DemoOffice, seedOffice, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
+import { DemoOffice, END_REASONS, seedOffice, terminate, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
 import { normReg, registrationCandidates } from '../../server/src/core/vehicleCode.ts';
@@ -301,6 +301,24 @@ export class DemoTransport implements Transport {
 
   /** The office's routes; only office positions get here. */
 
+  /** A technician's quotes: on his jobs not finished, or new for a store with a job card for reference. */
+  private techQuoteRoute(p: string, req: Request, b: any): Response | null {
+    if (p !== '/me/quote-options' && p !== '/me/quotes') return null;
+    const level = this.office().levelOf(this.who.id) ?? this.who.level;
+    if (['mechanic', 'stockroom', 'hr'].includes(level)) return refuse(403, 'quotes from site are for technicians');
+    const id = this.who.id;
+    const mine = this.state.jobs.filter(j => (j.card.status as string) !== 'cancelled' && ((j.meta.lead_id ?? 'me') === id || (j.meta.helper_ids ?? []).includes(id)))
+      .map(j => ({ id: j.meta.id, job_number: j.meta.job_number, status: j.card.status, store: j.meta.store, fault_reported: j.meta.fault_reported, scheduled_date: j.meta.scheduled_date, open: j.card.status !== 'closed' }))
+      .sort((a, c) => Number(!a.open) - Number(!c.open) || c.scheduled_date.localeCompare(a.scheduled_date));
+    if (p === '/me/quote-options') return ok({ stores: this.office().o.stores.map(x => ({ id: x.id, name: x.name, address: x.address, client: x.client })), jobs: mine });
+    const d = this.docs();
+    if (req.method === 'GET') return ok(d.myQuotes(id));
+    const st = this.stock().s;
+    const r = d.techQuote(b, { id, name: this.who.name }, mine, sid => { const it = st.items.find(x => x.id === sid); return it ? { description: it.description, sellingPriceCents: it.sellingPriceCents ?? null } : null; });
+    this.persist(this.state);
+    return r.ok ? ok(r.body, r.status ?? 200) : refuse(r.status, ...r.reasons);
+  }
+
   /** Settings → Phone menus: which tabs each position has pinned to the bottom of the phone. */
   private menuRoute(p: string, req: Request, b: any): Response | null {
     if (p !== '/me/phone-menu' && !p.startsWith('/phone-menus')) return null;
@@ -331,7 +349,7 @@ export class DemoTransport implements Transport {
     let m: RegExpMatchArray | null;
     const office = ['admin', 'management', 'hr', 'director', 'creator'].includes(this.who.level);
     const isOffice = p.startsWith('/office') || p === '/jobs' || p.startsWith('/flags') && !p.endsWith('/explain') || p.startsWith('/vehicles/inspections') || p === '/access/positions'
-      || p === '/people' || /^\/people\/[^/]+(\/profile|\/record(\/[^/]+)?)?$/.test(p) || /^\/access\/users\/[^/]+\/(position|work|trade)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
+      || p === '/people' || /^\/people\/[^/]+(\/profile|\/terminate|\/record(\/[^/]+)?)?$/.test(p) || /^\/access\/users\/[^/]+\/(position|work|trade)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
     if (!isOffice) return null;
     if (!office) return refuse(403, 'office only');
     if (!this.does('jobs') && (p === '/office/overview' || p === '/jobs' || p === '/office/stores' || p === '/office/technicians') && req.method === 'GET') return refuse(403, 'office only');
@@ -344,22 +362,50 @@ export class DemoTransport implements Transport {
     if (p.startsWith('/flags') || p.startsWith('/vehicles/inspections')) { const n = need('flags', 'flags and approvals are not part of your work'); if (n) return n; }
     if (p === '/office/stores' && req.method === 'POST') { const n = need('stores', 'adding stores is not part of your work'); if (n) return n; }
     const manages = this.does('access');
+    // The CEO and HR edit profiles, end employment and keep the terminated staff.
+    const hrOrCeo = manages || this.does('hr');
     if (p === '/people') return ok(o.people(manages, manages || this.does('hr')));
+    if (p === '/people/terminated') {
+      if (!hrOrCeo) return refuse(403, 'terminated staff are kept by HR');
+      return ok((this.state.office!.leavers ?? []).map(l => ({ id: l.person.id, full_name: l.person.full_name, photo_id: null, date: l.date, reason: l.reason, reasonLabel: END_REASONS[l.reason], note: l.note,
+        position: l.position, department: l.department, by: l.by, items_on_name: l.onName.kit.length + l.onName.stock.length })));
+    }
+    if ((m = p.match(/^\/people\/([^/]+)\/terminate$/))) {
+      if (!hrOrCeo) return refuse(403, "only HR or the CEO ends someone's employment");
+      if (m[1] === this.who.id) return refuse(409, 'you cannot end your own employment here');
+      const id = m[1];
+      const person = this.state.office!.people.find(x => x.id === id);
+      const openJobs = this.state.jobs.filter(j => !['closed', 'cancelled'].includes(j.card.status) && (j.meta.lead_id ?? 'me') === id).map(j => j.meta.job_number);
+      const st = this.stock().s;
+      const kit = (st.kit ?? []).filter(k => k.userId === id && k.status === 'issued').map(k => ({ kind: k.kind, name: k.name, detail: k.detail, qty: k.qty }));
+      const stock = st.holdings.filter(h => h.qty > 0 && ((h.tech ?? 'me') === id || h.tech === person?.full_name))
+        .map(h => { const it = st.items.find(i => i.id === h.stockItemId); return { code: it?.code ?? '', description: it?.description ?? '', qty: h.qty }; });
+      const vn = this.vans();
+      const dept = vn.deptOf(id)?.name ?? null;
+      const r = terminate(this.state.office!, id, b, this.who.name, openJobs, { kit, stock }, dept);
+      if (r.ok) { for (const d of vn.v.departments) if (d.managerId === id) d.managerId = null; vn.v.memberOf[id] = null; }
+      return done(r);
+    }
     if ((m = p.match(/^\/people\/([^/]+)\/record(?:\/([^/]+))?$/))) {
       if (!this.does('hr') || m[1] === this.who.id) return refuse(403, 'staff records are for the CEO and HR only');
       if (req.method === 'GET') return done(o.record(m[1], true));
       if (req.method === 'POST') return done(o.addRecord(m[1], this.who.id, b));
       if (req.method === 'DELETE' && m[2]) return done(o.deleteRecord(m[1], m[2], this.who.id));
     }
-    if ((m = p.match(/^\/people\/([^/]+)\/profile$/))) return manages ? done(o.saveProfile(m[1], b)) : refuse(403, 'only whoever manages access');
+    if ((m = p.match(/^\/people\/([^/]+)\/profile$/))) return hrOrCeo ? done(o.saveProfile(m[1], b)) : refuse(403, 'only HR or the CEO edits profiles');
     if ((m = p.match(/^\/people\/([^/]+)$/))) {
       const f = this.fleet();
       const spots = f.positions();
       const rec = this.does('hr') && m[1] !== this.who.id;
-      const res = o.profile(m[1], manages, { record: { read: rec, write: rec }, kit: { read: true, write: this.does('stockroom') } }, f.technicians(this.thaboIn()), v => spots.find(x => x.id === v) ?? null);
+      const res = o.profile(m[1], hrOrCeo, { record: { read: rec, write: rec }, kit: { read: true, write: this.does('stockroom') } }, f.technicians(this.thaboIn()), v => spots.find(x => x.id === v) ?? null);
       if (res.ok) {
         const vn = this.vans(); const d = vn.deptOf(m[1]);
-        Object.assign(res.body as object, { department: d?.name ?? null, departmentId: d?.id ?? null, manager: d?.managerId ? o.name(d.managerId) : null, team: vn.team(m[1]) });
+        Object.assign(res.body as object, { department: d?.name ?? null, departmentId: d?.id ?? null, departmentLogo: d?.logoPhotoId ?? null, manager: d?.managerId ? o.name(d.managerId) : null, team: vn.team(m[1]) });
+        const left = (this.state.office!.leavers ?? []).find(l => l.person.id === m![1]);
+        const lv = (res.body as { login_level: string }).login_level;
+        Object.assign(res.body as object, left
+          ? { canEdit: false, canTerminate: false, status: 'left', department: left.department, termination: hrOrCeo ? { date: left.date, reason: left.reason, note: left.note, position: left.position, department: left.department, on_name: left.onName, by: left.by } : { date: left.date } }
+          : { canTerminate: hrOrCeo && !['director', 'creator'].includes(lv) && m[1] !== this.who.id, termination: null });
       }
       return done(res);
     }
@@ -724,6 +770,8 @@ export class DemoTransport implements Transport {
     if (tr) return tr;
     const mr = this.menuRoute(p, req, b);
     if (mr) return mr;
+    const tq = this.techQuoteRoute(p, req, b);
+    if (tq) return tq;
     if (p === '/company/brand') return ok({ name: 'ZSP (demo)', logoPhotoId: this.state.logoPhotoId ?? null, logoDataUri: this.state.logoPhotoId ? null : DEMO_LOGO });
     const off = this.officeRoute(p, req, b);
     if (off) return off;

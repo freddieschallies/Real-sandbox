@@ -107,6 +107,11 @@ export function Day() {
           <Text style={st.small}>{q.unread ? 'Someone is waiting for your answer.' : 'Ask another technician something, or answer a question.'}</Text>
         </Card>
 
+        <Card onPress={() => nav.push({ name: 'quotes' })} accessibilityLabel="Quotes">
+          <Text style={[st.body, { fontWeight: '800' }]}>Quotes</Text>
+          <Text style={st.small}>Quote work you found: on a job, or new with a job card for reference.</Text>
+        </Card>
+
         <Card onPress={() => nav.push({ name: 'kit' })} accessibilityLabel="My tools and PPE">
           <Text style={[st.body, { fontWeight: '800' }]}>My tools and PPE</Text>
           <Text style={st.small}>What the stockroom has on your name.</Text>

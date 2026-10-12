@@ -14,7 +14,7 @@ import { registerControlRoutes } from './routes/control.ts';
 import { registerQueryRoutes } from './routes/queries.ts';
 import { registerDocumentRoutes } from './routes/documents.ts';
 import { registerPastelRoutes } from './routes/pastel.ts';
-import { registerPeopleRoutes } from './routes/people.ts';
+import { registerPeopleRoutes, registerTerminationRoutes } from './routes/people.ts';
 import { registerStaffRoutes } from './routes/staff.ts';
 import { registerDepartmentRoutes } from './routes/departments.ts';
 import { registerTimesheetRoutes } from './routes/timesheets.ts';
@@ -45,6 +45,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerQueryRoutes(app);
   registerDocumentRoutes(app);
   registerPastelRoutes(app);
+  registerTerminationRoutes(app);
   registerPeopleRoutes(app);
   registerStaffRoutes(app);
   registerDepartmentRoutes(app);

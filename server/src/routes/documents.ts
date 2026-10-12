@@ -59,6 +59,79 @@ export function registerDocumentRoutes(app: FastifyInstance) {
   const see = (req: FastifyRequest) => { if (!can(req.actor, 'view_quotes_invoices_stock') && !can(req.actor, 'prepare_quotes_invoices')) throw new Refused(403, ['quotes and invoices are not part of your work']); };
   const prep = (req: FastifyRequest) => { if (!can(req.actor, 'prepare_quotes_invoices')) throw new Refused(403, ['you cannot prepare quotes and invoices']); };
 
+  // ---- Quotes from technicians --------------------------------------------------------------------
+  // A technician quotes on one of his jobs that is not finished, or from scratch for a store with a
+  // job card linked for reference. He picks the work and the parts; prices come from the price list
+  // (bought-out items at his estimate). It goes to the office as a draft to check, price and send.
+  const quoter = (req: FastifyRequest) => { if (!can(req.actor, 'create_estimate')) throw new Refused(403, ['quotes from site are for technicians']); };
+  const myJobs = async (c: Q, userId: string) => (await c.query(
+    `SELECT j.id, j.job_number, j.status, s.name AS store, j.fault_reported, to_char(j.scheduled_date, 'YYYY-MM-DD') AS scheduled_date
+       FROM jobs j JOIN stores s ON s.id = j.store_id
+      WHERE (j.lead_technician_id = $1 OR EXISTS (SELECT 1 FROM job_helpers h WHERE h.job_id = j.id AND h.user_id = $1)) AND j.status <> 'cancelled'
+        AND (j.status <> 'closed' OR j.scheduled_date > current_date - 120)
+      ORDER BY (j.status = 'closed'), j.scheduled_date DESC LIMIT 60`, [userId])).rows as { id: string; job_number: number; status: string; store: string }[];
+
+  app.get('/me/quote-options', async req => {
+    quoter(req);
+    const stores = (await req.db.query('SELECT s.id, s.name, s.address, c.name AS client FROM stores s JOIN clients c ON c.id = s.client_id ORDER BY c.name, s.name')).rows;
+    const jobs = (await myJobs(req.db, req.actor.id)).map(j => ({ ...j, open: j.status !== 'closed' }));
+    return { stores, jobs };
+  });
+
+  app.get('/me/quotes', async req => {
+    quoter(req);
+    const { rows } = await req.db.query(
+      `SELECT q.id, q.quote_number, q.status, q.title, q.created_at, j.job_number, rf.job_number AS reference_job_number, s.name AS store,
+              (SELECT coalesce(sum(round(l.qty * l.unit_price_cents)), 0)::bigint FROM document_lines l WHERE l.quote_id = q.id) AS ex_vat_cents
+         FROM quotes q LEFT JOIN jobs j ON j.id = q.job_id LEFT JOIN jobs rf ON rf.id = q.reference_job_id JOIN stores s ON s.id = coalesce(q.store_id, j.store_id)
+        WHERE q.created_by = $1 AND q.from_technician ORDER BY q.created_at DESC LIMIT 50`, [req.actor.id]);
+    return rows.map(r => ({ ...r, ex_vat_cents: Number(r.ex_vat_cents) }));
+  });
+
+  app.post('/me/quotes', async (req, reply) => {
+    quoter(req);
+    const b = parse(z.object({
+      jobId: Uuid.optional(), storeId: Uuid.optional(), referenceJobId: Uuid.optional(),
+      title: z.string().trim().min(3, 'what the quote is for').max(300), notes: z.string().trim().max(2000).optional(),
+      labourHours: z.number().min(0).max(500).default(0),
+      stockLines: z.array(z.object({ stockItemId: Uuid, qty: z.number().positive().max(10000) })).max(100).default([]),
+      boughtOutLines: z.array(z.object({ description: z.string().trim().min(2).max(300), qty: z.number().positive().max(10000), estimatedPriceCents: z.number().int().min(0).max(1_000_000_000).default(0) })).max(100).default([]),
+    }).refine(x => x.jobId || x.storeId, 'the job, or the store it is for'), req.body);
+    if (!b.labourHours && !b.stockLines.length && !b.boughtOutLines.length) throw new Refused(400, ['add the work: labour hours, parts or items to buy']);
+    const out = await tx(req.db, async c => {
+      const mine = await myJobs(c, req.actor.id);
+      let storeId = b.storeId ?? null;
+      if (b.jobId) {
+        const j = mine.find(x => x.id === b.jobId);
+        if (!j) throw new Refused(403, ['you are not on that job']);
+        if (j.status === 'closed') throw new Refused(409, ['that job is finished: start a new quote and link the job card for reference']);
+        storeId = null;
+      } else if (!(await c.query('SELECT 1 FROM stores WHERE id = $1', [storeId])).rowCount) throw new Refused(400, ['unknown store']);
+      if (b.referenceJobId && !mine.some(x => x.id === b.referenceJobId)) throw new Refused(403, ['link one of your own job cards']);
+      const r = await rates(c);
+      const lines: LineT[] = [];
+      if (b.labourHours) lines.push({ kind: 'labour', description: 'Labour', qty: b.labourHours, unitPriceCents: r.labour_per_hour ?? 0 });
+      for (const l of b.stockLines) {
+        const it = (await c.query('SELECT description, selling_price_cents, category FROM stock_items WHERE id = $1 AND active', [l.stockItemId])).rows[0];
+        if (!it) throw new Refused(400, ['unknown part']);
+        lines.push({ kind: 'stock', description: it.description, qty: l.qty, unitPriceCents: it.selling_price_cents ?? 0, stockItemId: l.stockItemId });
+      }
+      for (const l of b.boughtOutLines) lines.push({ kind: 'bought_out', description: l.description, qty: l.qty, unitPriceCents: l.estimatedPriceCents });
+      const p = await profile(c);
+      const q = (await c.query(
+        `INSERT INTO quotes (job_id, store_id, title, notes, created_by, vat_pct, from_technician, reference_job_id) VALUES ($1, $2, $3, $4, $5, $6, true, $7) RETURNING id, quote_number`,
+        [b.jobId ?? null, storeId, b.title, b.notes ?? null, req.actor.id, p?.vat_pct ?? 15, b.jobId ? null : b.referenceJobId ?? null])).rows[0];
+      await writeLines(c, 'quote_id', q.id, lines);
+      await audit(c, req.actor.id, 'quote_submitted', 'quote', q.id, { number: q.quote_number, jobId: b.jobId ?? null, referenceJobId: b.referenceJobId ?? null });
+      const who = (await c.query('SELECT full_name FROM users WHERE id = $1', [req.actor.id])).rows[0].full_name;
+      for (const o of (await c.query("SELECT id FROM users WHERE login_level IN ('admin', 'director', 'creator') AND status <> 'left'")).rows) {
+        await notify(c, o.id, 'quote_submitted', `${who} submitted quote ${q.quote_number}: ${b.title}. Check it, price it and send it.`, { quoteId: q.id });
+      }
+      return { id: q.id, quoteNumber: q.quote_number, unpriced: lines.filter(l => !l.unitPriceCents).map(l => l.description) };
+    });
+    return reply.code(201).send(out);
+  });
+
   // ---- The company's details and rates (the CEO) ----------------------------------------------
 
   // The company's name and logo for the app's header and letterheads: every signed-in person.
@@ -118,10 +191,10 @@ export function registerDocumentRoutes(app: FastifyInstance) {
     see(req);
     const { rows } = await req.db.query(
       `SELECT q.id, q.quote_number, q.status, q.title, q.created_at, q.sent_at, to_char(q.valid_until, 'YYYY-MM-DD') AS valid_until, q.accepted_at, q.declined_at,
-              q.vat_pct::float AS vat_pct, j.job_number, j.id AS job_id, ${WHO}, u.full_name AS created_by,
+              q.vat_pct::float AS vat_pct, j.job_number, j.id AS job_id, ${WHO}, u.full_name AS created_by, q.from_technician, rf.job_number AS reference_job_number,
               (SELECT coalesce(sum(round(l.qty * l.unit_price_cents)), 0)::bigint FROM document_lines l WHERE l.quote_id = q.id) AS ex_vat_cents
          FROM quotes q LEFT JOIN jobs j ON j.id = q.job_id JOIN stores s ON s.id = coalesce(q.store_id, j.store_id) JOIN clients c ON c.id = s.client_id
-         JOIN users u ON u.id = q.created_by
+         JOIN users u ON u.id = q.created_by LEFT JOIN jobs rf ON rf.id = q.reference_job_id
         WHERE ($1::text IS NULL OR q.status::text = $1) ORDER BY (q.status = 'draft') DESC, q.quote_number DESC LIMIT 500`, [req.query.status ?? null]);
     return rows.map(r => ({ ...r, ex_vat_cents: Number(r.ex_vat_cents), total_cents: D.totals([{ qty: 1, unitPriceCents: Number(r.ex_vat_cents) }], r.vat_pct).totalCents }));
   });
@@ -130,9 +203,9 @@ export function registerDocumentRoutes(app: FastifyInstance) {
     see(req);
     const id = parse(Uuid, req.params.id);
     const q = (await req.db.query(
-      `SELECT q.*, to_char(q.valid_until, 'YYYY-MM-DD') AS valid_until, q.vat_pct::float AS vat_pct, j.job_number, ${WHO}, u.full_name AS created_by_name, rj.job_number AS resulting_job_number
+      `SELECT q.*, to_char(q.valid_until, 'YYYY-MM-DD') AS valid_until, q.vat_pct::float AS vat_pct, j.job_number, ${WHO}, u.full_name AS created_by_name, rj.job_number AS resulting_job_number, rf.job_number AS reference_job_number
          FROM quotes q LEFT JOIN jobs j ON j.id = q.job_id JOIN stores s ON s.id = coalesce(q.store_id, j.store_id) JOIN clients c ON c.id = s.client_id
-         JOIN users u ON u.id = q.created_by LEFT JOIN jobs rj ON rj.id = q.resulting_job_id WHERE q.id = $1`, [id])).rows[0];
+         JOIN users u ON u.id = q.created_by LEFT JOIN jobs rj ON rj.id = q.resulting_job_id LEFT JOIN jobs rf ON rf.id = q.reference_job_id WHERE q.id = $1`, [id])).rows[0];
     if (!q) throw new Refused(404, ['no such quote']);
     const lines = await linesOf(req.db, 'quote_id', id);
     return { quote: q, lines, totals: D.totals(lines, q.vat_pct), company: await profile(req.db) };

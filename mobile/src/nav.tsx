@@ -20,7 +20,9 @@ export type Route =
   | { name: 'release' }
   | { name: 'queries' }
   | { name: 'kit' }
-  | { name: 'timesheets' };
+  | { name: 'timesheets' }
+  | { name: 'quotes' }
+  | { name: 'quote'; jobId?: string };
 
 interface Nav { route: Route; push(r: Route): void; back(): void; reset(): void; replace(r: Route): void }
 const Ctx = createContext<Nav | null>(null);

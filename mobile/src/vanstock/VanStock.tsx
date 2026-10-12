@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { Body, Button, Card, Heading, Label, Notice, Pill, Select, Stepper, st } from '../ui.tsx';
+import { DeptLogo } from '../hr/DeptLogo.tsx';
 import { C } from '../theme.ts';
 
 interface VanLine { stockItemId: string; code: string; description: string; unit: string; need: number; have: number; short: number }
@@ -13,7 +14,7 @@ export interface VanReport {
   extra: { stockItemId: string; code: string; description: string; unit: string; have: number }[]; canIssue: boolean;
 }
 interface ListDept {
-  id: string; name: string; manager: string | null; canEdit: boolean;
+  id: string; name: string; logo_photo_id?: string | null; manager: string | null; canEdit: boolean;
   lines: { stockItemId: string; code: string; description: string; unit: string; qty: number }[];
   techs: { id: string; full_name: string; complete: boolean; shortLines: number }[];
 }
@@ -115,7 +116,10 @@ function DeptList({ d, reload, openTech }: { d: ListDept; reload: () => void; op
     <Card>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <View style={{ flex: 1 }}>
-          <Text style={{ color: C.text, fontSize: 20, fontWeight: '800' }}>{d.name}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <DeptLogo name={d.name} photoId={d.logo_photo_id} size={32} />
+            <Text style={{ color: C.text, fontSize: 20, fontWeight: '800' }}>{d.name}</Text>
+          </View>
           <Text style={st.small}>{d.manager ? `Manager: ${d.manager}` : 'No manager yet'} · {d.techs.length} technician{d.techs.length === 1 ? '' : 's'}</Text>
         </View>
         {d.lines.length ? (short.length ? <Pill text={`${short.length} van${short.length > 1 ? 's' : ''} short`} tone="bad" /> : <Pill text="All vans complete" tone="good" />) : null}
@@ -187,7 +191,7 @@ export function DepartmentCard({ userId, departmentId, level, name, canManage, t
   userId: string; departmentId: string | null; level: string; name: string; canManage: boolean; team: { id: string; full_name: string; department: string }[]; reload: () => void;
 }) {
   const s = useStore();
-  const [d, setD] = useState<{ departments: { id: string; name: string; manager_id: string | null; manager: string | null; technicians: number; active?: boolean }[]; managers: { id: string; full_name: string }[] } | null>(null);
+  const [d, setD] = useState<{ departments: { id: string; name: string; manager_id: string | null; manager: string | null; technicians: number; active?: boolean; logo_photo_id?: string | null }[]; managers: { id: string; full_name: string }[] } | null>(null);
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; lines: string[] } | null>(null);
   const load = async () => { const x = await s.ask({ method: 'GET', path: '/departments' }); if (x?.status === 200) setD(x.body); };
   useEffect(() => { load(); }, [userId]);
@@ -206,7 +210,11 @@ export function DepartmentCard({ userId, departmentId, level, name, canManage, t
           <Select label="Department and manager" value={departmentId ?? undefined} placeholder="Not in a department yet"
             options={d.departments.filter(x => x.active !== false).map(x => ({ value: x.id, label: `${x.name}${x.manager ? ` · ${x.manager}` : ' · no manager yet'}` }))}
             onChange={async v => after(await s.ask({ method: 'PUT', path: `/access/users/${userId}/department`, json: { departmentId: v } }), `${first} now works in ${d.departments.find(x => x.id === v)?.name}`)} />
-        ) : (() => { const cur = d.departments.find(x => x.id === departmentId); return <Text style={st.body}>{cur ? `${cur.name}${cur.manager ? `, under ${cur.manager}` : ''}` : 'Not in a department yet'}</Text>; })()
+        ) : (() => { const cur = d.departments.find(x => x.id === departmentId); return (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {cur ? <DeptLogo name={cur.name} photoId={cur.logo_photo_id} size={28} /> : null}
+            <Text style={st.body}>{cur ? `${cur.name}${cur.manager ? `, under ${cur.manager}` : ''}` : 'Not in a department yet'}</Text>
+          </View>); })()
       ) : null}
       {isManager ? (
         <>

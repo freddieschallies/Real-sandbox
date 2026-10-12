@@ -18,6 +18,7 @@ const STEPS: [string, string[]][] = [
     'Queries: Zanele (the office) asked about an access card; answer her. Or send another technician a question.',
     'My tools and PPE (on My day): what the stockroom has on his name.',
     'Timesheet (on My day): yesterday\'s timesheet, made by the app from his jobs: travel, work, paused and time not accounted for. Check it and submit it; time not accounted for needs a word.',
+    'Quotes (on My day): a new quote for a store, with an older job card linked for reference; or open a job that is not finished and tap "Submit a quote for this job". Add hours, parts and things to buy; it goes to the office to price and send.',
   ]],
   ['As stock controller (Lindiwe)', [
     'To issue: open Thabo\'s request, tick each item as you pick it, then issue it.',
@@ -53,9 +54,11 @@ const STEPS: [string, string[]][] = [
     'Timesheets: daily, weekly or monthly, for one person, a department or everyone, with every job and flag on each sheet, and normal time, overtime (1.5×) and double time (Sundays and public holidays). She sets the normal day (8 hours to start). Ayanda has not submitted his last days. Print or save as PDF (one page per sheet, on the letterhead), or download for Excel. In this test drive the browser may block the print window and the download; the real app saves them.',
     'People: set anyone\'s position (technician, admin, department manager, stock controller) and a technician\'s trade. Mechanic, HR, director and CEO stay with the CEO.',
     'Departments: every department with its manager and the technicians under him. Move a technician to another department, or give Plumbing a manager. Each person is in one department; a manager runs one department, so moving Pieter takes him off Foodservice.',
-    'Departments this business has: every company starts with Electrical, Plumbing, Service and Foodservice. Switch off one the business doesn\'t do, switch on Refrigeration, or add your own.',
+    'Departments this business has: every company starts with Admin, Electrical, Plumbing, Service and Foodservice. Switch off one the business doesn\'t do, switch on Refrigeration, or add your own. The office staff go in Admin.',
+    'Departments: tap Edit on a department to rename it or give it a logo; the new name and logo show everywhere at once.',
+    'People: open anyone and edit their contact and personal details. At the bottom, "End … employment": they come off every list, their login stops, and they move to Terminated staff (bottom of People) with their record and what was still on their name.',
     'Staff records: open anyone under People to add an issue or a warning, or delete one (a line keeps who deleted it and when).',
-    'She does not see jobs, quotes or the stockroom, and does not see ID numbers or home addresses (those stay with the CEO).',
+    'She does not see jobs, quotes or the stockroom.',
   ]],
   ['As the office admin (Zanele)', [
     'She only sees the work the CEO switched on for her. By default: jobs, quotes and invoices, and stores.',
@@ -69,6 +72,7 @@ const STEPS: [string, string[]][] = [
     'Ask the CEO to give her the stockroom: a Stockroom tab appears at the top and she has the stock controller\'s full screens.',
   ]],
   ['As the CEO (Lilanie)', [
+    'Timesheets: open a sheet a technician did not submit (Missing) and tap "Fill in and submit for him". Only the CEO can; it shows as filled in by you and he is told.',
     'The company logo is in the header of every screen and on every quote, invoice and timesheet. Change it under Accounts → Company ("Change the logo"); each company sets its own.',
     'Everything: the office, plus Stockroom and Fleet tabs at the top to open those screens.',
     'People: open a person for their picture, the vehicle they are in, where they are, the job they are busy with and who with, contact details, and (CEO only) personal details. A dropdown sets their position and a technician\'s trade.',
