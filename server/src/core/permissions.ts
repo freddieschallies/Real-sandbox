@@ -56,8 +56,8 @@ export const CATALOGUE = {
 
   view_flags:                 { group: 'People', label: 'See flags and explanations', scoped: true },
   resolve_flags:              { group: 'People', label: 'Resolve flags, approve top-up runs', scoped: true },
-  view_employee_log:          { group: 'People', label: 'Read the confidential employee log', scoped: true },
-  write_employee_log:         { group: 'People', label: 'Write in the confidential employee log', scoped: true },
+  view_employee_log:          { group: 'People', label: 'Read staff records (issues and warnings)', scoped: true },
+  write_employee_log:         { group: 'People', label: 'Add and delete staff records', scoped: true },
   edit_technician_settings:   { group: 'People', label: 'Technician settings (department, vehicle, home)', scoped: true },
   mark_technician_left:       { group: 'People', label: 'Start a leaver\'s exit checklist', scoped: true },
   view_former_technicians:    { group: 'People', label: 'See former technicians', scoped: true },
@@ -90,9 +90,10 @@ const admin: Permissions = {
   view_quotes_invoices_stock: true, prepare_quotes_invoices: true,
 };
 const stockroom: Permissions = { ...admin, manage_stockroom: true, assign_stock: true, run_stocktake: true };
+// Staff records are for the CEO and whoever the CEO gives HR work, not managers by default.
 const management: Permissions = {
   ...stockroom, view_fleet: true,
-  view_live_driving_markers: OWN, view_flags: OWN, resolve_flags: OWN, view_employee_log: OWN, write_employee_log: OWN,
+  view_live_driving_markers: OWN, view_flags: OWN, resolve_flags: OWN,
   edit_technician_settings: OWN, mark_technician_left: OWN, view_former_technicians: OWN,
 };
 const director: Permissions = {
@@ -177,6 +178,7 @@ export const WORK_AREAS = {
   flags:     { label: 'Flags and approvals', actions: ['view_flags', 'resolve_flags'] },
   prices:    { label: 'Prices and rates', actions: ['set_prices'] },
   access:    { label: 'Positions and access (People)', actions: ['manage_access'] },
+  hr:        { label: 'Staff records (HR): issues and warnings', actions: ['view_employee_log', 'write_employee_log'] },
 } as const satisfies Record<string, { label: string; actions: readonly Action[] }>;
 export type WorkArea = keyof typeof WORK_AREAS;
 

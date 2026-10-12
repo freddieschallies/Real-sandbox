@@ -1124,6 +1124,71 @@ test('the CEO assigns each person a position; it takes effect at once and is log
   assert.equal((await call('creator', 'PUT', `/access/users/${ids.director}/position`, { position: 'director' })).status, 200);
 });
 
+test('staff records: only the CEO and HR read, add and delete them; deleting leaves a line', async () => {
+  assert.equal((await call('manager', 'GET', `/people/${ids.tech}/record`)).status, 403, 'not managers by default');
+  assert.equal((await call('admin', 'POST', `/people/${ids.tech}/record`, { type: 'observation', whatHappened: 'Late for the Meerensee job' })).status, 403);
+  const noReason = await call('director', 'POST', `/people/${ids.tech}/record`, { type: 'written_warning', whatHappened: 'Third late arrival this month' });
+  assert.equal(noReason.status, 400, 'a warning must say the action taken and why');
+  const w = await call('director', 'POST', `/people/${ids.tech}/record`, { type: 'written_warning', happenedOn: '2026-10-09', whatHappened: 'Third late arrival this month',
+    actionTaken: 'Written warning, valid 6 months', reason: 'Repeated late arrival after a verbal warning' });
+  assert.equal(w.status, 200);
+  const n = await call('director', 'POST', `/people/${ids.tech}/record`, { type: 'observation', whatHappened: 'Left the van unlocked at the yard' });
+  // The CEO gives the Admin HR work.
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/work`, { area: 'hr', on: true })).status, 200);
+  const rec = await call('admin', 'GET', `/people/${ids.tech}/record`);
+  assert.equal(rec.status, 200);
+  assert.equal(rec.body.entries.length, 2);
+  assert.equal(rec.body.summary.written, 1);
+  assert.equal((await call('admin', 'GET', `/people/${ids.admin}/record`)).status, 403, 'nobody reads their own record');
+  const del = await app.inject({ method: 'DELETE', url: `/people/${ids.tech}/record/${n.body.id}`, headers: { authorization: `Bearer ${tokens.admin}` } });
+  assert.equal(del.statusCode, 200);
+  const after = (await call('director', 'GET', `/people/${ids.tech}/record`)).body;
+  assert.equal(after.entries.length, 1);
+  assert.equal(after.deletions.length, 1);
+  assert.equal(after.deletions[0].deleted_by, 'admin');
+  await assert.rejects(db.query('UPDATE employee_log_entries SET what_happened = $1 WHERE id = $2', ['changed', w.body.id]), 'records cannot be edited');
+  assert.equal((await call('director', 'GET', `/people/${ids.tech}`)).body.record.write, true);
+  await call('director', 'PUT', `/access/users/${ids.admin}/work`, { area: 'hr', on: false });
+  assert.equal((await call('admin', 'GET', `/people/${ids.tech}/record`)).status, 403);
+});
+
+test('tools and PPE: the stockroom keeps each person\'s list; stock goes out and comes back', async () => {
+  const boots = (await db.query("INSERT INTO stock_items (code, description, category) VALUES ('PPE-BOOT', 'Safety boots', 'ppe') RETURNING id")).rows[0].id;
+  await db.query("INSERT INTO stock_movements (stock_item_id, qty, kind, to_stockroom, created_by) VALUES ($1, 4, 'receive', true, $2)", [boots, ids.stock]);
+  const onHand = async () => Number((await db.query('SELECT qty FROM stockroom_stock WHERE stock_item_id = $1', [boots])).rows[0].qty);
+  assert.equal((await call('admin', 'POST', `/people/${ids.tech}/kit`, { kind: 'tool', name: 'Fluke multimeter' })).status, 403, 'only the stockroom');
+  const meter = await call('stock', 'POST', `/people/${ids.tech}/kit`, { kind: 'tool', name: 'Fluke multimeter', detail: 'Serial 4471' });
+  assert.equal(meter.status, 200);
+  const b = await call('stock', 'POST', `/people/${ids.tech}/kit`, { kind: 'ppe', stockItemId: boots, detail: 'Size 9', replaceBy: '2026-01-01' });
+  assert.equal(b.status, 200);
+  assert.equal((await call('stock', 'POST', `/people/${ids.tech}/kit`, { kind: 'tool', stockItemId: boots })).status, 409, 'boots are PPE, not a tool');
+  assert.equal((await call('stock', 'POST', `/people/${ids.tech}/kit`, { kind: 'ppe', stockItemId: ids.seal })).status, 409, 'a valve is stock, not PPE');
+  assert.ok(!(await call('tech', 'GET', '/stock/catalogue')).body.some((x: { code: string }) => x.code === 'PPE-BOOT'), 'PPE is not booked onto jobs');
+  const openJob = (await db.query("SELECT id FROM jobs WHERE lead_technician_id = $1 AND status NOT IN ('closed', 'cancelled') LIMIT 1", [ids.tech])).rows[0];
+  if (openJob) {
+    const r = await call('tech', 'POST', `/jobs/${openJob.id}/stock-out`, { at: '2026-10-16T08:00:00+02:00', lines: [{ stockItemId: boots, qty: 1 }] });
+    assert.match(r.body.reasons[0], /tool or PPE/);
+  }
+  assert.equal(await onHand(), 3, 'boots came out of the stockroom');
+  assert.equal((await call('stock', 'POST', `/people/${ids.tech}/kit`, { kind: 'ppe', stockItemId: boots, qty: 10 })).status, 409, 'not more than is in stock');
+  const mine = (await call('tech', 'GET', '/me/kit')).body;
+  assert.equal(mine.held.length, 2);
+  assert.equal(mine.dueForReplacement, 1, 'boots past their replace-by date');
+  assert.equal((await call('tech2', 'GET', `/people/${ids.tech}/kit`)).status, 403);
+  assert.equal((await call('admin', 'GET', `/people/${ids.tech}/kit`)).status, 200, 'the office can see it');
+  assert.equal((await call('stock', 'POST', `/kit/${meter.body.id}/close`, { status: 'lost' })).status, 400, 'lost needs a note');
+  assert.equal((await call('stock', 'POST', `/kit/${meter.body.id}/close`, { status: 'lost', note: 'Left at Boxer Esikhawini, not found' })).status, 200);
+  assert.equal((await call('stock', 'POST', `/kit/${b.body.id}/close`, { status: 'returned' })).status, 200);
+  assert.equal(await onHand(), 4, 'returned boots back in stock');
+  assert.equal((await call('stock', 'POST', `/kit/${b.body.id}/close`, { status: 'returned' })).status, 409);
+  const everyone = (await call('stock', 'GET', '/kit/people')).body;
+  assert.equal(everyone.find((x: { id: string }) => x.id === ids.tech).tools, 0);
+  const list = (await call('stock', 'GET', `/people/${ids.tech}/kit`)).body;
+  assert.equal(list.held.length, 0);
+  assert.equal(list.history.length, 2);
+  await assert.rejects(db.query('DELETE FROM person_kit WHERE id = $1', [meter.body.id]));
+});
+
 test('fuel: slip required, logged against the vehicle, impossible litres flagged', async () => {
   // He released ND 412-778 in the test before; he drove it last, so he scans back in without an inspection.
   assert.equal((await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V1', mode: 'driving', at: '2026-10-16T17:30:00+02:00' })).status, 200);

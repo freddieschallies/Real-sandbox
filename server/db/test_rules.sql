@@ -54,14 +54,14 @@ DO $$ BEGIN
   END;
 END $$;
 
--- 5. Log entries cannot be edited or deleted
+-- 5. Log entries cannot be edited (they can be deleted by HR or the CEO, which leaves a deletion line)
 INSERT INTO employee_log_entries (id, employee_id, author_id, entry_type, what_happened)
 VALUES ('00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002', 'observation', 'Arrived late');
 DO $$ BEGIN
   BEGIN
-    DELETE FROM employee_log_entries WHERE id = '00000000-0000-0000-0000-0000000000e1';
+    UPDATE employee_log_entries SET what_happened = 'On time' WHERE id = '00000000-0000-0000-0000-0000000000e1';
     RAISE EXCEPTION 'FAIL 5';
-  EXCEPTION WHEN raise_exception THEN RAISE NOTICE 'PASS 5: log entries cannot be deleted';
+  EXCEPTION WHEN raise_exception THEN RAISE NOTICE 'PASS 5: log entries cannot be edited';
   END;
 END $$;
 

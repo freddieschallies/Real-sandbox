@@ -40,9 +40,10 @@ test('stockroom is admin level plus stock functions', () => {
 });
 
 test('management is limited to its own department', () => {
-  assert.ok(can(mgrD1, 'view_employee_log', techInD1));
+  assert.ok(can(mgrD1, 'resolve_flags', techInD1));
   assert.ok(can(mgrD1, 'mark_technician_left', techInD1));
-  assert.ok(!can(mgrD2, 'view_employee_log', techInD1));
+  assert.ok(!can(mgrD1, 'view_employee_log', techInD1), 'staff records are CEO and HR only');
+  assert.ok(!can(mgrD2, 'mark_technician_left', techInD1));
   assert.ok(!can(mgrD2, 'resolve_flags', techInD1));
   assert.ok(!can(mgrD1, 'view_director_digest'));
 });

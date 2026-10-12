@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { audit, tx } from '../db.ts';
 import { POSITION_LABEL, TRADES, can, type LoginLevel, type Trade } from '../core/permissions.ts';
 import { DateOnly, Refused, Uuid, parse } from '../http.ts';
+import { kitAllowed, recordsAllowed } from './staff.ts';
 
 export function registerPeopleRoutes(app: FastifyInstance) {
   const office = (req: FastifyRequest) => {
@@ -16,7 +17,7 @@ export function registerPeopleRoutes(app: FastifyInstance) {
     const id = parse(Uuid, req.params.id);
     const db = req.db;
     const u = (await db.query(
-      `SELECT u.id, u.full_name, u.email, u.phone, u.login_level, u.trade, u.status, d.name AS department, p.photo_id, p.emergency_name, p.emergency_phone,
+      `SELECT u.id, u.full_name, u.email, u.phone, u.login_level, u.trade, u.status, u.department_id, d.name AS department, p.photo_id, p.emergency_name, p.emergency_phone,
               p.id_number, to_char(p.date_of_birth, 'YYYY-MM-DD') AS date_of_birth, p.home_address, to_char(p.start_date, 'YYYY-MM-DD') AS start_date, p.notes
          FROM users u LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.id = $1`, [id])).rows[0];
     if (!u) throw new Refused(404, ['no such person']);
@@ -57,6 +58,8 @@ export function registerPeopleRoutes(app: FastifyInstance) {
       contact: { phone: u.phone, email: u.email, emergency_name: u.emergency_name, emergency_phone: u.emergency_phone },
       personal: personal ? { id_number: u.id_number, date_of_birth: u.date_of_birth, home_address: u.home_address, start_date: u.start_date, notes: u.notes } : null,
       canEdit: personal,
+      record: recordsAllowed(req.actor, { id: u.id, department_id: u.department_id }),
+      kit: kitAllowed(req.actor, u.id),
     };
   });
 

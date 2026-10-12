@@ -57,7 +57,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
     const { rows } = await req.db.query(
       `SELECT i.id, i.code, i.description, i.unit, COALESCE(s.qty, 0) AS in_stockroom
          FROM stock_items i LEFT JOIN stockroom_stock s ON s.stock_item_id = i.id
-        WHERE i.active ORDER BY i.code`,
+        WHERE i.active AND i.category = 'stock' ORDER BY i.code`,
     );
     return rows.map(r => ({ id: r.id, code: r.code, description: r.description, unit: r.unit, inStockroom: Number(r.in_stockroom) }));
   });
@@ -74,6 +74,8 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
       if (!job) throw new Refused(404, ['no such job']);
       if (!(await isOnJob(c, jobId, me))) throw new Refused(403, ['you are not assigned to this job']);
       if (job.status === 'closed' || job.status === 'cancelled') throw new Refused(409, [`job is ${job.status}`]);
+      const kit = (await c.query("SELECT code FROM stock_items WHERE id = ANY($1) AND category <> 'stock'", [b.lines.map(l => l.stockItemId)])).rows;
+      if (kit.length) throw new Refused(409, kit.map(k => `${k.code} is a tool or PPE: the stockroom issues it to you by name, not to a job`));
       const short: string[] = [];
       for (const l of b.lines) {
         const have = await stockroomQty(c, l.stockItemId);
@@ -418,7 +420,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
     const { rows } = await req.db.query(
       `SELECT i.id, i.code, i.description, i.unit, i.needs_review, i.supplier_code, COALESCE(s.qty, 0) AS in_stockroom,
               COALESCE((SELECT SUM(h.qty) FROM technician_holdings h WHERE h.stock_item_id = i.id), 0) AS with_technicians,
-              i.min_qty, i.reorder_qty, i.photo_id, i.supplier_name, i.ordered_at, i.ordered_qty, i.ordered_note, i.selling_price_cents,
+              i.min_qty, i.reorder_qty, i.photo_id, i.supplier_name, i.ordered_at, i.ordered_qty, i.ordered_note, i.selling_price_cents, i.category,
               (SELECT json_build_object('at', m.created_at, 'kind', m.kind, 'qty', m.qty, 'jobNumber', j.job_number, 'store', st.name,
                                         'technician', u.full_name, 'vehicle', v.registration)
                  FROM stock_movements m LEFT JOIN jobs j ON j.id = m.job_id LEFT JOIN stores st ON st.id = j.store_id LEFT JOIN users u ON u.id = m.from_technician_id
@@ -436,7 +438,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
         supplierCode: r.supplier_code, inStockroom, withTechnicians: Number(r.with_technicians),
         minQty, reorderQty: r.reorder_qty == null ? null : Number(r.reorder_qty), photoId: r.photo_id, supplierName: r.supplier_name,
         belowMin: minQty > 0 && inStockroom < minQty, ordered: r.ordered_at ? { at: r.ordered_at, qty: Number(r.ordered_qty), note: r.ordered_note } : null,
-        sellingPriceCents: r.selling_price_cents, lastUsed: r.last_used,
+        sellingPriceCents: r.selling_price_cents, lastUsed: r.last_used, category: r.category,
       };
     });
   });
@@ -445,7 +447,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
   app.get('/stock/order-list', async req => {
     controller(req);
     const { rows } = await req.db.query(
-      `SELECT i.id, i.code, i.description, i.unit, i.min_qty::float AS min_qty, i.reorder_qty::float AS reorder_qty, i.photo_id, i.supplier_name, i.supplier_code,
+      `SELECT i.id, i.code, i.description, i.unit, i.category, i.min_qty::float AS min_qty, i.reorder_qty::float AS reorder_qty, i.photo_id, i.supplier_name, i.supplier_code,
               COALESCE(s.qty, 0)::float AS in_stockroom, i.ordered_at, i.ordered_qty::float AS ordered_qty, i.ordered_note, u.full_name AS ordered_by
          FROM stock_items i LEFT JOIN stockroom_stock s ON s.stock_item_id = i.id LEFT JOIN users u ON u.id = i.ordered_by
         WHERE i.active AND i.min_qty > 0 AND COALESCE(s.qty, 0) < i.min_qty
@@ -505,11 +507,11 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
 
   app.post('/stock/items', async (req, reply) => {
     controller(req);
-    const b = parse(z.object({ id: Uuid.optional(), code: z.string().trim().min(2).max(40), description: z.string().trim().min(2).max(300), unit: z.string().trim().min(1).max(20).default('each') }), req.body);
+    const b = parse(z.object({ id: Uuid.optional(), code: z.string().trim().min(2).max(40), description: z.string().trim().min(2).max(300), unit: z.string().trim().min(1).max(20).default('each'), category: z.enum(['stock', 'tool', 'ppe']).default('stock') }), req.body);
     const out = await tx(req.db, async c => {
       if ((await c.query('SELECT 1 FROM stock_items WHERE lower(code) = lower($1)', [b.code])).rowCount) throw new Refused(409, [`code ${b.code} is already used`]);
       const id = b.id ?? randomUUID();
-      await c.query('INSERT INTO stock_items (id, code, description, unit) VALUES ($1, $2, $3, $4)', [id, b.code, b.description, b.unit]);
+      await c.query('INSERT INTO stock_items (id, code, description, unit, category) VALUES ($1, $2, $3, $4, $5)', [id, b.code, b.description, b.unit, b.category]);
       await audit(c, req.actor.id, 'stock_item_created', 'stock_item', id, b);
       return { id };
     });
@@ -520,12 +522,12 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
   app.patch('/stock/items/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {
     controller(req);
     const id = parse(Uuid, req.params.id);
-    const b = parse(z.object({ code: z.string().trim().min(2).max(40), description: z.string().trim().min(2).max(300), unit: z.string().trim().min(1).max(20) }), req.body);
+    const b = parse(z.object({ code: z.string().trim().min(2).max(40), description: z.string().trim().min(2).max(300), unit: z.string().trim().min(1).max(20), category: z.enum(['stock', 'tool', 'ppe']).optional() }), req.body);
     return tx(req.db, async c => {
-      const it = (await c.query('SELECT code, description, unit FROM stock_items WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      const it = (await c.query('SELECT code, description, unit, category FROM stock_items WHERE id = $1 FOR UPDATE', [id])).rows[0];
       if (!it) throw new Refused(404, ['no such item']);
       if ((await c.query('SELECT 1 FROM stock_items WHERE lower(code) = lower($1) AND id <> $2', [b.code, id])).rowCount) throw new Refused(409, [`code ${b.code} is already used`]);
-      await c.query('UPDATE stock_items SET code = $2, description = $3, unit = $4, needs_review = false WHERE id = $1', [id, b.code, b.description, b.unit]);
+      await c.query('UPDATE stock_items SET code = $2, description = $3, unit = $4, category = COALESCE($5, category), needs_review = false WHERE id = $1', [id, b.code, b.description, b.unit, b.category ?? null]);
       await audit(c, req.actor.id, 'stock_item_named', 'stock_item', id, { before: it, after: b });
       return { id, ...b, needsReview: false };
     });
