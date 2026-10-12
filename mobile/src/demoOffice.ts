@@ -17,7 +17,22 @@ export interface DemoOfficeState {
   inspections: DemoInspection[];
   people: DemoPerson[];
   changes: { at: string; by: string; person: string; action: string; change: string }[];
+  /** Work the CEO switched on or off per person, over what their position gives. */
+  work?: Record<string, Partial<Record<WorkArea, boolean>>>;
+  jobChanges?: { jobId: string; changed_at: string; by: string; field: string; old_value: string | null; new_value: string | null; reason: string | null }[];
 }
+
+export const WORK_AREAS = {
+  jobs: 'Jobs: open, assign and edit', documents: 'Quotes and invoices', stores: 'Clients, stores and equipment', stockroom: 'Stockroom (full access)',
+  fleet: "Fleet (the mechanic's work)", flags: 'Flags and approvals', prices: 'Prices and rates',
+} as const;
+export type WorkArea = keyof typeof WORK_AREAS;
+const ALL_WORK = Object.keys(WORK_AREAS) as WorkArea[];
+/** What each position does before the CEO changes anything (as on the server). */
+const DEFAULT_WORK: Record<string, WorkArea[]> = {
+  technician: [], mechanic: ['fleet'], admin: ['jobs', 'documents', 'stores'], stockroom: ['jobs', 'documents', 'stores', 'stockroom'],
+  management: ['jobs', 'documents', 'stores', 'stockroom', 'flags'], director: ALL_WORK, creator: ALL_WORK,
+};
 
 export const POSITION_LABEL: Record<string, string> = {
   technician: 'Technician', mechanic: 'Mechanic (fleet)', admin: 'Admin', stockroom: 'Stock controller', management: 'Management', director: 'Director', creator: 'Creator (CEO)',
@@ -78,7 +93,7 @@ export class DemoOffice {
   overview() {
     const t = this.today();
     const jobs = this.src.jobs;
-    const open = jobs.filter(j => j.card.status !== 'closed');
+    const open = jobs.filter(j => j.card.status !== 'closed' && j.card.status !== 'cancelled');
     const flags = this.flags('unresolved');
     const checks = this.src.fleet.checksFor();
     const y = this.src.fleet.checksFor(this.yesterday());
@@ -109,11 +124,11 @@ export class DemoOffice {
       id: j.meta.id, job_number: j.meta.job_number, job_type: j.meta.job_type, priority: j.meta.priority, status: j.card.status,
       scheduled_date: j.meta.scheduled_date, fault_reported: j.meta.fault_reported, store: j.meta.store, lead_technician: j.meta.lead_technician,
       lead_id: j.meta.lead_id ?? 'me', helper_ids: j.meta.helper_ids ?? [],
-    })).sort((a, b) => Number(a.status === 'closed') - Number(b.status === 'closed') || a.scheduled_date.localeCompare(b.scheduled_date) || a.job_number - b.job_number);
+    })).sort((a, b) => Number(a.status === 'closed' || a.status === 'cancelled') - Number(b.status === 'closed' || b.status === 'cancelled') || a.scheduled_date.localeCompare(b.scheduled_date) || a.job_number - b.job_number);
   }
 
   stores() {
-    return this.o.stores.map(s => ({ ...s, branch_code: null, equipment: 0, open_jobs: this.src.jobs.filter(j => j.meta.store === s.name && j.card.status !== 'closed').length }))
+    return this.o.stores.map(s => ({ ...s, branch_code: null, equipment: 0, open_jobs: this.src.jobs.filter(j => j.meta.store === s.name && j.card.status !== 'closed' && j.card.status !== 'cancelled').length }))
       .sort((a, b) => a.client.localeCompare(b.client) || a.name.localeCompare(b.name));
   }
 
@@ -132,7 +147,7 @@ export class DemoOffice {
   technicians(vehicleOf: (id: string) => string | null) {
     const t = this.today();
     return this.techs().map(p => {
-      const mine = this.src.jobs.filter(j => j.card.status !== 'closed' && j.meta.scheduled_date <= t && ((j.meta.lead_id ?? 'me') === p.id || (j.meta.helper_ids ?? []).includes(p.id)));
+      const mine = this.src.jobs.filter(j => j.card.status !== 'closed' && j.card.status !== 'cancelled' && j.meta.scheduled_date <= t && ((j.meta.lead_id ?? 'me') === p.id || (j.meta.helper_ids ?? []).includes(p.id)));
       return { id: p.id, full_name: p.full_name, department: p.department, open_jobs: mine.length, working_now: mine.filter(j => j.card.status === 'in_progress').length, vehicle: vehicleOf(p.id) };
     });
   }
@@ -160,7 +175,8 @@ export class DemoOffice {
   positions() {
     return {
       positions: Object.entries(POSITION_LABEL).map(([level, label]) => ({ level, label })),
-      people: this.o.people.map(p => ({ ...p, department_id: null, position: POSITION_LABEL[p.login_level], does_fleet: p.login_level === 'mechanic' || !!this.src.fleetDuty[p.id] })),
+      areas: Object.entries(WORK_AREAS).map(([key, label]) => ({ key, label })),
+      people: this.o.people.map(p => ({ ...p, department_id: null, position: POSITION_LABEL[p.login_level], does_fleet: p.login_level === 'mechanic' || this.workOf(p.id).fleet, work: this.workOf(p.id) })),
     };
   }
 
@@ -177,4 +193,22 @@ export class DemoOffice {
   }
 
   levelOf(id: string) { return this.o.people.find(p => p.id === id)?.login_level; }
+
+  workOf(id: string, level?: string): Record<WorkArea, boolean> {
+    const lv = this.levelOf(id) ?? level ?? 'technician';
+    const over = this.o.work?.[id] ?? {};
+    const legacyFleet = this.src.fleetDuty[id];
+    return Object.fromEntries(ALL_WORK.map(a => [a, lv === 'creator' ? true : over[a] ?? (a === 'fleet' && legacyFleet !== undefined ? legacyFleet : (DEFAULT_WORK[lv] ?? []).includes(a))])) as Record<WorkArea, boolean>;
+  }
+
+  setWork(id: string, area: WorkArea, on: boolean): Res {
+    const p = this.o.people.find(x => x.id === id);
+    if (!p) return bad(404, 'no such user');
+    if (!WORK_AREAS[area]) return bad(400, 'no such kind of work');
+    if (p.login_level === 'creator') return bad(409, 'the CEO always has full access');
+    this.o.work = { ...this.o.work, [id]: { ...this.o.work?.[id], [area]: on } };
+    if (area === 'fleet') this.src.fleetDuty[id] = on;
+    this.o.changes.unshift({ at: new Date().toISOString(), by: this.name('office'), person: p.full_name, action: `work:${area}`, change: `${WORK_AREAS[area]}: ${on ? 'on' : 'off'}` });
+    return good({ userId: id, area, on, work: this.workOf(id) });
+  }
 }

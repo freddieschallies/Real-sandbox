@@ -63,26 +63,38 @@ function Root() {
   return <NavProvider key={s.session.user.id}><Current /></NavProvider>;
 }
 
-/** Someone given the mechanic's work on top of their own position switches between the two here. */
-const FleetView = React.createContext<{ on: boolean; set: (v: boolean) => void }>({ on: false, set: () => undefined });
+/** Someone given extra work on top of their own position (the stockroom, the mechanic's work, or
+ *  the CEO, who has everything) switches between their own screens and those here. */
+type View3 = 'main' | 'stock' | 'fleet';
+const FleetView = React.createContext<{ on: View3; set: (v: View3) => void }>({ on: 'main', set: () => undefined });
 
 function Switchable() {
   const s = useStore();
   const fv = React.useContext(FleetView);
   const ins = useSafeAreaInsets();
-  const duty = !!s.session?.user.fleetDuty && s.session.user.level !== 'mechanic' && !s.needsPolicy;
-  if (!duty) return <Root />;
+  const u = s.session?.user;
+  if (!u || s.needsPolicy) return <Root />;
+  const views: { k: View3; label: string }[] = [
+    { k: 'main', label: isOffice(u.level) ? 'Office' : 'My work' },
+    ...(u.stockDuty && u.level !== 'stockroom' ? [{ k: 'stock' as View3, label: 'Stockroom' }] : []),
+    ...(u.fleetDuty && u.level !== 'mechanic' ? [{ k: 'fleet' as View3, label: 'Fleet' }] : []),
+  ];
+  if (views.length < 2) return <Root />;
+  const on = views.some(v => v.k === fv.on) ? fv.on : 'main';
   return (
     <View style={{ flex: 1 }}>
       <View style={{ flexDirection: 'row', gap: 6, padding: 6, paddingTop: 6 + (TESTER ? 0 : ins.top), backgroundColor: '#0E1A2B', borderBottomWidth: 1, borderBottomColor: C.line }}>
-        {[{ k: false, label: 'My work' }, { k: true, label: 'Fleet (mechanic)' }].map(o => (
-          <Pressable key={o.label} onPress={() => fv.set(o.k)} accessibilityRole="tab" accessibilityState={{ selected: fv.on === o.k }}
-            style={{ flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 8, backgroundColor: fv.on === o.k ? '#2E4A73' : 'transparent' }}>
-            <Text style={{ color: fv.on === o.k ? '#EAF1FB' : C.quiet, fontWeight: '800' }}>{o.label}</Text>
+        {views.map(o => (
+          <Pressable key={o.k} onPress={() => fv.set(o.k)} accessibilityRole="tab" accessibilityState={{ selected: on === o.k }}
+            style={{ flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 8, backgroundColor: on === o.k ? '#2E4A73' : 'transparent' }}>
+            <Text style={{ color: on === o.k ? '#EAF1FB' : C.quiet, fontWeight: '800' }}>{o.label}</Text>
           </Pressable>
         ))}
       </View>
-      <View style={{ flex: 1 }}>{fv.on ? <NavProvider key={`fleet-${s.session!.user.id}`}><FleetApp /></NavProvider> : <Root />}</View>
+      <View style={{ flex: 1 }}>
+        {on === 'fleet' ? <NavProvider key={`fleet-${u.id}`}><FleetApp /></NavProvider>
+          : on === 'stock' ? <NavProvider key={`stock-${u.id}`}><StockroomApp /></NavProvider> : <Root />}
+      </View>
     </View>
   );
 }
@@ -101,7 +113,7 @@ function Frame({ children }: { children: React.ReactNode }) {
   const s = useStore();
   const { width } = useWindowDimensions();
   const fv = React.useContext(FleetView);
-  const narrow = Platform.OS === 'web' && width > 640 && !['stockroom', 'mechanic', 'admin', 'management', 'director', 'creator'].includes(s.session?.user.level ?? '') && !(fv.on && s.session?.user.fleetDuty);
+  const narrow = Platform.OS === 'web' && width > 640 && !['stockroom', 'mechanic', 'admin', 'management', 'director', 'creator'].includes(s.session?.user.level ?? '') && fv.on === 'main';
   if (!narrow) return <>{children}</>;
   return (
     <View style={{ flex: 1, alignItems: 'center', backgroundColor: '#101214' }}>
@@ -125,6 +137,6 @@ export default function App() {
 }
 
 function FleetViewProvider({ children }: { children: React.ReactNode }) {
-  const [on, set] = React.useState(false);
+  const [on, set] = React.useState<View3>('main');
   return <FleetView.Provider value={{ on, set }}>{children}</FleetView.Provider>;
 }

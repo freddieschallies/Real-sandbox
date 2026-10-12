@@ -5,7 +5,12 @@ export interface Session {
   mode: 'demo' | 'server';
   baseUrl: string;
   token: string;
-  user: { id: string; name: string; level: string; /** Also does the mechanic's work, on top of their position. */ fleetDuty?: boolean };
+  user: {
+    id: string; name: string; level: string;
+    /** Also does the mechanic's work, on top of their position. */ fleetDuty?: boolean;
+    /** Also has full stockroom access, on top of their position. */ stockDuty?: boolean;
+    /** Which kinds of work the CEO switched on for this person. */ work?: Record<string, boolean>;
+  };
   company: { id: string; name: string };
 }
 

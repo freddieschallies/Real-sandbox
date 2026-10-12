@@ -9,7 +9,8 @@ const ROLES = [
   { who: 'demo', level: 'technician', label: 'Technician', short: 'Tech' },
   { who: 'stock', level: 'stockroom', label: 'Stock controller', short: 'Stock' },
   { who: 'mech', level: 'mechanic', label: 'Mechanic', short: 'Mech' },
-  { who: 'office', level: 'creator', label: 'Office (CEO)', short: 'Office' },
+  { who: 'admin', level: 'admin', label: 'Admin', short: 'Admin' },
+  { who: 'office', level: 'creator', label: 'CEO', short: 'CEO' },
 ] as const;
 
 export function TesterBar() {
@@ -38,10 +39,10 @@ export function TesterBar() {
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#0B0C0E', borderBottomWidth: 1, borderBottomColor: C.line, flexWrap: 'nowrap' }}>
       {!narrow ? <Text style={{ color: C.quiet, fontSize: 12, fontWeight: '700', marginRight: 4 }}>VIEW AS</Text> : null}
       {ROLES.map(r => {
-        const on = current === r.level || (r.who === 'office' && ['admin', 'management', 'director', 'creator'].includes(current ?? ''));
+        const on = current === r.level;
         return (
           <Pressable key={r.who} onPress={() => !on && go(r.who)} accessibilityRole="tab" accessibilityState={{ selected: on }} accessibilityLabel={`View as ${r.label}`}
-            style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, backgroundColor: on ? C.accent : C.panel2, opacity: busy ? 0.5 : 1 }}>
+            style={{ paddingHorizontal: narrow ? 9 : 12, paddingVertical: 6, borderRadius: 16, backgroundColor: on ? C.accent : C.panel2, opacity: busy ? 0.5 : 1 }}>
             <Text style={{ color: on ? C.accentText : C.text, fontWeight: '700', fontSize: 13 }}>{narrow ? r.short : r.label}</Text>
           </Pressable>
         );

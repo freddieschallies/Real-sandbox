@@ -175,8 +175,15 @@ export class DemoTransport implements Transport {
     } : null;
     return new DemoOffice(this.state.office, {
       jobs: this.state.jobs, flags: this.state.flags, fleet: this.fleet(), workshop: this.workshop(), stock: this.state.stockControl!,
-      fleetDuty: this.state.fleetDuty ?? {}, myHandover,
+      fleetDuty: (this.state.fleetDuty ??= {}), myHandover,
     });
+  }
+
+  /** Whether the signed-in person does this kind of work (their position, or switched on by the CEO). */
+  private does(area: 'jobs' | 'documents' | 'stores' | 'stockroom' | 'fleet' | 'flags' | 'prices') {
+    if (area === 'fleet' && this.who.level === 'mechanic') return true;
+    if (area === 'stockroom' && this.who.level === 'stockroom') return true;
+    return this.office().workOf(this.who.id, this.who.level)[area];
   }
 
   /** The office's routes; only office positions get here. */
@@ -184,12 +191,67 @@ export class DemoTransport implements Transport {
     let m: RegExpMatchArray | null;
     const office = ['admin', 'management', 'director', 'creator'].includes(this.who.level);
     const isOffice = p.startsWith('/office') || p === '/jobs' || p.startsWith('/flags') && !p.endsWith('/explain') || p.startsWith('/vehicles/inspections') || p === '/access/positions'
-      || /^\/access\/users\/[^/]+\/position$/.test(p) || /^\/jobs\/[^/]+\/assign$/.test(p);
+      || /^\/access\/users\/[^/]+\/(position|work)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
     if (!isOffice) return null;
     if (!office) return refuse(403, 'office only');
     const o = this.office();
     const done = (r: Parameters<DemoTransport['fleetResult']>[0]) => this.fleetResult(r);
     const q = new URLSearchParams(req.path.split('?')[1] ?? '');
+    const need = (area: Parameters<DemoTransport['does']>[0], what: string) => (this.does(area) ? null : refuse(403, what));
+    if (p === '/office/overview') { const v = o.overview(); return ok(this.does('flags') ? v : { ...v, flags: null, handoversAwaitingApproval: 0 }); }
+    if ((p === '/jobs' && req.method === 'POST') || /\/(assign|cancel)$/.test(p) || req.method === 'PATCH') { const n = need('jobs', 'opening and editing jobs is not part of your work'); if (n) return n; }
+    if (p.startsWith('/flags') || p.startsWith('/vehicles/inspections')) { const n = need('flags', 'flags and approvals are not part of your work'); if (n) return n; }
+    if (p === '/office/stores' && req.method === 'POST') { const n = need('stores', 'adding stores is not part of your work'); if (n) return n; }
+    if ((m = p.match(/^\/access\/users\/([^/]+)\/work$/))) {
+      if (!['creator', 'director'].includes(this.who.level)) return refuse(403, 'only whoever manages access');
+      return done(o.setWork(m[1], b.area, !!b.on));
+    }
+    if ((m = p.match(/^\/jobs\/([^/]+)\/changes$/))) return ok((this.state.office!.jobChanges ?? []).filter(x => x.jobId === m![1]).sort((a, c) => c.changed_at.localeCompare(a.changed_at)));
+    if ((m = p.match(/^\/jobs\/([^/]+)\/cancel$/))) {
+      const j = this.findJob(m[1]);
+      if (!j) return refuse(404, 'no such job');
+      if (!b.note || b.note.trim().length < 5) return refuse(400, 'say why the job is cancelled');
+      if (j.card.status === 'closed' || (j.card.status as string) === 'cancelled') return refuse(409, `the job is already ${j.card.status}`);
+      if (j.card.status === 'in_progress') return refuse(409, 'the technician is working on it: he must Continue later first');
+      this.logChange(j.meta.id, 'status', j.card.status, 'cancelled', b.note.trim());
+      (j.card as { status: string }).status = 'cancelled';
+      this.persist(this.state);
+      return ok({ jobId: j.meta.id, status: 'cancelled' });
+    }
+    if ((m = p.match(/^\/jobs\/([^/]+)$/)) && req.method === 'PATCH') {
+      const j = this.findJob(m[1]);
+      if (!j) return refuse(404, 'no such job');
+      const st = j.card.status as string;
+      if (st === 'cancelled') return refuse(409, 'the job is cancelled');
+      const started = j.card.visits.length > 0;
+      const refused: string[] = [];
+      if (st === 'closed' && Object.keys(b).some(k => !['clientOrderRef', 'reason'].includes(k) && b[k] !== undefined)) refused.push('a closed job can only have its client order number changed');
+      if (started && b.storeId && b.storeId !== j.meta.store_id) refused.push('the store cannot change once the technician has been there: cancel and open a new job');
+      if (started && b.jobType && b.jobType !== j.meta.job_type) refused.push('the job type cannot change once work has started');
+      if (refused.length) return refuse(409, ...refused);
+      const ch: [string, string | null, string | null][] = [];
+      if (b.storeId && b.storeId !== j.meta.store_id) {
+        const sNew = o.store(b.storeId);
+        if (!sNew) return refuse(400, 'unknown store');
+        ch.push(['store', j.meta.store, sNew.name]);
+        Object.assign(j.meta, { store_id: sNew.id, store: sNew.name, store_address: sNew.address, store_lat: sNew.lat, store_lng: sNew.lng });
+        j.card.store = { lat: sNew.lat, lng: sNew.lng, geofenceM: sNew.geofence_m };
+      }
+      if (b.jobType && b.jobType !== j.meta.job_type) { ch.push(['job type', j.meta.job_type, b.jobType]); j.meta.job_type = b.jobType; j.card.jobType = b.jobType; }
+      if (b.priority && b.priority !== j.meta.priority) { ch.push(['priority', j.meta.priority, b.priority]); j.meta.priority = b.priority; }
+      if (b.faultReported && b.faultReported.trim() !== j.meta.fault_reported) {
+        ch.push(['fault reported', j.meta.fault_reported, b.faultReported.trim()]); j.meta.fault_reported = b.faultReported.trim();
+        if (!started) j.card.items[0].title = b.faultReported.trim().slice(0, 200);
+      }
+      if (b.clientOrderRef !== undefined && (b.clientOrderRef || null) !== j.meta.client_order_ref) { ch.push(['client order number', j.meta.client_order_ref, b.clientOrderRef || null]); j.meta.client_order_ref = b.clientOrderRef || null; }
+      if (b.scheduledDate && b.scheduledDate !== j.meta.scheduled_date) { ch.push(['date', j.meta.scheduled_date, b.scheduledDate]); j.meta.scheduled_date = b.scheduledDate; }
+      for (const step of (b.addMaintenanceSteps ?? []) as string[]) j.meta.checklist.push({ id: id('chk'), step, done: false });
+      if ((b.addMaintenanceSteps ?? []).length) ch.push(['checklist', null, `added: ${b.addMaintenanceSteps.join('; ')}`]);
+      if (ch.length && started && st !== 'closed' && !(b.reason && b.reason.trim().length >= 5)) return refuse(400, 'the technician has started: say why it changes');
+      for (const [f, a, c] of ch) this.logChange(j.meta.id, f, a, c, b.reason ?? null);
+      this.persist(this.state);
+      return ok({ jobId: j.meta.id, changes: ch.map(([field, old, nw]) => ({ field, old, new: nw })) });
+    }
     if (p === '/office/overview') return ok(o.overview());
     if (p === '/office/stores' && req.method === 'GET') return ok(o.stores());
     if (p === '/office/stores') return done(o.addStore(b));
@@ -239,6 +301,11 @@ export class DemoTransport implements Transport {
       return done(o.setPosition(m[1], b.position, this.who.level));
     }
     return null;
+  }
+
+  private logChange(jobId: string, field: string, oldV: string | null, newV: string | null, reason: string | null) {
+    const o = this.state.office!;
+    (o.jobChanges ??= []).push({ jobId, changed_at: new Date().toISOString(), by: this.who.name, field, old_value: oldV, new_value: newV, reason });
   }
 
   private workshop(): DemoWorkshop {
@@ -317,6 +384,7 @@ export class DemoTransport implements Transport {
       const who = b.email === 'stock' ? { id: 'stock', name: 'Lindiwe Zulu', level: 'stockroom' }
         : b.email === 'mech' ? { id: 'mech', name: 'Bongani Khumalo', level: 'mechanic' }
         : b.email === 'office' ? { id: 'office', name: 'Lilanie Schallies', level: 'creator' }
+        : b.email === 'admin' ? { id: 'admin-1', name: 'Zanele Khoza', level: 'admin' }
         : { id: 'me', name: 'Thabo Mkhize', level: 'technician' };
       this.who = who;
       return ok({
@@ -331,15 +399,20 @@ export class DemoTransport implements Transport {
     const off = this.officeRoute(p, req, b);
     if (off) return off;
 
-    if (p === '/me') return ok({ id: this.who.id, full_name: this.who.name, login_level: this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level, fleetDuty: !!this.state.fleetDuty?.[this.who.id] });
-    if ((m = p.match(/^\/access\/users\/([^/]+)\/fleet-duty$/))) {
-      // The CEO's switch; in the test build anyone may flip it.
-      this.state.fleetDuty = { ...this.state.fleetDuty, [m[1]]: !!b.on };
+    if (p === '/me') {
+      const level = this.office().levelOf(this.who.id) ?? this.who.level;
+      const work = this.office().workOf(this.who.id, level);
       this.persist(this.state);
-      return ok({ userId: m[1], fleetDuty: !!b.on });
+      return ok({ id: this.who.id, full_name: this.who.name, login_level: level, work, fleetDuty: work.fleet && level !== 'mechanic', stockDuty: work.stockroom && level !== 'stockroom' });
+    }
+    if ((m = p.match(/^\/access\/users\/([^/]+)\/fleet-duty$/))) {
+      // The CEO's switch; in the test build anyone may flip it (the tester's "small company" switch).
+      const r = this.office().setWork(m[1], 'fleet', !!b.on);
+      this.persist(this.state);
+      return r.ok ? ok({ userId: m[1], fleetDuty: !!b.on }) : refuse(r.status, ...r.reasons);
     }
     if (p === '/me/today') {
-      const jobs: TodayJob[] = this.state.jobs.filter(j => (j.meta.lead_id ?? 'me') === 'me' || (j.meta.helper_ids ?? []).includes('me')).map(j => ({
+      const jobs: TodayJob[] = this.state.jobs.filter(j => (j.card.status as string) !== 'cancelled' && ((j.meta.lead_id ?? 'me') === 'me' || (j.meta.helper_ids ?? []).includes('me'))).map(j => ({
         id: j.meta.id, job_number: j.meta.job_number, job_type: j.meta.job_type, priority: j.meta.priority as TodayJob['priority'],
         status: j.card.status, scheduled_date: j.meta.scheduled_date, fault_reported: j.meta.fault_reported, store: j.meta.store,
         address: j.meta.store_address, i_am_lead: true,
@@ -452,8 +525,8 @@ export class DemoTransport implements Transport {
     if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/faults$/))) return this.fleetResult(this.fleet().reportFault(m[1], b, this.who.name, this.who.level === 'mechanic'));
     // The workshop's stock: the mechanic uses and counts it; the stock controller sets and issues it.
     if (p.startsWith('/fleet/workshop')) {
-      const mech = this.who.level === 'mechanic' || !!this.state.fleetDuty?.[this.who.id];
-      const ctl = this.who.level === 'stockroom';
+      const mech = this.does('fleet');
+      const ctl = this.does('stockroom');
       if (!mech && !ctl) return refuse(403, 'fleet or stock controller only');
       const ws = this.workshop();
       const done = (r: Parameters<DemoTransport['fleetResult']>[0]) => this.fleetResult(r);
@@ -465,7 +538,7 @@ export class DemoTransport implements Transport {
       if (p === '/fleet/workshop/loss') return mech ? done(ws.loss(b)) : refuse(403, 'mechanic only');
       if (p === '/fleet/workshop/count') return done(ws.count(b, this.who.name));
     }
-    if (p.startsWith('/fleet') && this.who.level !== 'mechanic' && !this.state.fleetDuty?.[this.who.id]) return refuse(403, 'mechanic only');
+    if (p.startsWith('/fleet') && !this.does('fleet')) return refuse(403, 'mechanic only');
     if (p === '/fleet/daily-checks') return ok(this.fleet().checksFor());
     if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/daily-check$/))) {
       const r = this.fleet().dailyCheck(m[1], b);

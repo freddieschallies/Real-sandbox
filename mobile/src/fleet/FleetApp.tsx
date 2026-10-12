@@ -80,7 +80,7 @@ export function FleetApp() {
       ) : null}
       <View style={{ flex: 1 }}>
         <Text style={{ color: K.bandText, fontSize: 22, fontWeight: '800' }}>Fleet</Text>
-        <Text style={{ color: K.bandText, opacity: 0.8 }}>{s.session?.user.name} · Mechanic</Text>
+        <Text style={{ color: K.bandText, opacity: 0.8 }}>{s.session?.user.name} · {s.session?.user.level === 'mechanic' ? 'Mechanic' : s.session?.user.level === 'creator' ? 'CEO' : 'Fleet'}</Text>
       </View>
       <SyncPill />
       <Pressable onPress={f.load} accessibilityRole="button" accessibilityLabel="Refresh" hitSlop={8}

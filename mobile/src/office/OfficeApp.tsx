@@ -9,14 +9,14 @@ import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, st } f
 import { C, S } from '../theme.ts';
 import { TITLE as FLAG_TITLE } from '../screens/Flags.tsx';
 import type { CardView } from '../types.ts';
-import { useOffice, type Answer, type OfficeHook, type OfficeJob } from './useOffice.ts';
+import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 
 const K = { band: '#121212', bandText: '#F7F3EC', stripe: '#E8701A' };
 type Tab = 'today' | 'jobs' | 'flags' | 'handovers' | 'people' | 'stores';
 type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
-  assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
+  cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
 };
 const TYPE: Record<string, string> = { breakdown: 'Breakdown', planned_maintenance: 'Planned maintenance', installation: 'Installation', quote_visit: 'Quote visit', follow_up: 'Follow-up' };
 const ymd = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
@@ -41,24 +41,29 @@ export function OfficeApp() {
   const ov = o.d.overview;
   const canPeople = !!o.d.people;
   const go = (t: Tab, x: Sel = null) => { setTab(t); setSel(x); };
+  // Each person sees only the work the CEO switched on for them.
+  const work = s.session?.user.work ?? {};
+  const does = (a: string) => s.session?.user.level === 'creator' || !!work[a];
 
   const tabs: { key: Tab; label: string; short?: string; count?: number }[] = [
     { key: 'today', label: 'Today' },
     { key: 'jobs', label: 'Jobs', count: ov ? ov.jobs.carried_over + ov.jobs.urgent : undefined },
-    { key: 'flags', label: 'Flags', count: ov?.flags?.unresolved },
-    { key: 'handovers', label: 'Handovers', short: 'Approve', count: ov?.handoversAwaitingApproval },
+    ...(does('flags') ? [
+      { key: 'flags' as Tab, label: 'Flags', count: ov?.flags?.unresolved },
+      { key: 'handovers' as Tab, label: 'Handovers', short: 'Approve', count: ov?.handoversAwaitingApproval },
+    ] : []),
     ...(canPeople ? [{ key: 'people' as Tab, label: 'People' }] : []),
     { key: 'stores', label: 'Stores' },
   ];
 
   const list = (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 40 }}>
-      {tab === 'today' ? <TodayView o={o} go={go} /> : null}
-      {tab === 'jobs' ? <JobList o={o} open={id => setSel({ kind: 'job', id })} add={() => setSel({ kind: 'newjob' })} selected={sel?.kind === 'job' ? sel.id : null} /> : null}
+      {tab === 'today' ? <TodayView o={o} go={go} flags={does('flags')} /> : null}
+      {tab === 'jobs' ? <JobList o={o} open={id => setSel({ kind: 'job', id })} add={does('jobs') ? () => setSel({ kind: 'newjob' }) : undefined} selected={sel?.kind === 'job' ? sel.id : null} /> : null}
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
       {tab === 'handovers' ? <HandoverList o={o} open={id => setSel({ kind: 'handover', id })} /> : null}
       {tab === 'people' ? <PeopleList o={o} open={id => setSel({ kind: 'person', id })} /> : null}
-      {tab === 'stores' ? <StoreList o={o} add={() => setSel({ kind: 'newstore' })} /> : null}
+      {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
       <Text style={st.small}>{o.d.loadedAt ? `Updated ${when(o.d.loadedAt)}` : o.loading ? 'Loading…' : 'Needs signal to load.'}</Text>
     </ScrollView>
@@ -68,7 +73,7 @@ export function OfficeApp() {
   const detail = (() => {
     if (!sel) return null;
     const wrap = (el: React.ReactNode) => <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60, maxWidth: 820 }}>{el}</ScrollView>;
-    if (sel.kind === 'job') return wrap(<JobDetail key={sel.id} id={sel.id} o={o} />);
+    if (sel.kind === 'job') return wrap(<JobDetail key={sel.id} id={sel.id} o={o} canEdit={does('jobs')} />);
     if (sel.kind === 'newjob') return wrap(<NewJob o={o} done={id => setSel(id ? { kind: 'job', id } : null)} />);
     if (sel.kind === 'flag') return wrap(<FlagDetail key={sel.id} id={sel.id} o={o} done={close} />);
     if (sel.kind === 'handover') return wrap(<HandoverDetail key={sel.id} id={sel.id} o={o} done={close} />);
@@ -82,7 +87,7 @@ export function OfficeApp() {
         {!wide && sel ? <Pressable onPress={close} accessibilityRole="button" accessibilityLabel="Back" hitSlop={10}><Text style={{ color: K.bandText, fontSize: 34 }}>‹</Text></Pressable> : null}
         <View style={{ flex: 1 }}>
           <Text style={{ color: K.bandText, fontSize: 22, fontWeight: '800' }}>Office</Text>
-          <Text style={{ color: K.bandText, opacity: 0.75 }}>{s.session?.user.name} · {s.session?.company.name}</Text>
+          <Text style={{ color: K.bandText, opacity: 0.75 }}>{s.session?.user.name} · {s.session?.user.level === 'creator' ? 'CEO' : s.session?.user.level === 'admin' ? 'Admin' : s.session?.user.level === 'director' ? 'Director' : 'Management'} · {s.session?.company.name}</Text>
         </View>
         <Pressable onPress={o.load} accessibilityRole="button" accessibilityLabel="Refresh" hitSlop={8}
           style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: K.bandText }}>
@@ -145,7 +150,7 @@ function Tile({ label, value, sub, tone = 'quiet', onPress }: { label: string; v
   );
 }
 
-function TodayView({ o, go }: { o: OfficeHook; go: (t: Tab, x?: Sel) => void }) {
+function TodayView({ o, go, flags }: { o: OfficeHook; go: (t: Tab, x?: Sel) => void; flags: boolean }) {
   const v = o.d.overview;
   if (!v) return <Body quiet>Loading…</Body>;
   const row = { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: S.gap };
@@ -160,11 +165,11 @@ function TodayView({ o, go }: { o: OfficeHook; go: (t: Tab, x?: Sel) => void }) 
         <Tile label="Carried over" value={v.jobs.carried_over} sub="from earlier days" tone={v.jobs.carried_over ? 'warn' : 'quiet'} onPress={() => go('jobs')} />
         <Tile label="Technicians with no work" value={v.technicians.without_work} sub={`of ${v.technicians.active}`} tone={v.technicians.without_work ? 'warn' : 'quiet'} />
       </View>
-      <Heading>Needs a decision</Heading>
-      <View style={row}>
+      {flags ? <Heading>Needs a decision</Heading> : null}
+      {flags ? <View style={row}>
         {v.flags ? <Tile label="Flags to resolve" value={v.flags.unresolved} sub={`${v.flags.explained} already explained`} tone={v.flags.unresolved ? 'warn' : 'good'} onPress={() => go('flags')} /> : null}
         <Tile label="Handovers to approve" value={v.handoversAwaitingApproval} sub="taken with nobody to sign" tone={v.handoversAwaitingApproval ? 'warn' : 'good'} onPress={() => go('handovers')} />
-      </View>
+      </View> : null}
       <Heading>Fleet</Heading>
       <View style={row}>
         <Tile label="Daily checks today" value={`${v.fleet.checked_today} of ${v.fleet.due}`} tone={v.fleet.checked_today >= v.fleet.due ? 'good' : 'warn'} />
@@ -187,17 +192,18 @@ function TodayView({ o, go }: { o: OfficeHook; go: (t: Tab, x?: Sel) => void }) 
 // ---- Jobs ---------------------------------------------------------------------------------------
 
 const FILTERS = ['open', 'today', 'carried', 'closed'] as const;
-function JobList({ o, open, add, selected }: { o: OfficeHook; open: (id: string) => void; add: () => void; selected: string | null }) {
+function JobList({ o, open, add, selected }: { o: OfficeHook; open: (id: string) => void; add?: () => void; selected: string | null }) {
   const [f, setF] = useState<(typeof FILTERS)[number]>('open');
   const [q, setQ] = useState('');
   const t = ymd(new Date());
-  const jobs = o.d.jobs.filter(j => (f === 'closed' ? j.status === 'closed' : j.status !== 'closed') && (f !== 'today' || j.scheduled_date === t) && (f !== 'carried' || j.scheduled_date < t))
+  const shut = (st: string) => st === 'closed' || st === 'cancelled';
+  const jobs = o.d.jobs.filter(j => (f === 'closed' ? shut(j.status) : !shut(j.status)) && (f !== 'today' || j.scheduled_date === t) && (f !== 'carried' || j.scheduled_date < t))
     .filter(j => !q.trim() || `${j.job_number} ${j.store} ${j.fault_reported} ${j.lead_technician}`.toLowerCase().includes(q.trim().toLowerCase()))
     .sort((a, b) => Number(b.priority === 'urgent' && b.status !== 'closed') - Number(a.priority === 'urgent' && a.status !== 'closed'));
   return (
     <>
-      <Button label="New job" onPress={add} />
-      <Choice options={FILTERS} value={f} onChange={setF} labels={{ open: 'All open', today: 'Today', carried: 'Carried over', closed: 'Closed' }} />
+      {add ? <Button label="New job" onPress={add} /> : null}
+      <Choice options={FILTERS} value={f} onChange={setF} labels={{ open: 'All open', today: 'Today', carried: 'Carried over', closed: 'Closed / cancelled' }} />
       <TextInput value={q} onChangeText={setQ} placeholder="Search number, store, fault, technician" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Search jobs" />
       {jobs.map(j => <JobRow key={j.id} j={j} on={selected === j.id} onPress={() => open(j.id)} />)}
       {!jobs.length ? <Body quiet>No jobs here.</Body> : null}
@@ -206,7 +212,7 @@ function JobList({ o, open, add, selected }: { o: OfficeHook; open: (id: string)
 }
 
 function JobRow({ j, on, onPress }: { j: OfficeJob; on: boolean; onPress: () => void }) {
-  const late = j.status !== 'closed' && j.scheduled_date < ymd(new Date());
+  const late = j.status !== 'closed' && j.status !== 'cancelled' && j.scheduled_date < ymd(new Date());
   return (
     <Card onPress={onPress} accessibilityLabel={`Job ${j.job_number}`} style={[on ? { borderColor: K.stripe, borderWidth: 2 } : {}, j.priority === 'urgent' && j.status !== 'closed' ? { borderLeftWidth: 5, borderLeftColor: C.bad } : {}] as never}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -327,11 +333,13 @@ function TechPicker({ o, value, onChange }: { o: OfficeHook; value?: string; onC
   );
 }
 
-function JobDetail({ id, o }: { id: string; o: OfficeHook }) {
+function JobDetail({ id, o, canEdit }: { id: string; o: OfficeHook; canEdit: boolean }) {
   const [c, setC] = useState<CardView | null>(null);
   const [moving, setMoving] = useState(false);
+  const [panel, setPanel] = useState<'none' | 'edit' | 'cancel'>('none');
+  const [hist, setHist] = useState<JobChange[]>([]);
   const j = o.d.jobs.find(x => x.id === id);
-  useEffect(() => { o.card(id).then(setC); }, [id, o.d.loadedAt]);
+  useEffect(() => { o.card(id).then(setC); o.changes(id).then(h => setHist(h ?? [])); }, [id, o.d.loadedAt]);
   if (!j) return <Body quiet>Job not found.</Body>;
   const v = c?.visits.at(-1);
   return (
@@ -347,7 +355,17 @@ function JobDetail({ id, o }: { id: string; o: OfficeHook }) {
         <Body>{j.fault_reported}</Body>
         <Text style={st.small}>{TYPE[j.job_type]} · {day(j.scheduled_date)} · lead {j.lead_technician}{c?.client_order_ref ? ` · order ${c.client_order_ref}` : ''}</Text>
       </Card>
-      {j.status !== 'closed' ? (moving ? <MoveJob j={j} o={o} done={() => setMoving(false)} /> : <Button label="Move to another technician" kind="secondary" onPress={() => setMoving(true)} />) : null}
+      {canEdit && j.status !== 'cancelled' ? (
+        <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
+          <Button label="Edit job" kind="secondary" onPress={() => { setPanel(panel === 'edit' ? 'none' : 'edit'); setMoving(false); }} style={{ flexGrow: 1, flexBasis: 150 }} />
+          {j.status !== 'closed' ? <Button label="Move" kind="secondary" onPress={() => { setMoving(!moving); setPanel('none'); }} style={{ flexGrow: 1, flexBasis: 150 }} /> : null}
+          {j.status !== 'closed' ? <Button label="Cancel job" kind="secondary" onPress={() => { setPanel(panel === 'cancel' ? 'none' : 'cancel'); setMoving(false); }} style={{ flexGrow: 1, flexBasis: 150 }} /> : null}
+        </View>
+      ) : null}
+      {moving ? <MoveJob j={j} o={o} done={() => setMoving(false)} /> : null}
+      {panel === 'edit' && c ? <EditJob j={j} c={c} o={o} started={c.visits.length > 0} done={() => setPanel('none')} /> : null}
+      {panel === 'cancel' ? <CancelJob j={j} o={o} done={() => setPanel('none')} /> : null}
+      {j.status === 'cancelled' ? <Notice tone="warn" title="Cancelled" lines={[hist.find(h => h.field === 'status')?.reason ?? 'Cancelled by the office.']} /> : null}
 
       <Heading>On site</Heading>
       {c?.visits.length ? c.visits.map((x, i) => (
@@ -379,7 +397,89 @@ function JobDetail({ id, o }: { id: string; o: OfficeHook }) {
           <Card>{c.checklist.map(x => <Text key={x.id} style={st.body}>{x.done ? '✓' : '○'} {x.step}</Text>)}</Card>
         </>
       ) : null}
+      {hist.length ? (
+        <>
+          <Heading>Changes by the office</Heading>
+          <Card>
+            {hist.map((h, i) => (
+              <View key={i} style={{ paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: C.line }}>
+                <Text style={st.body}><Text style={{ fontWeight: '700' }}>{h.field}</Text>: {h.old_value ?? '–'} → {h.new_value ?? '–'}</Text>
+                <Text style={st.small}>{when(h.changed_at)} · {h.by}{h.reason ? ` · ${h.reason}` : ''}</Text>
+              </View>
+            ))}
+          </Card>
+        </>
+      ) : null}
     </>
+  );
+}
+
+function EditJob({ j, c, o, started, done }: { j: OfficeJob; c: CardView; o: OfficeHook; started: boolean; done: () => void }) {
+  const closed = j.status === 'closed';
+  const [type, setType] = useState<J.JobType>(j.job_type as J.JobType);
+  const [priority, setPriority] = useState(j.priority as 'urgent' | 'normal' | 'scheduled');
+  const [storeId, setStoreId] = useState(c.store_id);
+  const [fault, setFault] = useState(j.fault_reported);
+  const [ref, setRef] = useState(c.client_order_ref ?? '');
+  const [date, setDate] = useState(j.scheduled_date);
+  const [steps, setSteps] = useState('');
+  const [reason, setReason] = useState('');
+  const [ans, setAns] = useState<Answer | null>(null);
+  const days = [...new Set([j.scheduled_date, ...Array.from({ length: 14 }, (_, i) => ymd(new Date(Date.now() + i * 86_400_000)))])].sort();
+  const save = async () => {
+    const body: Record<string, unknown> = closed ? { clientOrderRef: ref.trim() || null } : {
+      jobType: type, priority, storeId, faultReported: fault.trim(), clientOrderRef: ref.trim() || null, scheduledDate: date,
+      ...(steps.trim() ? { addMaintenanceSteps: steps.split('\n').map(x => x.trim()).filter(Boolean) } : {}),
+    };
+    if (reason.trim()) body.reason = reason.trim();
+    const r = await o.send('PATCH', `/jobs/${j.id}`, body);
+    setAns(r);
+    if (r.ok) done();
+  };
+  return (
+    <Card style={{ borderColor: K.stripe }}>
+      <Heading>Edit job {j.job_number}</Heading>
+      {closed ? <Text style={st.small}>The job is closed: only the client's order number can still be added.</Text> : null}
+      {!closed ? (
+        <>
+          {!started ? (
+            <>
+              <Label>Type</Label>
+              <Choice options={['breakdown', 'planned_maintenance', 'installation', 'quote_visit', 'follow_up'] as const} value={type} onChange={setType} labels={TYPE} />
+              <Label>Store</Label>
+              <Choice options={o.d.stores.map(x => x.id)} value={storeId} onChange={setStoreId} labels={Object.fromEntries(o.d.stores.map(x => [x.id, x.name]))} />
+            </>
+          ) : <Text style={st.small}>The technician has been on site: the store and type cannot change.</Text>}
+          <Label>Priority</Label>
+          <Choice options={['urgent', 'normal', 'scheduled'] as const} value={priority} onChange={setPriority} labels={{ urgent: 'Urgent', normal: 'Normal', scheduled: 'Scheduled' }} />
+          <Field label="Fault reported by the client" value={fault} onChangeText={setFault} multiline />
+          <Label>Day</Label>
+          <Choice options={days} value={date} onChange={setDate} labels={Object.fromEntries(days.map(d => [d, day(d)]))} />
+          {type === 'planned_maintenance' ? <Field label="Add checklist steps (one per line)" value={steps} onChangeText={setSteps} multiline /> : null}
+        </>
+      ) : null}
+      <Field label="Client order number" value={ref} onChangeText={setRef} autoCapitalize="characters" />
+      <Field label={started && !closed ? 'Why does it change? (needed: work has started)' : 'Why does it change? (optional)'} value={reason} onChangeText={setReason} />
+      <Text style={st.small}>Every change is written on the job and the technician is told.</Text>
+      <Reasons a={ans} />
+      <Button label="Save changes" onPress={save} />
+      <Button label="Cancel" kind="quiet" onPress={done} />
+    </Card>
+  );
+}
+
+function CancelJob({ j, o, done }: { j: OfficeJob; o: OfficeHook; done: () => void }) {
+  const [note, setNote] = useState('');
+  const [ans, setAns] = useState<Answer | null>(null);
+  return (
+    <Card style={{ borderColor: C.bad }}>
+      <Heading>Cancel job {j.job_number}</Heading>
+      <Text style={st.small}>It leaves the technician's day and is kept on record. Stock booked for it must come back to the stockroom.</Text>
+      <Field label="Why is it cancelled?" value={note} onChangeText={setNote} placeholder="e.g. Client fixed it themselves" />
+      <Reasons a={ans} />
+      <Button label="Cancel job" kind="danger" disabled={note.trim().length < 5} onPress={async () => { const r = await o.send('POST', `/jobs/${j.id}/cancel`, { note: note.trim() }); setAns(r); if (r.ok) done(); }} />
+      <Button label="Keep the job" kind="quiet" onPress={done} />
+    </Card>
   );
 }
 
@@ -520,7 +620,7 @@ function PeopleList({ o, open }: { o: OfficeHook; open: (id: string) => void }) 
             <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>{x.full_name}</Text>
             <Pill text={x.position} tone="quiet" />
           </View>
-          {x.does_fleet && x.login_level !== 'mechanic' ? <Text style={[st.small, { color: C.info }]}>Also does the mechanic's work</Text> : null}
+          {x.work && x.login_level !== 'creator' ? <Text style={st.small}>{(o.d.people?.areas ?? []).filter(a => x.work![a.key]).map(a => a.label.split(':')[0].split(' (')[0]).join(' · ') || 'Own work only'}</Text> : null}
         </Card>
       ))}
     </>
@@ -542,26 +642,37 @@ function PersonDetail({ id, o }: { id: string; o: OfficeHook }) {
       <Choice options={o.d.people.positions.map(p => p.level)} value={pos} onChange={setPos} labels={labels} />
       <Button label="Save position" disabled={!pos || pos === x.login_level} onPress={async () => { const r = await o.send('PUT', `/access/users/${x.id}/position`, { position: pos }); setAns(r.ok ? { ok: true, body: r.body } : r); }} />
       {ans?.ok ? <Notice tone="good" title="Saved" lines={[`${x.full_name} is now ${labels[pos!]}. It is logged and they are told.`]} /> : <Reasons a={ans} />}
-      {x.login_level !== 'mechanic' ? (
-        <Card style={{ borderColor: x.does_fleet ? C.info : C.line }}>
-          <Label>Mechanic's work</Label>
-          <Body>{x.does_fleet ? `${x.full_name} also does the mechanic's work (daily checks, faults, fleet job cards, workshop stock).` : 'For a small company with no mechanic of its own: give the fleet work to this person too, keeping their position.'}</Body>
-          <Button label={x.does_fleet ? "Take the mechanic's work away" : "Also give the mechanic's work"} kind="secondary"
-            onPress={async () => { const r = await o.send('PUT', `/access/users/${x.id}/fleet-duty`, { on: !x.does_fleet }); setAns(r.ok ? null : r); }} />
+      <Heading>Work {x.full_name.split(' ')[0]} does</Heading>
+      {x.login_level === 'creator' ? <Body quiet>The CEO always has full access to everything.</Body> : (
+        <Card>
+          {(o.d.people.areas ?? []).map(a => {
+            const on = !!x.work?.[a.key];
+            return (
+              <Pressable key={a.key} onPress={async () => { const r = await o.send('PUT', `/access/users/${x.id}/work`, { area: a.key, on: !on }); setAns(r.ok ? null : r); }}
+                accessibilityRole="switch" accessibilityState={{ checked: on }} accessibilityLabel={a.label}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 52, borderBottomWidth: 1, borderBottomColor: C.line }}>
+                <Text style={[st.body, { flex: 1 }]}>{a.label}</Text>
+                <View style={{ width: 46, height: 26, borderRadius: 13, backgroundColor: on ? C.good : C.panel2, justifyContent: 'center', paddingHorizontal: 3 }}>
+                  <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#FFF', alignSelf: on ? 'flex-end' : 'flex-start' }} />
+                </View>
+              </Pressable>
+            );
+          })}
+          <Text style={[st.small, { marginTop: 8 }]}>Changes apply at once, are logged, and {x.full_name.split(' ')[0]} is told.</Text>
         </Card>
-      ) : null}
+      )}
     </>
   );
 }
 
 // ---- Stores ------------------------------------------------------------------------------------
 
-function StoreList({ o, add }: { o: OfficeHook; add: () => void }) {
+function StoreList({ o, add }: { o: OfficeHook; add?: () => void }) {
   const [q, setQ] = useState('');
   const list = useMemo(() => o.d.stores.filter(s => !q.trim() || `${s.client} ${s.name} ${s.address ?? ''}`.toLowerCase().includes(q.trim().toLowerCase())), [o.d.stores, q]);
   return (
     <>
-      <Button label="Add a store" kind="secondary" onPress={add} />
+      {add ? <Button label="Add a store" kind="secondary" onPress={add} /> : null}
       <TextInput value={q} onChangeText={setQ} placeholder="Search client or store" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Search stores" />
       {list.map(s => (
         <Card key={s.id}>

@@ -22,11 +22,12 @@ export interface Inspection {
   id: string; registration: string; driver: string; previous_driver: string | null; inspected_at: string; odometer_km: number; fuel_level: string;
   problems: string[]; new_problems: string[]; handover_by: string; handed_over_by_name: string | null; remote_reason: string | null; status: string;
 }
-export interface Person { id: string; full_name: string; login_level: string; position: string; does_fleet: boolean }
+export interface Person { id: string; full_name: string; login_level: string; position: string; does_fleet: boolean; work?: Record<string, boolean> }
+export interface JobChange { changed_at: string; by: string; field: string; old_value: string | null; new_value: string | null; reason: string | null }
 
 export interface OfficeData {
   overview: Overview | null; jobs: OfficeJob[]; stores: Store[]; techs: Tech[]; flags: OfficeFlag[]; handovers: Inspection[];
-  people: { positions: { level: string; label: string }[]; people: Person[] } | null; loadedAt: string | null;
+  people: { positions: { level: string; label: string }[]; areas?: { key: string; label: string }[]; people: Person[] } | null; loadedAt: string | null;
 }
 const EMPTY: OfficeData = { overview: null, jobs: [], stores: [], techs: [], flags: [], handovers: [], people: null, loadedAt: null };
 
@@ -54,13 +55,14 @@ export function useOffice() {
 
   useEffect(() => { load(); const t = setInterval(load, 30_000); return () => clearInterval(t); }, []);
 
-  const send = async (method: 'POST' | 'PUT', path: string, json: object, withAt = false): Promise<Answer> => {
+  const send = async (method: 'POST' | 'PUT' | 'PATCH', path: string, json: object, withAt = false): Promise<Answer> => {
     const r = await s.ask({ method, path, json: withAt ? { ...json, at: nowIso() } : json });
     if (r && r.status < 300) { load(); return { ok: true, body: r.body }; }
     return { ok: false, reasons: (r?.body as { reasons?: string[]; error?: string })?.reasons ?? [(r?.body as { error?: string })?.error ?? 'no signal: try again'] };
   };
   const card = async (id: string) => get<CardView>(`/jobs/${id}`);
+  const changes = async (id: string) => get<JobChange[]>(`/jobs/${id}/changes`);
 
-  return { d, loading, load, send, card };
+  return { d, loading, load, send, card, changes };
 }
 export type OfficeHook = ReturnType<typeof useOffice>;

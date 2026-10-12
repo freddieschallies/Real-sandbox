@@ -33,11 +33,16 @@ const STEPS: [string, string[]][] = [
     'Stock: his own workshop stock (oil, coolant, filters, pads). Dip the oil drum: a little short is allowed and recorded; a lot short goes to the office. Note a spill straight away. Parts on a job card can come from it.',
     'Techs: Thabo\'s phone is broken, so put him in a vehicle yourself (or take it off his name). Switch to Tech to see it on his My day.',
   ]],
-  ['As the office (Lilanie, the CEO)', [
-    'Today: jobs, flags, handovers to approve, daily checks, safety faults and stock on one screen. Best on a computer.',
-    'Jobs: create a job for any technician (Thabo sees it on his phone at once), open a job card to follow it, move it to someone else.',
-    'Flags: read the explanation and resolve it with a note. Handovers: approve or reject a vehicle taken with nobody to sign.',
-    'People: give each person their position, or give the mechanic\'s work to someone extra. Stores: add a store by pasting its point from Google Maps.',
+  ['As the office admin (Zanele)', [
+    'She only sees the work the CEO switched on for her. By default: jobs and stores (quotes and invoices come next).',
+    'Jobs: open a job for any technician (Thabo sees it on his phone at once), edit anything on it (every change is written on the job and the technician is told), move it, or cancel it.',
+    'Stores: add a store by pasting its point from Google Maps.',
+    'Ask the CEO to give her the stockroom: a Stockroom tab appears at the top and she has the stock controller\'s full screens.',
+  ]],
+  ['As the CEO (Lilanie)', [
+    'Everything: the office, plus Stockroom and Fleet tabs at the top to open those screens.',
+    'People: set each person\'s position and switch their work on or off: jobs, quotes and invoices, stores, stockroom, fleet, flags and approvals, prices.',
+    'Today: jobs, flags, handovers to approve, daily checks, safety faults and stock on one screen. Flags and Handovers: resolve and approve.',
   ]],
 ];
 
@@ -45,17 +50,18 @@ export function TesterWelcome() {
   const s = useStore();
   const [busy, setBusy] = useState<string | null>(null);
   const [reset, setReset] = useState(false);
-  const go = async (who: 'demo' | 'stock' | 'mech' | 'office') => { setBusy(who); await s.signIn('demo', '', who, 'demo'); setBusy(null); };
+  const go = async (who: 'demo' | 'stock' | 'mech' | 'office' | 'admin') => { setBusy(who); await s.signIn('demo', '', who, 'demo'); setBusy(null); };
   return (
     <Screen title="Real Sandbox" sub="Test drive · ZSP job cards and stock">
       <View style={{ gap: 6 }}>
-        <Text style={{ color: C.accent, fontSize: 28, fontWeight: '800' }}>Try it as any of the four</Text>
-        <Body quiet>Everything here is made up and stays in this browser. Once in, the bar at the top switches between the four apps; what one does, the others see. (The real app only shows each person their own.)</Body>
+        <Text style={{ color: C.accent, fontSize: 28, fontWeight: '800' }}>Try it as any of the five</Text>
+        <Body quiet>Everything here is made up and stays in this browser. Once in, the bar at the top switches between them; what one does, the others see. (The real app only shows each person their own.)</Body>
       </View>
       <Button label="Open as technician" onPress={() => go('demo')} busy={busy === 'demo'} />
       <Button label="Open as stock controller" kind="secondary" onPress={() => go('stock')} busy={busy === 'stock'} />
       <Button label="Open as mechanic" kind="secondary" onPress={() => go('mech')} busy={busy === 'mech'} />
-      <Button label="Open as office (CEO)" kind="secondary" onPress={() => go('office')} busy={busy === 'office'} />
+      <Button label="Open as office admin (Zanele)" kind="secondary" onPress={() => go('admin')} busy={busy === 'admin'} />
+      <Button label="Open as CEO (Lilanie)" kind="secondary" onPress={() => go('office')} busy={busy === 'office'} />
       {STEPS.map(([title, lines]) => (
         <Card key={title}>
           <Heading>{title}</Heading>
