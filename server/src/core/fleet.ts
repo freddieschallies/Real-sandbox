@@ -82,3 +82,52 @@ export function canDrive(status: VehicleStatus): { ok: true } | { ok: false; rea
   if (status === 'in_service') return { ok: true };
   return { ok: false, reason: status === 'workshop' ? 'this vehicle is in the workshop: speak to the mechanic' : 'this vehicle is off the road: speak to the mechanic' };
 }
+
+// ---- Daily checks: the mechanic checks oil, water and tyres on every vehicle in service, every day ----
+
+export type FluidResult = 'ok' | 'topped_up' | 'problem';
+export type TyreResult = 'ok' | 'pressure_adjusted' | 'problem';
+
+export interface DailyCheckDraft {
+  odometerKm?: number | null;
+  oil?: FluidResult; oilLitres?: number | null;
+  water?: FluidResult; waterLitres?: number | null;
+  tyres?: TyreResult;
+  notes?: string | null;
+}
+
+/** What is still missing before a daily check can be saved. Oil that was added must always be noted, in litres. */
+export function missingOnDailyCheck(d: DailyCheckDraft, lastKm: number | null): string[] {
+  const out: string[] = [];
+  if (d.odometerKm == null || Number.isNaN(d.odometerKm)) out.push('odometer reading (km)');
+  else if (lastKm != null && d.odometerKm < lastKm) out.push(`odometer cannot be lower than the last reading (${lastKm} km)`);
+  if (!d.oil) out.push('oil: OK, topped up or a problem');
+  else if (d.oil === 'topped_up' && !(d.oilLitres != null && d.oilLitres > 0)) out.push('how much oil was added (litres)');
+  if (d.oil && d.oil !== 'topped_up' && d.oilLitres) out.push('oil litres only when oil was added: choose "Topped up"');
+  if (!d.water) out.push('water: OK, topped up or a problem');
+  if (!d.tyres) out.push('tyres: OK, pressure adjusted or a problem');
+  const problems = [d.oil, d.water, d.tyres].filter(x => x === 'problem').length;
+  if (problems && !(d.notes && d.notes.trim().length >= 10)) out.push('what the problem is (a short sentence)');
+  return out;
+}
+
+/** Faults a daily check raises. Tyre problems are safety faults; oil and water problems urgent. */
+export function faultsFromDailyCheck(d: DailyCheckDraft): { description: string; severity: FaultSeverity }[] {
+  const note = d.notes?.trim() ? `: ${d.notes.trim()}` : '';
+  const out: { description: string; severity: FaultSeverity }[] = [];
+  if (d.oil === 'problem') out.push({ description: `Daily check, oil${note}`, severity: 'urgent' });
+  if (d.water === 'problem') out.push({ description: `Daily check, water / coolant${note}`, severity: 'urgent' });
+  if (d.tyres === 'problem') out.push({ description: `Daily check, tyres${note}`, severity: 'safety' });
+  return out;
+}
+
+export const OIL_WATCH_DAYS = 7;
+export const OIL_WATCH_TIMES = 3;
+export const OIL_WATCH_LITRES = 2;
+
+/** An engine that keeps needing oil is burning or leaking it: 3 top-ups or 2 litres within 7 days. */
+export function oilWatch(topUps: { litres: number }[]): { flag: boolean; text: string } {
+  const litres = Math.round(topUps.reduce((n, t) => n + t.litres, 0) * 100) / 100;
+  const flag = topUps.length >= OIL_WATCH_TIMES || litres >= OIL_WATCH_LITRES;
+  return { flag, text: `Using oil: topped up ${topUps.length} time${topUps.length === 1 ? '' : 's'} (${litres} L) in ${OIL_WATCH_DAYS} days. Check for leaks or burning oil.` };
+}

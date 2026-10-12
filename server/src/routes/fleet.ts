@@ -17,7 +17,7 @@ export async function latestKm(c: Q, vehicleId: string): Promise<number | null> 
 }
 
 /** Records a km reading; refuses one lower than what is already on record. */
-export async function recordKm(c: Q, vehicleId: string, km: number, at: string, source: 'handover' | 'fleet_job' | 'mechanic' | 'release', sourceId: string | null, by: string) {
+export async function recordKm(c: Q, vehicleId: string, km: number, at: string, source: 'handover' | 'fleet_job' | 'mechanic' | 'release' | 'daily_check', sourceId: string | null, by: string) {
   const last = await latestKm(c, vehicleId);
   if (last != null && km < last) throw new Refused(409, [`odometer cannot be lower than the last reading (${last} km)`]);
   await c.query('INSERT INTO odometer_readings (vehicle_id, km, read_at, source, source_id, recorded_by) VALUES ($1, $2, $3, $4, $5, $6)',
@@ -58,8 +58,10 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
                 WHERE s.vehicle_id = v.id AND s.mode = 'driving' AND s.released_at IS NULL ORDER BY s.scanned_at DESC LIMIT 1) AS driver,
               (SELECT count(*) FROM vehicle_faults f WHERE f.vehicle_id = v.id AND f.status IN ('open', 'in_progress'))::int AS open_faults,
               (SELECT count(*) FROM vehicle_faults f WHERE f.vehicle_id = v.id AND f.status IN ('open', 'in_progress') AND f.severity = 'safety')::int AS safety_faults,
-              (SELECT json_build_object('id', j.id, 'number', j.number, 'type', j.job_type) FROM fleet_jobs j WHERE j.vehicle_id = v.id AND j.status = 'open') AS open_job
-         FROM vehicles v WHERE v.active ORDER BY v.registration`,
+              (SELECT json_build_object('id', j.id, 'number', j.number, 'type', j.job_type) FROM fleet_jobs j WHERE j.vehicle_id = v.id AND j.status = 'open') AS open_job,
+              (SELECT json_build_object('oil', d.oil, 'oilLitres', d.oil_litres::float, 'water', d.water, 'tyres', d.tyres, 'at', d.checked_at)
+                 FROM daily_checks d WHERE d.vehicle_id = v.id AND d.check_date = $1) AS checked_today
+         FROM vehicles v WHERE v.active ORDER BY v.registration`, [today()],
     );
     const t = today();
     return rows.map(r => {
@@ -77,6 +79,10 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
     const v = (await req.db.query('SELECT * FROM vehicles WHERE id = $1', [id])).rows[0];
     if (!v) throw new Refused(404, ['no such vehicle']);
     const q = (sql: string) => req.db.query(sql, [id]).then(r => r.rows);
+    const dailyChecks = (await req.db.query(
+      `SELECT d.id, to_char(d.check_date, 'YYYY-MM-DD') AS check_date, d.checked_at, u.full_name AS by, d.odometer_km, d.oil, d.oil_litres::float AS oil_litres,
+              d.water, d.water_litres::float AS water_litres, d.tyres, d.notes
+         FROM daily_checks d JOIN users u ON u.id = d.checked_by WHERE d.vehicle_id = $1 ORDER BY d.check_date DESC LIMIT 30`, [id])).rows;
     const [faults, jobs, km, inspections] = await Promise.all([
       q(`SELECT f.*, u.full_name AS reported_by_name FROM vehicle_faults f JOIN users u ON u.id = f.reported_by
           WHERE f.vehicle_id = $1 ORDER BY (f.status IN ('open', 'in_progress')) DESC, f.reported_at DESC LIMIT 100`),
@@ -95,7 +101,7 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
       vehicle: { ...v, licence_expiry: v.licence_expiry ? toDate(v.licence_expiry) : null, next_service_at: v.next_service_at ? toDate(v.next_service_at) : null, km: latest },
       serviceDue: F.serviceDue({ next_service_km: v.next_service_km, next_service_at: v.next_service_at ? toDate(v.next_service_at) : null }, latest, t),
       licenceDue: F.licenceDue(v.licence_expiry ? toDate(v.licence_expiry) : null, t),
-      faults, jobs, km: km.map((k: { km: number }) => ({ ...k, km: Number(k.km) })), inspections,
+      faults, jobs, km: km.map((k: { km: number }) => ({ ...k, km: Number(k.km) })), inspections, dailyChecks,
     };
   });
 
@@ -342,6 +348,75 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
       await audit(c, me, 'fleet_job_completed', 'fleet_job', id, { number: j.number });
       return { id, status: 'completed' };
     });
+  });
+
+  // ---- Daily checks: oil, water and tyres on every vehicle in service, every day ----------------
+
+  app.get('/fleet/daily-checks', async (req: FastifyRequest<{ Querystring: { date?: string } }>) => {
+    viewer(req);
+    const date = req.query.date ? parse(DateOnly, req.query.date) : today();
+    const { rows } = await req.db.query(
+      `SELECT v.id AS vehicle_id, v.registration, v.status, d.id, d.checked_at, u.full_name AS by, d.odometer_km, d.oil, d.oil_litres::float AS oil_litres,
+              d.water, d.water_litres::float AS water_litres, d.tyres, d.notes
+         FROM vehicles v LEFT JOIN daily_checks d ON d.vehicle_id = v.id AND d.check_date = $1 LEFT JOIN users u ON u.id = d.checked_by
+        WHERE v.active ORDER BY (d.id IS NULL AND v.status = 'in_service') DESC, v.registration`, [date]);
+    const due = rows.filter(r => r.status === 'in_service');
+    return { date, done: due.filter(r => r.id).length, due: due.length, vehicles: rows.map(r => ({ ...r, required: r.status === 'in_service' })) };
+  });
+
+  app.post('/fleet/vehicles/:id/daily-check', async (req: FastifyRequest<{ Params: { id: string } }>, reply) => {
+    mechanic(req);
+    const vehicleId = parse(Uuid, req.params.id);
+    const Fluid = z.enum(['ok', 'topped_up', 'problem']);
+    const b = parse(z.object({
+      id: Uuid.optional(), odometerKm: z.number().int().min(0), oil: Fluid, oilLitres: z.number().positive().max(20).nullish(),
+      water: Fluid, waterLitres: z.number().positive().max(30).nullish(), tyres: z.enum(['ok', 'pressure_adjusted', 'problem']),
+      notes: z.string().trim().max(1000).nullish(), photoIds: z.array(Uuid).max(10).default([]), at: Iso,
+    }), req.body);
+    const me = req.actor.id;
+    const date = today();
+    const out = await tx(req.db, async c => {
+      const v = (await c.query('SELECT registration FROM vehicles WHERE id = $1 AND active', [vehicleId])).rows[0];
+      if (!v) throw new Refused(404, ['no such vehicle']);
+      const missing = F.missingOnDailyCheck(b, await latestKm(c, vehicleId));
+      if (missing.length) throw new Refused(409, missing);
+      if ((await c.query('SELECT 1 FROM daily_checks WHERE vehicle_id = $1 AND check_date = $2', [vehicleId, date])).rowCount) {
+        throw new Refused(409, [`${v.registration} was already checked today`]);
+      }
+      const id = b.id ?? randomUUID();
+      await c.query(
+        `INSERT INTO daily_checks (id, vehicle_id, check_date, checked_at, checked_by, odometer_km, oil, oil_litres, water, water_litres, tyres, notes, photo_ids)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        [id, vehicleId, date, b.at, me, b.odometerKm, b.oil, b.oil === 'topped_up' ? b.oilLitres : null, b.water,
+         b.water === 'topped_up' ? (b.waterLitres ?? null) : null, b.tyres, b.notes?.trim() || null, b.photoIds]);
+      await recordKm(c, vehicleId, b.odometerKm, b.at, 'daily_check', id, me);
+      const faults: string[] = [];
+      for (const f of F.faultsFromDailyCheck(b)) {
+        await c.query(
+          `INSERT INTO vehicle_faults (vehicle_id, description, severity, source, source_id, reported_by, reported_at, photo_ids)
+           VALUES ($1, $2, $3, 'mechanic', $4, $5, $6, $7)`, [vehicleId, f.description, f.severity, id, me, b.at, b.photoIds]);
+        faults.push(f.description);
+      }
+      // An engine that keeps needing oil: raise it once, and tell the driver's manager.
+      let oilWarning: string | null = null;
+      if (b.oil === 'topped_up') {
+        const ups = (await c.query(
+          `SELECT oil_litres::float AS litres FROM daily_checks WHERE vehicle_id = $1 AND oil = 'topped_up' AND check_date > $2::date - $3::int`,
+          [vehicleId, date, F.OIL_WATCH_DAYS])).rows;
+        const w = F.oilWatch(ups);
+        const already = (await c.query("SELECT 1 FROM vehicle_faults WHERE vehicle_id = $1 AND status IN ('open', 'in_progress') AND description LIKE 'Using oil:%'", [vehicleId])).rowCount;
+        if (w.flag && !already) {
+          await c.query(
+            `INSERT INTO vehicle_faults (vehicle_id, description, severity, source, source_id, reported_by, reported_at)
+             VALUES ($1, $2, 'urgent', 'mechanic', $3, $4, $5)`, [vehicleId, w.text, id, me, b.at]);
+          await tellDriverAndManager(c, vehicleId, `${v.registration}: ${w.text}`);
+          oilWarning = w.text;
+        }
+      }
+      await audit(c, me, 'daily_check', 'vehicle', vehicleId, { oil: b.oil, oilLitres: b.oilLitres ?? null, water: b.water, tyres: b.tyres });
+      return { id, faults, oilWarning };
+    });
+    return reply.code(201).send(out);
   });
 
   // ---- Bookings: vehicles booked in for a service or repair -----------------------------

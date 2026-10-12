@@ -716,6 +716,45 @@ test('the mechanic books vehicles in, sees where they are, and puts a technician
   await db.query("UPDATE vehicles SET status = 'in_service' WHERE id = $1", [ids.v1]);
 });
 
+test('daily checks: oil, water and tyres every day; oil added is always noted, and an engine using oil is flagged', async () => {
+  const last = Number((await db.query('SELECT max(km) AS km FROM odometer_readings WHERE vehicle_id = $1', [ids.v2])).rows[0].km ?? 0);
+  const C = `/fleet/vehicles/${ids.v2}/daily-check`;
+  const at = '2026-10-17T07:00:00+02:00';
+  assert.equal((await call('tech', 'POST', C, { odometerKm: last + 10, oil: 'ok', water: 'ok', tyres: 'ok', at })).status, 403, 'the mechanic does them');
+  const list0 = (await call('mech', 'GET', '/fleet/daily-checks')).body;
+  assert.ok(list0.due >= 1);
+  assert.equal(list0.vehicles.find((v: { vehicle_id: string }) => v.vehicle_id === ids.v2).id, null);
+
+  const noLitres = await call('mech', 'POST', C, { odometerKm: last + 10, oil: 'topped_up', water: 'ok', tyres: 'ok', at });
+  assert.equal(noLitres.status, 409);
+  assert.deepEqual(noLitres.body.reasons, ['how much oil was added (litres)']);
+  assert.match((await call('mech', 'POST', C, { odometerKm: last + 10, oil: 'ok', water: 'ok', tyres: 'problem', at })).body.reasons[0], /what the problem is/);
+  assert.match((await call('mech', 'POST', C, { odometerKm: 1, oil: 'ok', water: 'ok', tyres: 'ok', at })).body.reasons[0], /cannot be lower/);
+
+  // Two top-ups earlier this week are on record; today's is the third.
+  const company = (await db.query('SELECT company_id FROM vehicles WHERE id = $1', [ids.v2])).rows[0].company_id;
+  for (const ago of [2, 4]) {
+    await db.query(
+      `INSERT INTO daily_checks (company_id, vehicle_id, check_date, checked_at, checked_by, odometer_km, oil, oil_litres, water, tyres)
+       VALUES ($1, $2, current_date - $3::int, now() - ($3::int * interval '1 day'), $4, $5, 'topped_up', 0.5, 'ok', 'ok')`, [company, ids.v2, ago, ids.mech, last]);
+  }
+  const ok = await call('mech', 'POST', C, { odometerKm: last + 10, oil: 'topped_up', oilLitres: 0.5, water: 'ok', tyres: 'problem', notes: 'Front right tyre worn on the inside edge', at });
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  assert.match(ok.body.oilWarning, /Using oil: topped up 3 times \(1.5 L\)/);
+  assert.equal(ok.body.faults.length, 1, 'the tyre problem became a fault');
+  const faults = (await call('mech', 'GET', '/fleet/faults')).body.filter((f: { vehicle_id: string }) => f.vehicle_id === ids.v2);
+  assert.ok(faults.some((f: { description: string; severity: string }) => /^Daily check, tyres/.test(f.description) && f.severity === 'safety'));
+  assert.ok(faults.some((f: { description: string }) => /^Using oil/.test(f.description)));
+  assert.equal((await call('mech', 'POST', C, { odometerKm: last + 20, oil: 'ok', water: 'ok', tyres: 'ok', at })).body.reasons[0], 'ND 503-221 was already checked today');
+  const fleet = (await call('mech', 'GET', '/fleet')).body.find((v: { id: string }) => v.id === ids.v2);
+  assert.equal(fleet.checked_today.oilLitres, 0.5);
+  const det = (await call('mech', 'GET', `/fleet/vehicles/${ids.v2}`)).body;
+  assert.equal(det.dailyChecks.length, 3);
+  assert.equal(det.dailyChecks[0].oil_litres, 0.5);
+  assert.ok(det.km.some((k: { source: string }) => k.source === 'daily_check'), 'the km is logged too');
+  await assert.rejects(db.query('UPDATE daily_checks SET oil = $2 WHERE id = $1', [ok.body.id, 'ok']), /locked/);
+});
+
 test('the CEO assigns each person a position; it takes effect at once and is logged', async () => {
   assert.equal((await call('manager', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'mechanic' })).status, 403, 'only whoever manages access');
   const list = (await call('director', 'GET', '/access/positions')).body;
