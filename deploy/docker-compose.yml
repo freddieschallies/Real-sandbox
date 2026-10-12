@@ -1,0 +1,74 @@
+# Real Sandbox on the office server.
+# Start:   docker compose --env-file .env up -d
+# Logs:    docker compose logs -f api
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: realsandbox
+      POSTGRES_USER: realsandbox
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U realsandbox -d realsandbox"]
+      interval: 10s
+      retries: 10
+
+  api:
+    build: ../server
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://realsandbox:${DB_PASSWORD}@db:5432/realsandbox
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    volumes:
+      - uploads:/data/uploads
+    ports:
+      - "127.0.0.1:8080:8080"   # only reachable on the server itself; phones come in through the tunnel
+
+  # Nightly backup at 01:30: database dump + photos, 30 days kept. Copy /backups off-site (see OFFICE-SERVER.md).
+  backup:
+    image: postgres:16
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      PGPASSWORD: ${DB_PASSWORD}
+      TZ: Africa/Johannesburg
+    volumes:
+      - uploads:/data/uploads:ro
+      - ${BACKUP_DIR:-./backups}:/backups
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        while true; do
+          now=$$(date +%H%M)
+          if [ "$$now" = "0130" ]; then
+            stamp=$$(date +%Y-%m-%d)
+            pg_dump -h db -U realsandbox -Fc realsandbox > /backups/db-$$stamp.dump &&
+            tar -czf /backups/photos-$$stamp.tar.gz -C /data uploads &&
+            find /backups -type f -mtime +30 -delete
+            sleep 60
+          fi
+          sleep 30
+        done
+
+  # Secure link so phones can reach the server from anywhere, with no open ports on the office router.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - api
+    profiles: ["tunnel"]
+
+volumes:
+  db-data:
+  uploads:

@@ -15,6 +15,7 @@
 
 - Ubuntu server running Docker Compose: `postgres`, `api`, `web`, `tracker`, `backup`.
 - Reached from phones through a Cloudflare Tunnel: no open ports or static IP needed.
+- Timesheet tolerance: a job differing by more than 15 minutes from the timers raises a mismatch flag.
 - Must have: UPS, LTE backup internet with automatic failover, nightly encrypted backups copied off-site.
 
 ## Build phases
@@ -29,4 +30,6 @@
 - `server/db/001_init.sql`: full schema (47 tables and views); `db/test_rules.sql` checks 9 hard rules: all pass.
 - `server/src/core`: permissions, job card forced path, monitoring thresholds; `test/core.test.ts`: 22 tests, all pass.
 - `server/src`: API server (Fastify). Logins, monitoring-policy gate, job creation, the full job card flow (go, arrive with geofence, start, pause, work items, photos, van stock materials, done, continue later, close with signature or manager unavailable). `test/api.test.ts`: 8 end-to-end tests against a real database, all pass.
+- Server features for the phone app: offline replays (Idempotency-Key), photo uploads, my day, van stock, vehicle barcode scan-in, fuel, supply runs with learned suppliers, timesheets checked against job timers, on-site estimates, flags (explain and resolve), notices. `test/api.test.ts`: 17 end-to-end tests.
+- Office server: `deploy/docker-compose.yml` (database, API, nightly backups, Cloudflare tunnel); install guide in `docs/OFFICE-SERVER.md`.
 - Run tests: `npm test` in `server/` (needs a local PostgreSQL; see `TEST_DATABASE_ADMIN_URL`).
