@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { Client, Db } from '../db.ts';
@@ -6,31 +6,12 @@ import { audit, raiseFlag, tx } from '../db.ts';
 import { can } from '../core/permissions.ts';
 import * as J from '../core/jobCard.ts';
 import { isOnJob, loadCard, type JobRow } from '../jobsRepo.ts';
-
-const Iso = z.string().datetime({ offset: true });
-const Uuid = z.string().uuid();
-const Point = z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) });
-
-class Refused extends Error {
-  status: number; reasons: string[];
-  constructor(status: number, reasons: string[]) { super(reasons.join('; ')); this.status = status; this.reasons = reasons; }
-}
-
-function parse<T extends z.ZodTypeAny>(schema: T, data: unknown): z.infer<T> {
-  const r = schema.safeParse(data);
-  if (!r.success) throw new Refused(400, r.error.issues.map(i => `${i.path.join('.') || 'body'}: ${i.message}`));
-  return r.data;
-}
+import { Iso, Point, Refused, Uuid, DateOnly, parse } from '../http.ts';
+import { readUpload, saveFile, removeFile } from '../uploads.ts';
 
 interface Ctx { c: Client; row: JobRow; card: J.JobCard; visitId?: string; actorId: string }
 
 export function registerJobRoutes(app: FastifyInstance, db: Db) {
-  app.setErrorHandler((err, _req, reply) => {
-    if (err instanceof Refused) return reply.code(err.status).send({ error: 'refused', reasons: err.reasons });
-    app.log.error(err);
-    return reply.code(500).send({ error: 'server error' });
-  });
-
   /**
    * Runs one job card action: lock the card, check the person is on the job, ask the rules engine,
    * and only if it agrees, write the change. Returns the card as it now stands.
@@ -60,7 +41,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     storeId: Uuid,
     clientOrderRef: z.string().max(100).optional(),
     faultReported: z.string().min(3).max(2000),
-    scheduledDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    scheduledDate: DateOnly,
     leadTechnicianId: Uuid,
     helperIds: z.array(Uuid).default([]),
     maintenanceSteps: z.array(z.string().min(1)).default([]),
@@ -179,8 +160,8 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
   // ---- Work items ---------------------------------------------------------
 
   app.post('/jobs/:id/items', async (req: FastifyRequest<P>) => {
-    const b = parse(z.object({ title: z.string().min(3).max(200) }), req.body);
-    const id = randomUUID();
+    const b = parse(z.object({ title: z.string().min(3).max(200), id: Uuid.optional() }), req.body);
+    const id = b.id ?? randomUUID();
     return act(req,
       card => J.addItem(card, { id, title: b.title, origin: 'found_on_site', beforePhotos: 0, afterPhotos: 0, vanStockLines: 0, boughtOutLines: 0, noMaterials: false }),
       async ({ c, row }) => { await c.query("INSERT INTO work_items (id, job_id, title, origin) VALUES ($1, $2, $3, 'found_on_site')", [id, row.id, b.title]); });
@@ -215,18 +196,25 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     });
   });
 
-  // Photo record. The image itself is uploaded separately; this stores what the card needs to know.
+  // Work item photo: the image itself, sent as multipart/form-data with fields kind, takenAt and optional id.
   app.post('/jobs/:id/items/:itemId/photos', async (req: FastifyRequest<{ Params: { id: string; itemId: string } }>) => {
     const itemId = parse(Uuid, req.params.itemId);
-    const b = parse(z.object({ kind: z.enum(['before', 'after', 'rating_plate']), takenAt: Iso }), req.body);
-    return act(req, card => (card.status === 'closed' ? { ok: false, reasons: ['job is closed'] } : card.items.some(i => i.id === itemId) ? { ok: true, card } : { ok: false, reasons: ['no such item'] }),
-      async ({ c, row, actorId }) => {
-        const photoId = randomUUID();
-        await c.query(
-          'INSERT INTO photos (id, kind, job_id, work_item_id, file_path, taken_at, taken_by) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-          [photoId, b.kind, row.id, itemId, `pending-upload/${photoId}.jpg`, b.takenAt, actorId],
-        );
-      });
+    const up = await readUpload(req);
+    const f = parse(z.object({ kind: z.enum(['before', 'after', 'rating_plate']), takenAt: Iso, id: Uuid.optional() }), up.fields);
+    const photoId = f.id ?? randomUUID();
+    const rel = await saveFile(photoId, up, f.takenAt);
+    try {
+      return await act(req, card => (card.status === 'closed' ? { ok: false, reasons: ['job is closed'] } : card.items.some(i => i.id === itemId) ? { ok: true, card } : { ok: false, reasons: ['no such item'] }),
+        async ({ c, row, actorId }) => {
+          await c.query(
+            'INSERT INTO photos (id, kind, job_id, work_item_id, file_path, taken_at, taken_by, content_type, bytes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+            [photoId, f.kind, row.id, itemId, rel, f.takenAt, actorId, up.mimetype, up.buffer.length],
+          );
+        });
+    } catch (e) {
+      await removeFile(rel);
+      throw e;
+    }
   });
 
   // Materials from the technician's own van stock.
@@ -255,6 +243,67 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     });
   });
 
+  // Bought out: a part bought for this job that is not on the system. Never goes into van stock.
+  app.post('/jobs/:id/items/:itemId/bought-out', async (req: FastifyRequest<{ Params: { id: string; itemId: string } }>) => {
+    const itemId = parse(Uuid, req.params.itemId);
+    const b = parse(z.object({
+      id: Uuid.optional(), description: z.string().min(2).max(300), qty: z.number().positive(),
+      priceCents: z.number().int().min(0), supplierId: Uuid.optional(), slipPhotoId: Uuid,
+    }), req.body);
+    return act(req, card => (card.status === 'closed' ? { ok: false, reasons: ['job is closed'] } : card.items.some(i => i.id === itemId) ? { ok: true, card } : { ok: false, reasons: ['no such item'] }),
+      async ({ c, row, actorId }) => {
+        const slip = await c.query("SELECT 1 FROM photos WHERE id = $1 AND kind = 'bought_out_slip' AND taken_by = $2", [b.slipPhotoId, actorId]);
+        if (!slip.rowCount) throw new Refused(409, ['upload the slip photo first']);
+        await c.query(
+          `INSERT INTO bought_out_items (id, job_id, work_item_id, description, qty, price_cents, supplier_id, slip_photo_id, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [b.id ?? randomUUID(), row.id, itemId, b.description, b.qty, b.priceCents, b.supplierId ?? null, b.slipPhotoId, actorId],
+        );
+      });
+  });
+
+  // On-site estimate. Prices come from the Director's price list; the technician only picks items and quantities.
+  app.post('/jobs/:id/items/:itemId/estimate', async (req: FastifyRequest<{ Params: { id: string; itemId: string } }>) => {
+    const jobId = parse(Uuid, req.params.id);
+    const itemId = parse(Uuid, req.params.itemId);
+    const b = parse(z.object({
+      at: Iso,
+      labourHours: z.number().min(0).max(500),
+      stockLines: z.array(z.object({ stockItemId: Uuid, qty: z.number().positive() })).default([]),
+      boughtOutLines: z.array(z.object({ description: z.string().min(2), qty: z.number().positive(), estimatedPriceCents: z.number().int().min(0) })).default([]),
+      emailTo: z.string().email().optional(),
+    }), req.body);
+    return tx(db, async c => {
+      if (!(await isOnJob(c, jobId, req.actor.id))) throw new Refused(403, ['you are not assigned to this job']);
+      const item = await c.query('SELECT 1 FROM work_items WHERE id = $1 AND job_id = $2', [itemId, jobId]);
+      if (!item.rowCount) throw new Refused(404, ['no such item']);
+      const rate = await c.query("SELECT amount_cents FROM rates WHERE key = 'labour_per_hour'");
+      const missing: string[] = [];
+      if (b.labourHours > 0 && !rate.rowCount) missing.push('labour rate');
+      const lines: object[] = [];
+      let total = Math.round(b.labourHours * (rate.rows[0]?.amount_cents ?? 0));
+      for (const l of b.stockLines) {
+        const p = await c.query('SELECT code, description, selling_price_cents FROM stock_items WHERE id = $1', [l.stockItemId]);
+        const s = p.rows[0];
+        if (!s) throw new Refused(400, ['unknown stock item']);
+        if (s.selling_price_cents == null) { missing.push(`price for ${s.code}`); continue; }
+        total += Math.round(l.qty * s.selling_price_cents);
+        lines.push({ stockItemId: l.stockItemId, description: s.description, qty: l.qty, unitPriceCents: s.selling_price_cents });
+      }
+      for (const l of b.boughtOutLines) {
+        total += Math.round(l.qty * l.estimatedPriceCents);
+        lines.push({ description: l.description, qty: l.qty, unitPriceCents: l.estimatedPriceCents, boughtOut: true });
+      }
+      if (missing.length) throw new Refused(409, [`no price set yet for: ${missing.join(', ')}. Ask a Director to set it.`]);
+      const { rows } = await c.query(
+        `INSERT INTO estimates (job_id, work_item_id, created_by, created_at, labour_hours, lines, total_cents, emailed_to)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, label, total_cents, lines, labour_hours`,
+        [jobId, itemId, req.actor.id, b.at, b.labourHours, JSON.stringify(lines), total, b.emailTo ?? null],
+      );
+      return rows[0];
+    });
+  });
+
   // ---- Finishing ----------------------------------------------------------
 
   app.post('/jobs/:id/done', async (req: FastifyRequest<P>) => {
@@ -266,7 +315,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
 
   app.post('/jobs/:id/continue-later', async (req: FastifyRequest<P>) => {
     const b = parse(z.object({
-      at: Iso, progress: z.string(), plannedReturn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), managerInformed: z.string(),
+      at: Iso, progress: z.string(), plannedReturn: DateOnly, managerInformed: z.string(),
       reason: z.enum(['more_work_needed', 'waiting_for_parts', 'store_access', 'waiting_for_quote_approval', 'other']),
     }), req.body);
     return act(req, card => J.continueLater(card, b), async ({ c, row, visitId }) => {
@@ -282,7 +331,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
   });
 
   const SignOff = z.discriminatedUnion('signature', [
-    z.object({ signature: z.literal(true), managerName: z.string(), signedAt: Iso }),
+    z.object({ signature: z.literal(true), managerName: z.string(), signaturePhotoId: Uuid }),
     z.object({ signature: z.literal(false), reason: z.string(), spokeTo: z.string() }),
   ]);
 
@@ -290,14 +339,11 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     const b = parse(z.object({ at: Iso, signOff: SignOff }), req.body);
     return act(req, card => J.close(card, b.signOff, b.at), async ({ c, row, actorId }, res) => {
       if (b.signOff.signature) {
-        const sigId = randomUUID();
-        await c.query(
-          "INSERT INTO photos (id, kind, job_id, file_path, taken_at, taken_by) VALUES ($1, 'signature', $2, $3, $4, $5)",
-          [sigId, row.id, `pending-upload/${sigId}.png`, b.signOff.signedAt, actorId],
-        );
+        const sig = await c.query("SELECT 1 FROM photos WHERE id = $1 AND kind = 'signature' AND job_id = $2", [b.signOff.signaturePhotoId, row.id]);
+        if (!sig.rowCount) throw new Refused(409, ['upload the store manager signature first']);
         await c.query(
           "UPDATE jobs SET status = 'closed', closed_at = $2, manager_name = $3, signature_photo_id = $4 WHERE id = $1",
-          [row.id, b.at, b.signOff.managerName.trim(), sigId],
+          [row.id, b.at, b.signOff.managerName.trim(), b.signOff.signaturePhotoId],
         );
       } else {
         await c.query(
@@ -308,7 +354,6 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
       if (res.flags?.includes('manager_unavailable')) {
         await raiseFlag(c, { type: 'manager_unavailable', technicianId: actorId, jobId: row.id, severity: 'low', details: { reason: (b.signOff as { reason: string }).reason } });
       }
-      // Items not complete become follow-ups for the office.
       await audit(c, actorId, 'job_closed', 'job', row.id, { jobNumber: row.job_number, signed: b.signOff.signature });
     });
   });

@@ -1,9 +1,11 @@
 import { buildApp } from './app.ts';
 import { createPool } from './db.ts';
+import { migrate } from './migrate.ts';
 
-const secret = process.env.JWT_SECRET ?? '';
-const app = await buildApp(createPool(), {
-  jwtSecret: secret,
+const db = createPool();
+await migrate(db, s => console.log(s));
+const app = await buildApp(db, {
+  jwtSecret: process.env.JWT_SECRET ?? '',
   logger: true,
   corsOrigins: (process.env.CORS_ORIGINS ?? '').split(',').filter(Boolean),
 });

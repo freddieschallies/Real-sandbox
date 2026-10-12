@@ -2,11 +2,14 @@
 // Needs TEST_DATABASE_ADMIN_URL (a server where the test database can be dropped and re-created).
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import pg from 'pg';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import { hashPassword } from '../src/auth.ts';
+import { migrate } from '../src/migrate.ts';
 
 const ADMIN_URL = process.env.TEST_DATABASE_ADMIN_URL ?? 'postgres://postgres@localhost:5433/postgres?host=/tmp';
 const TEST_DB = 'realsandbox_test';
@@ -23,8 +26,25 @@ const at = (h: number, m = 0) => `2026-10-12T${String(h).padStart(2, '0')}:${Str
 const STORE = { lat: -28.7807, lng: 32.0383 };
 const SAFE = { areaSafe: true, isolated: true, publicClear: true };
 
-async function call(who: string, method: 'GET' | 'POST' | 'PATCH', url: string, body?: object) {
-  const res = await app.inject({ method, url, payload: body, headers: tokens[who] ? { authorization: `Bearer ${tokens[who]}` } : {} });
+async function call(who: string, method: 'GET' | 'POST' | 'PATCH', url: string, body?: object, extra: Record<string, string> = {}) {
+  const res = await app.inject({ method, url, payload: body, headers: { ...(tokens[who] ? { authorization: `Bearer ${tokens[who]}` } : {}), ...extra } });
+  return { status: res.statusCode, body: res.json(), headers: res.headers };
+}
+
+/** Sends a multipart form with text fields and one small image, the way the phone uploads photos. */
+async function upload(who: string, url: string, fields: Record<string, string>, mime = 'image/jpeg') {
+  const boundary = '----rs' + Math.random().toString(16).slice(2);
+  const parts: Buffer[] = [];
+  for (const [k, v] of Object.entries(fields)) {
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`));
+  }
+  parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="p.jpg"\r\nContent-Type: ${mime}\r\n\r\n`));
+  parts.push(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9]));
+  parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+  const res = await app.inject({
+    method: 'POST', url, payload: Buffer.concat(parts),
+    headers: { authorization: `Bearer ${tokens[who]}`, 'content-type': `multipart/form-data; boundary=${boundary}` },
+  });
   return { status: res.statusCode, body: res.json() };
 }
 
@@ -36,7 +56,8 @@ before(async () => {
   await admin.end();
 
   db = new pg.Pool({ connectionString: TEST_URL });
-  await db.query(readFileSync(new URL('../db/001_init.sql', import.meta.url), 'utf8'));
+  await migrate(db);
+  process.env.UPLOAD_DIR = mkdtempSync(join(tmpdir(), 'rs-uploads-'));
 
   const hash = await hashPassword(PW);
   const q = async (sql: string, p: unknown[]) => (await db.query(sql, p)).rows[0];
@@ -50,6 +71,7 @@ before(async () => {
   await user('manager', 'management');
   await user('tech', 'technician');
   await user('tech2', 'technician');
+  await db.query('UPDATE departments SET manager_id = $1 WHERE id = $2', [ids.manager, ids.dept]);
   ids.client = (await q("INSERT INTO clients (name) VALUES ('FreshMart') RETURNING id", [])).id;
   ids.store = (await q("INSERT INTO stores (client_id, name, lat, lng) VALUES ($1, 'FreshMart Meerensee', $2, $3) RETURNING id", [ids.client, STORE.lat, STORE.lng])).id;
   ids.equipment = (await q("INSERT INTO equipment (store_id, brand, model, description) VALUES ($1, 'Scotsman', 'AC 86', 'Ice machine') RETURNING id", [ids.store])).id;
@@ -135,7 +157,7 @@ test('the forced path: no skipping, geofence on arrival, Done blocked until ever
   assert.ok(lazy.body.items[0].missing.some((m: string) => m.includes('full sentence')));
 
   // Work item 1: full details, photos, van stock
-  await call('tech', 'POST', `${J}/items/${reported.id}/photos`, { kind: 'before', takenAt: at(7, 40) });
+  await upload('tech', `${J}/items/${reported.id}/photos`, { kind: 'before', takenAt: at(7, 40) });
   await call('tech', 'PATCH', `${J}/items/${reported.id}`, {
     equipmentId: ids.equipment, faultType: 'refrigeration',
     found: 'Water inlet valve blocked with scale', did: 'Replaced the inlet valve and flushed the line',
@@ -144,12 +166,12 @@ test('the forced path: no skipping, geofence on arrival, Done blocked until ever
   const tooMany = await call('tech', 'POST', `${J}/items/${reported.id}/materials`, { stockItemId: ids.seal, qty: 5 });
   assert.equal(tooMany.status, 409, 'cannot use more than is in the van');
   assert.equal((await call('tech', 'POST', `${J}/items/${reported.id}/materials`, { stockItemId: ids.seal, qty: 1 })).status, 200);
-  const after1 = await call('tech', 'POST', `${J}/items/${reported.id}/photos`, { kind: 'after', takenAt: at(8, 30) });
+  const after1 = await upload('tech', `${J}/items/${reported.id}/photos`, { kind: 'after', takenAt: at(8, 30) });
   assert.equal(after1.body.items[0].status, 'finished');
 
   // Work item 2: needs a quote
-  await call('tech', 'POST', `${J}/items/${found.id}/photos`, { kind: 'before', takenAt: at(8, 35) });
-  await call('tech', 'POST', `${J}/items/${found.id}/photos`, { kind: 'after', takenAt: at(8, 50) });
+  await upload('tech', `${J}/items/${found.id}/photos`, { kind: 'before', takenAt: at(8, 35) });
+  await upload('tech', `${J}/items/${found.id}/photos`, { kind: 'after', takenAt: at(8, 50) });
   const it2 = await call('tech', 'PATCH', `${J}/items/${found.id}`, {
     equipmentId: ids.equipment, faultType: 'water', noMaterials: true,
     found: 'Drain line cracked behind the unit', did: 'Cleared the blockage and taped the crack for now',
@@ -200,18 +222,150 @@ test('a multi-day job: Continue later, then a second visit and a signed close', 
   await call('tech', 'POST', `${J}/go`, { at: '2026-10-14T07:00:00+02:00' });
   await call('tech', 'POST', `${J}/arrive`, { at: '2026-10-14T07:20:00+02:00', position: STORE, managerName: 'Sipho', safety: SAFE });
   await call('tech', 'POST', `${J}/start`, { at: '2026-10-14T07:25:00+02:00' });
-  await call('tech', 'POST', `${J}/items/${item}/photos`, { kind: 'before', takenAt: '2026-10-14T07:30:00+02:00' });
-  await call('tech', 'POST', `${J}/items/${item}/photos`, { kind: 'after', takenAt: '2026-10-14T09:00:00+02:00' });
+  await upload('tech', `${J}/items/${item}/photos`, { kind: 'before', takenAt: '2026-10-14T07:30:00+02:00' });
+  await upload('tech', `${J}/items/${item}/photos`, { kind: 'after', takenAt: '2026-10-14T09:00:00+02:00' });
   await call('tech', 'PATCH', `${J}/items/${item}`, {
     equipmentId: ids.equipment, faultType: 'refrigeration', noMaterials: true,
     found: 'Compressor seized after the oil ran low', did: 'Fitted the new compressor, regassed and tested the cold room',
     tested: 'yes', outcome: 'complete',
   });
   await call('tech', 'POST', `${J}/done`, { at: '2026-10-14T09:10:00+02:00' });
-  const closed = await call('tech', 'POST', `${J}/close`, { at: '2026-10-14T09:15:00+02:00', signOff: { signature: true, managerName: 'Sipho', signedAt: '2026-10-14T09:14:00+02:00' } });
+  const noSig = await call('tech', 'POST', `${J}/close`, { at: '2026-10-14T09:15:00+02:00', signOff: { signature: true, managerName: 'Sipho', signaturePhotoId: '00000000-0000-4000-8000-000000000001' } });
+  assert.equal(noSig.status, 409, 'signature must be uploaded first');
+  const sig = await upload('tech', '/photos', { kind: 'signature', takenAt: '2026-10-14T09:14:00+02:00', jobId: created.body.id }, 'image/png');
+  assert.equal(sig.status, 201);
+  const closed = await call('tech', 'POST', `${J}/close`, { at: '2026-10-14T09:15:00+02:00', signOff: { signature: true, managerName: 'Sipho', signaturePhotoId: sig.body.id } });
   assert.equal(closed.status, 200);
   assert.equal(closed.body.visits.length, 2);
   assert.equal(closed.body.manager_name, 'Sipho');
+});
+
+test('offline replay: the same request sent twice is applied once', async () => {
+  const created = await call('admin', 'POST', '/jobs', { jobType: 'breakdown', storeId: ids.store, faultReported: 'Bain marie not heating', scheduledDate: '2026-10-15', leadTechnicianId: ids.tech });
+  ids.job3 = created.body.id;
+  const key = { 'idempotency-key': 'go-job3-abcdef12' };
+  const first = await call('tech', 'POST', `/jobs/${ids.job3}/go`, { at: '2026-10-15T07:00:00+02:00' }, key);
+  const again = await call('tech', 'POST', `/jobs/${ids.job3}/go`, { at: '2026-10-15T07:00:00+02:00' }, key);
+  assert.equal(first.status, 200);
+  assert.equal(again.status, 200);
+  assert.equal(again.headers['idempotent-replay'], 'true');
+  const visits = await db.query('SELECT count(*)::int AS n FROM job_visits WHERE job_id = $1', [ids.job3]);
+  assert.equal(visits.rows[0].n, 1, 'only one visit despite two sends');
+  const misuse = await call('tech', 'POST', `/jobs/${ids.job3}/start`, { at: '2026-10-15T07:10:00+02:00' }, key);
+  assert.equal(misuse.status, 422, 'a key cannot be reused for a different request');
+});
+
+test('photo uploads: images only, stored and readable', async () => {
+  const J = `/jobs/${ids.job3}`;
+  const item = (await call('tech', 'GET', J)).body.items[0].id;
+  const bad = await upload('tech', `${J}/items/${item}/photos`, { kind: 'before', takenAt: '2026-10-15T07:30:00+02:00' }, 'application/pdf');
+  assert.equal(bad.status, 400);
+  const ok = await upload('tech', `${J}/items/${item}/photos`, { kind: 'before', takenAt: '2026-10-15T07:30:00+02:00' });
+  assert.equal(ok.status, 200);
+  const photoId = (await db.query("SELECT id FROM photos WHERE work_item_id = $1", [item])).rows[0].id;
+  const res = await app.inject({ method: 'GET', url: `/photos/${photoId}`, headers: { authorization: `Bearer ${tokens.admin}` } });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.rawPayload.length, 10);
+});
+
+test("my day, my van stock", async () => {
+  const day = await call('tech', 'GET', '/me/today?date=2026-10-15');
+  assert.ok(day.body.jobs.some((j: { id: string }) => j.id === ids.job3));
+  const stock = await call('tech', 'GET', '/me/stock');
+  assert.deepEqual(stock.body.map((s: { code: string; qty: number }) => [s.code, s.qty]), [['VALVE-01', 1]]);
+});
+
+test('vehicle scan-in: reason needed for another vehicle, managers told, tracker driver queued', async () => {
+  const v = async (reg: string, barcode: string, owner: string) => {
+    const id = (await db.query('INSERT INTO vehicles (registration, tank_litres, barcode) VALUES ($1, 80, $2) RETURNING id', [reg, barcode])).rows[0].id;
+    await db.query('INSERT INTO technician_settings (user_id, usual_vehicle_id) VALUES ($1, $2)', [owner, id]);
+    return id;
+  };
+  ids.v1 = await v('ND 412-778', 'RS-V1', ids.tech);
+  ids.v2 = await v('ND 503-221', 'RS-V2', ids.tech2);
+  const noReason = await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V2', mode: 'driving', at: '2026-10-15T06:50:00+02:00' });
+  assert.equal(noReason.status, 409);
+  const ok = await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V2', mode: 'driving', at: '2026-10-15T06:50:00+02:00', reason: 'breakdown' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.vehicle.registration, 'ND 503-221');
+  const notes = await call('manager', 'GET', '/me/notifications');
+  assert.ok(notes.body.some((n: { kind: string }) => n.kind === 'vehicle_swap'));
+  const outbox = await db.query('SELECT driver_id FROM tracker_driver_outbox WHERE vehicle_id = $1', [ids.v2]);
+  assert.equal(outbox.rows[0].driver_id, ids.tech);
+  // back into his own vehicle: no reason needed, the other scan is released
+  assert.equal((await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V1', mode: 'driving', at: '2026-10-15T06:55:00+02:00' })).status, 200);
+  const open = await db.query('SELECT count(*)::int AS n FROM vehicle_scans WHERE user_id = $1 AND released_at IS NULL', [ids.tech]);
+  assert.equal(open.rows[0].n, 1);
+});
+
+test('fuel: slip required, logged against the vehicle, impossible litres flagged', async () => {
+  const noSlip = await call('tech', 'POST', '/fuel', { litres: 50, amountCents: 115000, slipPhotoId: '00000000-0000-4000-8000-000000000002', at: '2026-10-15T08:00:00+02:00' });
+  assert.equal(noSlip.status, 409);
+  const slip = await upload('tech', '/photos', { kind: 'fuel_slip', takenAt: '2026-10-15T08:00:00+02:00' });
+  const ok = await call('tech', 'POST', '/fuel', { litres: 50, amountCents: 115000, slipPhotoId: slip.body.id, at: '2026-10-15T08:00:00+02:00' });
+  assert.equal(ok.status, 201);
+  assert.equal(ok.body.vehicle, 'ND 412-778', 'defaults to the vehicle he scanned into');
+  const slip2 = await upload('tech', '/photos', { kind: 'fuel_slip', takenAt: '2026-10-15T12:00:00+02:00' });
+  const big = await call('tech', 'POST', '/fuel', { litres: 95, amountCents: 220000, slipPhotoId: slip2.body.id, at: '2026-10-15T12:00:00+02:00' });
+  assert.equal(big.body.problems.length, 1);
+});
+
+test('flags: technician explains, Management resolves with a note, Admin cannot see', async () => {
+  const mine = await call('tech', 'GET', '/me/flags');
+  const fuel = mine.body.find((f: { flag_type: string }) => f.flag_type === 'fuel_mismatch');
+  assert.ok(fuel);
+  assert.equal((await call('tech', 'POST', `/flags/${fuel.id}/explain`, { explanation: 'oops' })).status, 400);
+  assert.equal((await call('tech', 'POST', `/flags/${fuel.id}/explain`, { explanation: 'Filled a jerry can for the generator at the store, slip shows both' })).status, 200);
+  assert.equal((await call('admin', 'GET', '/flags')).status, 403);
+  const inbox = await call('manager', 'GET', '/flags');
+  const f = inbox.body.find((x: { id: string }) => x.id === fuel.id);
+  assert.equal(f.status, 'explained');
+  assert.equal((await call('manager', 'POST', `/flags/${fuel.id}/resolve`, { note: '' })).status, 400);
+  assert.equal((await call('manager', 'POST', `/flags/${fuel.id}/resolve`, { note: 'Checked the slip, generator fuel for the store. Fine.' })).status, 200);
+});
+
+test('supply runs: top-up waits for approval, a new supplier is learned and flagged, stock lands in the van', async () => {
+  const run = await call('tech', 'POST', '/supply-runs', { at: '2026-10-15T13:00:00+02:00', purpose: 'stock_topup', newSupplierName: 'Coastal Electrical Supplies' });
+  assert.equal(run.status, 201);
+  assert.equal(run.body.status, 'awaiting_approval');
+  assert.equal(run.body.newSupplier, true);
+  const slip = await upload('tech', '/photos', { kind: 'supplier_slip', takenAt: '2026-10-15T13:30:00+02:00' });
+  const early = await call('tech', 'POST', `/supply-runs/${run.body.id}/collect`, { at: '2026-10-15T13:30:00+02:00', slipPhotoId: slip.body.id });
+  assert.equal(early.status, 409, 'cannot collect before approval');
+  assert.equal((await call('tech2', 'POST', `/supply-runs/${run.body.id}/approve`)).status, 403);
+  assert.equal((await call('manager', 'POST', `/supply-runs/${run.body.id}/approve`)).status, 200);
+  const done = await call('tech', 'POST', `/supply-runs/${run.body.id}/collect`, { at: '2026-10-15T13:30:00+02:00', slipPhotoId: slip.body.id, slipAmountCents: 45000, stock: [{ stockItemId: ids.seal, qty: 3 }] });
+  assert.equal(done.status, 200);
+  const stock = await call('tech', 'GET', '/me/stock');
+  assert.equal(stock.body[0].qty, 4);
+  const flags = await db.query("SELECT 1 FROM flags WHERE flag_type = 'new_supplier'");
+  assert.equal(flags.rowCount, 1);
+});
+
+test('timesheet: checked against the job timers, mismatch flagged, one sheet per day', async () => {
+  // Job 1 on 12 Oct: 145 min on site minus a 30 min pause = 115 recorded
+  const sheet = await call('tech', 'POST', '/timesheets', { workDate: '2026-10-12', at: '2026-10-13T07:00:00+02:00', lines: [{ jobId: ids.job, minutes: 180 }] });
+  assert.equal(sheet.status, 201);
+  assert.equal(sheet.body.matches, false);
+  const line = sheet.body.lines.find((l: { jobId: string }) => l.jobId === ids.job);
+  assert.equal(line.recordedMinutes, 115);
+  const flag = await db.query("SELECT details FROM flags WHERE flag_type = 'timesheet_mismatch' AND technician_id = $1", [ids.tech]);
+  assert.equal(flag.rowCount, 1);
+  assert.equal((await call('tech', 'POST', '/timesheets', { workDate: '2026-10-12', at: '2026-10-13T07:05:00+02:00', lines: [] })).status, 409);
+});
+
+test('estimates: prices only from the price list, always marked not official', async () => {
+  const J = `/jobs/${ids.job3}`;
+  const item = (await call('tech', 'GET', J)).body.items[0].id;
+  const body = { at: '2026-10-15T09:00:00+02:00', labourHours: 2, stockLines: [{ stockItemId: ids.seal, qty: 1 }], boughtOutLines: [{ description: 'Element 3kW', qty: 1, estimatedPriceCents: 85000 }] };
+  const noPrices = await call('tech', 'POST', `${J}/items/${item}/estimate`, body);
+  assert.equal(noPrices.status, 409);
+  await db.query("INSERT INTO rates (key, amount_cents, updated_by) VALUES ('labour_per_hour', 55000, $1)", [ids.creator]);
+  await db.query('UPDATE stock_items SET selling_price_cents = 32000 WHERE id = $1', [ids.seal]);
+  const est = await call('tech', 'POST', `${J}/items/${item}/estimate`, body);
+  assert.equal(est.status, 200);
+  assert.equal(est.body.label, 'Estimate only, not official');
+  assert.equal(est.body.total_cents, 2 * 55000 + 32000 + 85000);
 });
 
 test('a disabled login stops working immediately', async () => {
