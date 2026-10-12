@@ -849,6 +849,39 @@ test('vehicle photos: fault and damage photos kept 2 years, routine inspection p
   assert.ok(all.filter(x => !['vehicle_front', 'vehicle_back', 'vehicle_left', 'vehicle_right', 'vehicle_dashboard', 'vehicle_damage', 'handover_signature', 'fleet_fault'].includes(x.kind)).every(x => !x.gone), 'job photos, slips and signatures on job cards are not touched');
 });
 
+test('the office screen: what needs attention, stores, technicians, and moving a job to another technician', async () => {
+  assert.equal((await call('tech', 'GET', '/office/overview')).status, 403, 'technicians do not see the office screen');
+  const o = (await call('admin', 'GET', '/office/overview')).body;
+  assert.equal(typeof o.jobs.today, 'number');
+  assert.equal(typeof o.fleet.checked_today, 'number');
+  assert.ok(Array.isArray(o.fleet.missedYesterday));
+  assert.equal(typeof o.stock.workshop_below_min, 'number');
+  assert.equal(typeof o.technicians.active, 'number');
+
+  // A new store, then a job there.
+  assert.equal((await call('tech', 'POST', '/office/stores', { client: 'Spar', name: 'Spar Arboretum', lat: -28.75, lng: 32.06 })).status, 403);
+  assert.match((await call('admin', 'POST', '/office/stores', { client: 'Spar', name: 'Spar Arboretum', lat: 51.5, lng: -0.1 })).body.reasons[0], /South Africa/);
+  const st = await call('admin', 'POST', '/office/stores', { client: 'Spar', name: 'Spar Arboretum', address: 'Arboretum, Richards Bay', lat: -28.7465, lng: 32.0584 });
+  assert.equal(st.status, 201, JSON.stringify(st.body));
+  assert.equal((await call('admin', 'POST', '/office/stores', { client: 'SPAR', name: 'spar arboretum', lat: -28.7465, lng: 32.0584 })).status, 409, 'no duplicates');
+  assert.ok((await call('admin', 'GET', '/office/stores')).body.some((x: { name: string; client: string }) => x.name === 'Spar Arboretum' && x.client === 'Spar'));
+
+  const techs = (await call('admin', 'GET', '/office/technicians')).body;
+  assert.ok(techs.some((x: { id: string }) => x.id === ids.tech) && techs.some((x: { id: string }) => x.id === ids.tech2));
+  const job = await call('admin', 'POST', '/jobs', { jobType: 'breakdown', priority: 'urgent', storeId: st.body.id, faultReported: 'Display fridge not cooling', scheduledDate: '2026-10-20', leadTechnicianId: ids.tech });
+  assert.equal(job.status, 201);
+  const J = job.body.id ?? job.body.jobId;
+  assert.equal((await call('admin', 'POST', `/jobs/${J}/assign`, { leadTechnicianId: ids.tech2 })).status, 400, 'say why');
+  const mv = await call('admin', 'POST', `/jobs/${J}/assign`, { leadTechnicianId: ids.tech2, helperIds: [ids.tech], scheduledDate: '2026-10-21', reason: 'Thabo is on leave on the 20th' });
+  assert.equal(mv.status, 200, JSON.stringify(mv.body));
+  assert.ok((await call('tech2', 'GET', '/me/notifications')).body.some((n: { message: string }) => /is now yours for 2026-10-21/.test(n.message)));
+  const list = (await call('admin', 'GET', '/jobs')).body.find((x: { id: string }) => x.id === J);
+  assert.equal(list.lead_technician, (await db.query('SELECT full_name FROM users WHERE id = $1', [ids.tech2])).rows[0].full_name);
+  assert.equal((await call('tech2', 'GET', `/jobs/${J}`)).status, 200, 'the new technician can open it');
+  assert.equal((await call('admin', 'POST', `/jobs/${J}/assign`, { leadTechnicianId: ids.tech2, helperIds: [ids.tech2], reason: 'Same person twice' })).status, 400);
+  assert.equal((await call('tech', 'POST', `/jobs/${J}/assign`, { leadTechnicianId: ids.tech, reason: 'I want it back' })).status, 403);
+});
+
 test('the CEO assigns each person a position; it takes effect at once and is logged', async () => {
   assert.equal((await call('manager', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'mechanic' })).status, 403, 'only whoever manages access');
   const list = (await call('director', 'GET', '/access/positions')).body;

@@ -10,6 +10,7 @@ import { registerUploads } from './uploads.ts';
 import { registerJobRoutes } from './routes/jobs.ts';
 import { registerFieldRoutes } from './routes/field.ts';
 import { registerOfficeRoutes } from './routes/office.ts';
+import { registerControlRoutes } from './routes/control.ts';
 import { registerAccessRoutes } from './routes/access.ts';
 import { registerPlatformRoutes } from './routes/platform.ts';
 import { registerStockRoutes } from './routes/stock.ts';
@@ -32,6 +33,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerJobRoutes(app, db);
   registerFieldRoutes(app, db);
   registerOfficeRoutes(app, db);
+  registerControlRoutes(app);
   registerAccessRoutes(app, db);
   registerPlatformRoutes(app, db);
   registerStockRoutes(app, db, opts.invoiceReader ?? null);
