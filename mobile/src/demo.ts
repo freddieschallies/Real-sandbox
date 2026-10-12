@@ -2,6 +2,7 @@
 // It answers the same requests as the real one and uses the same rules engine, so what you
 // feel in demo mode is what the technicians will get. Data is invented.
 import { DemoWorkshop, seedWorkshop, type DemoWorkshopState } from './demoWorkshop.ts';
+import { DemoDocs, seedDocs, type DemoDocsState } from './demoDocs.ts';
 import { DemoOffice, seedOffice, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
@@ -34,6 +35,7 @@ export interface DemoState {
   fleetDuty?: Record<string, boolean>;
   workshop?: DemoWorkshopState;
   office?: DemoOfficeState;
+  docs?: DemoDocsState;
   queries?: { id: string; from: string; to: string; job_id: string | null; subject: string; created_at: string; read: Record<string, string>; messages: { id: string; from: string; body: string; at: string }[] }[];
 }
 
@@ -159,6 +161,19 @@ export class DemoTransport implements Transport {
         const sipho = officeJob(10220, 'breakdown', 'normal', st('esikhawini'), 'Condenser fan not running on the bakery display', { id: 'tech-2', name: 'Sipho Ndlovu' }, today());
         sipho.card.status = 'in_progress';
         this.state.jobs.push(sipho);
+        // Two jobs already closed, for invoicing.
+        const y1 = new Date(Date.now() - 26 * 3600_000), y3 = new Date(Date.now() - 74 * 3600_000);
+        const closed = (n: number, store: string, fault: string, lead: { id: string; name: string }, end: Date, mins: number, ref: string | null) => {
+          const j = officeJob(n, 'breakdown', 'normal', st(store), fault, lead, end.toISOString().slice(0, 10), [], ref ?? undefined);
+          const startedAt = new Date(end.getTime() - mins * 60_000).toISOString();
+          j.card.visits = [{ state: 'done', goAt: new Date(end.getTime() - (mins + 30) * 60_000).toISOString(), arrivedAt: new Date(end.getTime() - (mins + 5) * 60_000).toISOString(),
+            checkedInManager: 'Store manager', safetyCheck: { areaSafe: true, isolated: true, publicClear: true }, startedAt, endedAt: end.toISOString(), pauses: [] }] as never;
+          (j.card as { status: string }).status = 'closed';
+          (j as { closedAt?: string }).closedAt = end.toISOString();
+          return j;
+        };
+        this.state.jobs.push(closed(10212, 'esikhawini', 'Freezer room alarm going off, temperature rising', { id: 'tech-2', name: 'Sipho Ndlovu' }, y1, 95, 'BX-22817'));
+        this.state.jobs.push(closed(10219, 'meerensee', 'Ice machine leaking water at the inlet', { id: 'me', name: 'Thabo Mkhize' }, y3, 80, 'PO-14190'));
         this.state.jobs.push(officeJob(10236, 'installation', 'scheduled', st('arboretum'), 'Install new 3-door display fridge and connect to the existing circuit', { id: 'tech-3', name: 'Ayanda Mthembu' }, tomorrow));
       }
       const y = new Date(Date.now() - 20 * 3600_000).toISOString();
@@ -301,6 +316,73 @@ export class DemoTransport implements Transport {
       if (!['creator', 'director'].includes(this.who.level)) return refuse(403, 'only whoever manages access');
       return done(o.setPosition(m[1], b.position, this.who.level));
     }
+    return null;
+  }
+
+  private docs(): DemoDocs {
+    this.office();
+    const d = this.state.docs ?? (this.state.docs = seedDocs());
+    const items = this.stock().s.items;
+    return new DemoDocs(d, {
+      jobs: this.state.jobs as never,
+      stores: this.state.office!.stores,
+      minutesOf: id => { const j = this.findJob(id); return j ? J.jobMinutes(j.card) : 0; },
+      stockUsed: n => {
+        const used = (this.stock().s.activity ?? []).filter(a => a.kind === 'use_on_job' && a.jobNumber === n);
+        const by = new Map<string, { stockItemId: string; description: string; qty: number; sellingPriceCents: number | null; code: string; unit: string }>();
+        for (const a of used) {
+          const it = items.find(i => i.code === a.code);
+          if (!it) continue;
+          const x = by.get(it.id) ?? { stockItemId: it.id, description: it.description, qty: 0, sellingPriceCents: it.sellingPriceCents ?? null, code: it.code, unit: it.unit };
+          x.qty += a.qty; by.set(it.id, x);
+        }
+        return [...by.values()];
+      },
+      stockCode: id => { const it = items.find(i => i.id === id); return it ? { code: it.code, unit: it.unit } : null; },
+      name: this.who.name,
+      openJob: (storeId, fault, leadId, date, priority, ref) => {
+        const st = this.state.office!.stores.find(x => x.id === storeId)!;
+        const n = Math.max(...this.state.jobs.map(j => j.meta.job_number)) + 1;
+        const j = officeJob(n, 'follow_up', priority, st, fault, { id: leadId, name: this.office().name(leadId) }, date, [], ref ?? undefined);
+        this.state.jobs.push(j);
+        return { id: j.meta.id, job_number: n };
+      },
+    });
+  }
+
+  private docRoute(p: string, req: Request, b: any): Response | null {
+    let m: RegExpMatchArray | null;
+    const isDoc = p.startsWith('/quotes') || p.startsWith('/invoices') || p.startsWith('/pastel') || ['/office/company', '/office/rates', '/office/to-invoice'].includes(p);
+    if (!isDoc) return null;
+    if (!['admin', 'management', 'director', 'creator', 'stockroom'].includes(this.who.level) || !this.does('documents')) return refuse(403, 'quotes and invoices are not part of your work');
+    const d = this.docs();
+    const done = (r: Parameters<DemoTransport['fleetResult']>[0]) => this.fleetResult(r);
+    const q = new URLSearchParams(req.path.split('?')[1] ?? '');
+    const get = req.method === 'GET';
+    if (p === '/office/company' && get) return ok(d.company());
+    if (p === '/office/company') return this.does('prices') ? done(d.setCompany(b)) : refuse(403, 'only the CEO (prices and rates) sets the company details');
+    if (p === '/office/rates') return this.does('prices') ? done(d.setRates(b)) : refuse(403, 'only the CEO sets rates');
+    if (p === '/office/to-invoice') return ok(d.toInvoice());
+    if (p === '/quotes' && get) return ok(d.quotes(q.get('status')));
+    if (p === '/quotes') return done(d.newQuote(b));
+    if ((m = p.match(/^\/quotes\/([^/]+)$/))) return get ? done(d.quote(m[1])) : done(d.editQuote(m[1], b));
+    if ((m = p.match(/^\/quotes\/([^/]+)\/send$/))) return done(d.sendQuote(m[1]));
+    if ((m = p.match(/^\/quotes\/([^/]+)\/accept$/))) return done(d.acceptQuote(m[1], b));
+    if ((m = p.match(/^\/quotes\/([^/]+)\/decline$/))) return done(d.declineQuote(m[1], b.note));
+    if ((m = p.match(/^\/quotes\/([^/]+)\/cancel$/))) return done(d.cancelQuote(m[1], b.note));
+    if (p === '/invoices' && get) return ok(d.invoices(q.get('status')));
+    if (p === '/invoices') return done(d.newInvoice(b.jobId));
+    if ((m = p.match(/^\/invoices\/([^/]+)$/))) return get ? done(d.invoice(m[1])) : done(d.editInvoice(m[1], b));
+    if ((m = p.match(/^\/invoices\/([^/]+)\/send$/))) return done(d.sendInvoice(m[1]));
+    if ((m = p.match(/^\/invoices\/([^/]+)\/paid$/))) return done(d.paid(m[1], b.ref));
+    if ((m = p.match(/^\/invoices\/([^/]+)\/cancel$/))) return done(d.cancelInvoice(m[1], b.note));
+    if (p === '/pastel/settings') return get ? ok(d.pastelSettings()) : done(d.setPastel(b));
+    if (p === '/pastel/clients') return ok(d.clients());
+    if ((m = p.match(/^\/pastel\/clients\/([^/]+)$/))) return done(d.setClientCode(decodeURIComponent(m[1]), b.code));
+    if (p === '/pastel/ready') return ok(d.ready((q.get('kind') as 'invoice' | 'quote') ?? 'invoice'));
+    if (p === '/pastel/batches' && get) return ok(d.batches());
+    if (p === '/pastel/batches') return done(d.batch(b.kind, this.who.name));
+    if ((m = p.match(/^\/pastel\/batches\/([^/]+)\/file$/))) { const f = d.batchFile(m[1]); return f ? ok(f) : refuse(404, 'no such batch'); }
     return null;
   }
 
@@ -459,6 +541,8 @@ export class DemoTransport implements Transport {
     if (p === '/policy/current') return ok({ id: 'policy-1', version: '1.0', body: DEMO_POLICY });
     if (p === '/policy/acknowledge') { this.state.acknowledged = true; this.persist(this.state); return ok({ ok: true }); }
     if (!this.state.acknowledged) return { status: 403, body: { error: 'acknowledge the monitoring policy first', code: 'policy_required' } };
+    const dr = this.docRoute(p, req, b);
+    if (dr) return dr;
     const qr = this.queryRoute(p, req, b);
     if (qr) return qr;
     const off = this.officeRoute(p, req, b);
@@ -477,7 +561,7 @@ export class DemoTransport implements Transport {
       return r.ok ? ok({ userId: m[1], fleetDuty: !!b.on }) : refuse(r.status, ...r.reasons);
     }
     if (p === '/me/today') {
-      const jobs: TodayJob[] = this.state.jobs.filter(j => (j.card.status as string) !== 'cancelled' && ((j.meta.lead_id ?? 'me') === 'me' || (j.meta.helper_ids ?? []).includes('me'))).map(j => ({
+      const jobs: TodayJob[] = this.state.jobs.filter(j => (j.card.status as string) !== 'cancelled' && !(j.card.status === 'closed' && j.meta.scheduled_date < today()) && ((j.meta.lead_id ?? 'me') === 'me' || (j.meta.helper_ids ?? []).includes('me'))).map(j => ({
         id: j.meta.id, job_number: j.meta.job_number, job_type: j.meta.job_type, priority: j.meta.priority as TodayJob['priority'],
         status: j.card.status, scheduled_date: j.meta.scheduled_date, fault_reported: j.meta.fault_reported, store: j.meta.store,
         address: j.meta.store_address, i_am_lead: true,

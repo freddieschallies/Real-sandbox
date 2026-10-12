@@ -9,12 +9,13 @@ import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, st } f
 import { C, S } from '../theme.ts';
 import { TITLE as FLAG_TITLE } from '../screens/Flags.tsx';
 import type { CardView } from '../types.ts';
+import { Accounts, InvoiceDetail, InvoiceList, NewQuote, QuoteDetail, QuoteList, useBooks } from './Books.tsx';
 import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries.tsx';
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 
 const K = { band: '#121212', bandText: '#F7F3EC', stripe: '#E8701A' };
-type Tab = 'today' | 'jobs' | 'queries' | 'flags' | 'handovers' | 'people' | 'stores';
-type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery' } | null;
+type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'people' | 'stores';
+type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery' } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
   cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
@@ -38,6 +39,7 @@ export function OfficeApp() {
   const wide = useWindowDimensions().width >= 900;
   const o = useOffice();
   const qs = useQueries();
+  const books = useBooks();
   const [tab, setTab] = useState<Tab>('today');
   const [sel, setSel] = useState<Sel>(null);
   const ov = o.d.overview;
@@ -51,6 +53,11 @@ export function OfficeApp() {
     { key: 'today', label: 'Today' },
     { key: 'jobs', label: 'Jobs', count: ov ? ov.jobs.carried_over + ov.jobs.urgent : undefined },
     ...(does('jobs') ? [{ key: 'queries' as Tab, label: 'Queries', count: qs.unread }] : []),
+    ...(does('documents') ? [
+      { key: 'quotes' as Tab, label: 'Quotes', count: books.quotes.filter(q => q.status === 'draft').length || undefined },
+      { key: 'invoices' as Tab, label: 'Invoices', count: books.toInvoice.length || undefined },
+      { key: 'accounts' as Tab, label: 'Accounts', short: 'Pastel' },
+    ] : []),
     ...(does('flags') ? [
       { key: 'flags' as Tab, label: 'Flags', count: ov?.flags?.unresolved },
       { key: 'handovers' as Tab, label: 'Handovers', short: 'Approve', count: ov?.handoversAwaitingApproval },
@@ -64,6 +71,9 @@ export function OfficeApp() {
       {tab === 'today' ? <TodayView o={o} go={go} flags={does('flags')} /> : null}
       {tab === 'jobs' ? <JobList o={o} open={id => setSel({ kind: 'job', id })} add={does('jobs') ? () => setSel({ kind: 'newjob' }) : undefined} selected={sel?.kind === 'job' ? sel.id : null} /> : null}
       {tab === 'queries' ? <QueryList q={qs} open={id => setSel({ kind: 'query', id })} ask={() => setSel({ kind: 'newquery' })} /> : null}
+      {tab === 'quotes' ? <QuoteList b={books} open={id => setSel({ kind: 'quote', id })} add={() => setSel({ kind: 'newquote' })} /> : null}
+      {tab === 'invoices' ? <InvoiceList b={books} open={id => setSel({ kind: 'invoice', id })} /> : null}
+      {tab === 'accounts' ? <Accounts b={books} canPrices={does('prices')} /> : null}
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
       {tab === 'handovers' ? <HandoverList o={o} open={id => setSel({ kind: 'handover', id })} /> : null}
       {tab === 'people' ? <PeopleList o={o} open={id => setSel({ kind: 'person', id })} /> : null}
@@ -81,6 +91,10 @@ export function OfficeApp() {
     if (sel.kind === 'newjob') return wrap(<NewJob o={o} done={id => setSel(id ? { kind: 'job', id } : null)} />);
     if (sel.kind === 'query') return wrap(<QueryThread key={sel.id} q={qs} id={sel.id} />);
     if (sel.kind === 'newquery') return wrap(<NewQuery q={qs} jobs={o.d.jobs.filter(j => j.status !== 'closed' && j.status !== 'cancelled').map(j => ({ id: j.id, label: `#${j.job_number} ${j.store}` }))} done={() => setSel(null)} />);
+    if (sel.kind === 'quote') return wrap(<QuoteDetail key={sel.id} b={books} id={sel.id} techs={o.d.techs} />);
+    if (sel.kind === 'newquote') return wrap(<NewQuote b={books} stores={o.d.stores} jobs={o.d.jobs.filter(j => j.status !== 'closed' && j.status !== 'cancelled').map(j => ({ id: j.id, label: `#${j.job_number} ${j.store}` }))}
+      done={id => setSel(id ? { kind: 'quote', id } : null)} />);
+    if (sel.kind === 'invoice') return wrap(<InvoiceDetail key={sel.id} b={books} id={sel.id} />);
     if (sel.kind === 'flag') return wrap(<FlagDetail key={sel.id} id={sel.id} o={o} done={close} />);
     if (sel.kind === 'handover') return wrap(<HandoverDetail key={sel.id} id={sel.id} o={o} done={close} />);
     if (sel.kind === 'person') return wrap(<PersonDetail key={sel.id} id={sel.id} o={o} />);
@@ -118,8 +132,8 @@ export function OfficeApp() {
               </Pressable>
             ))}
           </View>
-          <View style={{ width: tab === 'today' ? undefined : 460, flex: tab === 'today' ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
-          {tab !== 'today' ? <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}</View> : null}
+          <View style={{ width: tab === 'today' || tab === 'accounts' ? undefined : 460, flex: tab === 'today' || tab === 'accounts' ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
+          {tab !== 'today' && tab !== 'accounts' ? <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}</View> : null}
         </View>
       </View>
     );

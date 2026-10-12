@@ -1,0 +1,299 @@
+// The demo's pretend quotes, invoices, company details, rates and Sage Pastel export, following the
+// same rules as the server (core/documents.ts and core/pastel.ts).
+import * as D from '../../server/src/core/documents.ts';
+import * as P from '../../server/src/core/pastel.ts';
+
+type Line = D.DocLine & { id: string };
+export interface DemoQuote {
+  id: string; quote_number: number; status: 'draft' | 'sent' | 'accepted' | 'declined' | 'cancelled'; title: string; notes: string | null; client_ref: string | null;
+  job_id: string | null; store_id: string | null; created_at: string; sent_at: string | null; valid_until: string | null; accepted_at: string | null; declined_at: string | null;
+  decision_note: string | null; resulting_job_id: string | null; created_by: string; vat_pct: number; lines: Line[]; pastel_batch_id: string | null;
+}
+export interface DemoInvoice {
+  id: string; invoice_number: number; status: 'draft' | 'sent' | 'paid' | 'cancelled'; job_id: string; notes: string | null; client_ref: string | null; created_at: string;
+  sent_at: string | null; due_date: string | null; paid_at: string | null; paid_ref: string | null; cancel_note: string | null; created_by: string; vat_pct: number; lines: Line[]; pastel_batch_id: string | null;
+}
+export interface DemoDocsState {
+  quotes: DemoQuote[]; invoices: DemoInvoice[]; nextQuote: number; nextInvoice: number;
+  profile: Record<string, unknown> | null; rates: Record<string, number>;
+  pastel: P.PastelSettings; clientCodes: Record<string, string | null>; batches: { id: string; kind: 'invoice' | 'quote'; numbers: number[]; file: string; created_at: string; created_by: string }[];
+}
+
+/** What the documents need from the rest of the demo. */
+export interface DocsSources {
+  jobs: { meta: { id: string; job_number: number; job_type: string; store_id: string; store: string; store_address: string | null; fault_reported: string; client_order_ref: string | null; lead_technician: string; helper_ids?: string[] };
+    card: { status: string; visits: { startedAt?: string; endedAt?: string }[] }; closedAt?: string }[];
+  stores: { id: string; client: string; name: string; address: string | null }[];
+  minutesOf: (jobId: string) => number;
+  stockUsed: (jobNumber: number) => { stockItemId: string; description: string; qty: number; sellingPriceCents: number | null; code: string; unit: string }[];
+  stockCode: (stockItemId: string) => { code: string; unit: string } | null;
+  name: string;
+  /** Opens a follow-up job when a quote is accepted. */
+  openJob: (storeId: string, fault: string, leadId: string, date: string, priority: string, ref: string | null) => { id: string; job_number: number };
+}
+
+type Res = { ok: true; body: unknown; status?: number } | { ok: false; status: number; reasons: string[] };
+const good = (body: unknown, status = 200): Res => ({ ok: true, body, status });
+const bad = (status: number, ...reasons: string[]): Res => ({ ok: false, status, reasons });
+const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
+let seq = 0;
+const nid = (p: string) => `${p}-${Date.now().toString(36)}-${(seq++).toString(36)}`;
+
+export function seedDocs(): DemoDocsState {
+  const l = (kind: D.LineKind, description: string, qty: number, unitPriceCents: number): Line => ({ id: nid('dl'), kind, description, qty, unitPriceCents });
+  return {
+    quotes: [
+      { id: 'quote-5001', quote_number: 5001, status: 'sent', title: 'Replace both combi oven door seals', notes: 'Seals are torn on both ovens; steam escapes during cooking.', client_ref: null,
+        job_id: null, store_id: 'arboretum', created_at: ago(50), sent_at: ago(48), valid_until: addDays(today(), 28), accepted_at: null, declined_at: null, decision_note: null,
+        resulting_job_id: null, created_by: 'Zanele Khoza', vat_pct: 15, pastel_batch_id: null,
+        lines: [{ ...l('stock', 'Oven door seal 1/1 Rational', 2, 185000), stockItemId: 'st-2' }, l('labour', 'Labour', 2, 65000), l('call_out', 'Call-out', 1, 45000)] },
+      { id: 'quote-5002', quote_number: 5002, status: 'draft', title: 'New condenser fan motor, bakery display', notes: null, client_ref: null,
+        job_id: 'job-10220', store_id: null, created_at: ago(3), sent_at: null, valid_until: null, accepted_at: null, declined_at: null, decision_note: null,
+        resulting_job_id: null, created_by: 'Zanele Khoza', vat_pct: 15, pastel_batch_id: null,
+        lines: [{ ...l('stock', 'Condenser fan motor 10W', 1, 0), stockItemId: 'st-7' }, l('labour', 'Labour', 1, 65000)] },
+    ],
+    invoices: [
+      { id: 'inv-7001', invoice_number: 7001, status: 'sent', job_id: 'job-10219', notes: 'Thank you for your business.', client_ref: 'PO-14190', created_at: ago(70), sent_at: ago(70),
+        due_date: addDays(today(), 27), paid_at: null, paid_ref: null, cancel_note: null, created_by: 'Zanele Khoza', vat_pct: 15, pastel_batch_id: null,
+        lines: [l('labour', 'Labour, job 10219', 1.5, 65000), l('call_out', 'Call-out', 1, 45000), { ...l('stock', 'Water inlet valve 24V', 1, 32000), stockItemId: 'st-1' }] },
+    ],
+    nextQuote: 5003, nextInvoice: 7002,
+    profile: {
+      legal_name: 'Zululand Service Providers', trading_name: 'ZSP', reg_no: null, vat_no: null, address: 'Alton, Richards Bay, KwaZulu-Natal',
+      phone: null, email: null, bank_details: null, quote_terms: 'Quote valid for 30 days. Prices exclude VAT unless shown.', invoice_terms: 'Payment within 30 days of invoice.',
+      vat_pct: 15, quote_valid_days: 30, invoice_due_days: 30,
+    },
+    rates: { labour_per_hour: 65000, call_out: 45000, travel_per_km: 900, bought_out_markup_pct: 20 },
+    pastel: { yearStartMonth: 3, taxType: '01', codes: {}, store: null },
+    clientCodes: { FreshMart: null, 'Harbour Deli': null, Boxer: null, Spar: null },
+    batches: [],
+  };
+}
+
+export class DemoDocs {
+  constructor(public d: DemoDocsState, private src: DocsSources) {}
+
+  private job(id: string | null) { return id ? this.src.jobs.find(j => j.meta.id === id) : undefined; }
+  private storeOf(q: { job_id: string | null; store_id?: string | null }) {
+    const j = this.job(q.job_id);
+    const sid = j?.meta.store_id ?? q.store_id;
+    return this.src.stores.find(s => s.id === sid);
+  }
+  private who(q: { job_id: string | null; store_id?: string | null }) {
+    const s = this.storeOf(q);
+    return { store: s?.name ?? '', store_address: s?.address ?? null, client: s?.client ?? '', store_email: null };
+  }
+  private exVat(lines: Line[]) { return lines.reduce((n, l) => n + D.lineTotal(l), 0); }
+
+  // ---- Company and rates -------------------------------------------------------------------
+  company() { return { profile: this.d.profile, rates: this.d.rates, rateKeys: D.RATE_KEYS.map(k => ({ key: k, label: D.RATE_LABEL[k] })) }; }
+  setCompany(b: Record<string, unknown>): Res {
+    if (!b.legalName || String(b.legalName).trim().length < 2) return bad(400, "the company's legal name");
+    this.d.profile = {
+      legal_name: b.legalName, trading_name: b.tradingName ?? null, reg_no: b.regNo ?? null, vat_no: b.vatNo ?? null, address: b.address ?? null, phone: b.phone ?? null,
+      email: b.email || null, bank_details: b.bankDetails ?? null, quote_terms: b.quoteTerms ?? null, invoice_terms: b.invoiceTerms ?? null,
+      vat_pct: b.vatPct ?? 15, quote_valid_days: b.quoteValidDays ?? 30, invoice_due_days: b.invoiceDueDays ?? 30,
+    };
+    return good({ profile: this.d.profile });
+  }
+  setRates(b: Record<string, number>) { for (const [k, v] of Object.entries(b)) if (typeof v === 'number') this.d.rates[k] = v; return good({ rates: this.d.rates }); }
+
+  // ---- Quotes --------------------------------------------------------------------------------
+  quotes(status?: string | null) {
+    return this.d.quotes.filter(q => !status || q.status === status).map(q => {
+      const ex = this.exVat(q.lines);
+      return { id: q.id, quote_number: q.quote_number, status: q.status, title: q.title, created_at: q.created_at, sent_at: q.sent_at, valid_until: q.valid_until,
+        accepted_at: q.accepted_at, declined_at: q.declined_at, vat_pct: q.vat_pct, job_number: this.job(q.job_id)?.meta.job_number ?? null, job_id: q.job_id, ...this.who(q),
+        created_by: q.created_by, ex_vat_cents: ex, total_cents: D.totals([{ qty: 1, unitPriceCents: ex }], q.vat_pct).totalCents };
+    }).sort((a, b) => Number(b.status === 'draft') - Number(a.status === 'draft') || b.quote_number - a.quote_number);
+  }
+  quote(id: string): Res {
+    const q = this.d.quotes.find(x => x.id === id);
+    if (!q) return bad(404, 'no such quote');
+    return good({ quote: { ...q, lines: undefined, job_number: this.job(q.job_id)?.meta.job_number ?? null, ...this.who(q), created_by_name: q.created_by,
+      resulting_job_number: this.job(q.resulting_job_id)?.meta.job_number ?? null }, lines: q.lines, totals: D.totals(q.lines, q.vat_pct), company: this.d.profile });
+  }
+  newQuote(b: { jobId?: string; storeId?: string; title: string; clientRef?: string; notes?: string; lines?: D.DocLine[] }): Res {
+    if (!b.jobId && !b.storeId) return bad(400, 'a job or a store');
+    if (!b.title || b.title.trim().length < 3) return bad(400, 'what the quote is for');
+    const id = nid('quote');
+    const number = this.d.nextQuote++;
+    this.d.quotes.unshift({ id, quote_number: number, status: 'draft', title: b.title.trim(), notes: b.notes ?? null, client_ref: b.clientRef ?? null, job_id: b.jobId ?? null,
+      store_id: b.jobId ? null : b.storeId ?? null, created_at: new Date().toISOString(), sent_at: null, valid_until: null, accepted_at: null, declined_at: null, decision_note: null,
+      resulting_job_id: null, created_by: this.src.name, vat_pct: Number(this.d.profile?.vat_pct ?? 15), pastel_batch_id: null,
+      lines: (b.lines ?? []).filter(l => l.qty > 0).map(l => ({ ...l, id: nid('dl') })) });
+    return good({ id, quoteNumber: number }, 201);
+  }
+  editQuote(id: string, b: { title: string; clientRef?: string | null; notes?: string | null; lines: D.DocLine[] }): Res {
+    const q = this.d.quotes.find(x => x.id === id);
+    if (!q) return bad(404, 'no such quote');
+    if (q.status !== 'draft') return bad(409, 'a sent quote cannot be changed: make a new one');
+    Object.assign(q, { title: b.title, client_ref: b.clientRef ?? null, notes: b.notes ?? null, lines: b.lines.filter(l => l.qty > 0).map(l => ({ ...l, id: nid('dl') })) });
+    return good({ id });
+  }
+  sendQuote(id: string): Res {
+    const q = this.d.quotes.find(x => x.id === id);
+    if (!q) return bad(404, 'no such quote');
+    if (q.status !== 'draft') return bad(409, 'already sent');
+    const missing = D.missingToSend({ lines: q.lines });
+    if (missing.length) return bad(409, ...missing);
+    Object.assign(q, { status: 'sent', sent_at: new Date().toISOString(), valid_until: addDays(today(), Number(this.d.profile?.quote_valid_days ?? 30)) });
+    return good({ id, status: 'sent' });
+  }
+  acceptQuote(id: string, b: { note?: string; clientRef?: string; newJob?: { scheduledDate: string; leadTechnicianId: string; priority?: string } }): Res {
+    const q = this.d.quotes.find(x => x.id === id);
+    if (!q) return bad(404, 'no such quote');
+    if (q.status !== 'sent') return bad(409, 'only a sent quote can be accepted');
+    let job: { id: string; job_number: number } | null = null;
+    if (b.newJob) {
+      const st = this.storeOf(q);
+      job = this.src.openJob(st!.id, `Quote ${q.quote_number} accepted: ${q.title}`, b.newJob.leadTechnicianId, b.newJob.scheduledDate, b.newJob.priority ?? 'scheduled', b.clientRef ?? q.client_ref);
+    }
+    Object.assign(q, { status: 'accepted', accepted_at: new Date().toISOString(), decision_note: b.note ?? null, resulting_job_id: job?.id ?? null, client_ref: b.clientRef ?? q.client_ref });
+    return good({ id, status: 'accepted', jobId: job?.id ?? null, jobNumber: job?.job_number ?? null });
+  }
+  declineQuote(id: string, note: string): Res {
+    const q = this.d.quotes.find(x => x.id === id && x.status === 'sent');
+    if (!q) return bad(409, 'only a sent quote can be declined');
+    if (!note || note.trim().length < 3) return bad(400, 'what the client said');
+    Object.assign(q, { status: 'declined', declined_at: new Date().toISOString(), decision_note: note.trim() });
+    return good({ id, status: 'declined' });
+  }
+  cancelQuote(id: string, note: string): Res {
+    const q = this.d.quotes.find(x => x.id === id);
+    if (!q) return bad(404, 'no such quote');
+    if (q.status === 'draft') { this.d.quotes = this.d.quotes.filter(x => x.id !== id); return good({ id, status: 'deleted' }); }
+    if (q.status !== 'sent') return bad(409, `the quote is ${q.status}`);
+    Object.assign(q, { status: 'cancelled', decision_note: note });
+    return good({ id, status: 'cancelled' });
+  }
+
+  // ---- Invoices ------------------------------------------------------------------------------
+  toInvoice() {
+    return this.src.jobs.filter(j => j.card.status === 'closed' && !this.d.invoices.some(i => i.job_id === j.meta.id && i.status !== 'cancelled')).map(j => {
+      const s = this.src.stores.find(x => x.id === j.meta.store_id);
+      return { id: j.meta.id, job_number: j.meta.job_number, job_type: j.meta.job_type, closed_at: j.closedAt ?? j.card.visits.at(-1)?.endedAt ?? new Date().toISOString(),
+        fault_reported: j.meta.fault_reported, client_order_ref: j.meta.client_order_ref, store: j.meta.store, client: s?.client ?? '', store_address: j.meta.store_address, lead_technician: j.meta.lead_technician };
+    });
+  }
+  invoices(status?: string | null) {
+    return this.d.invoices.filter(i => !status || i.status === status).map(i => {
+      const ex = this.exVat(i.lines);
+      const j = this.job(i.job_id);
+      return { id: i.id, invoice_number: i.invoice_number, status: i.status, created_at: i.created_at, sent_at: i.sent_at, due_date: i.due_date, paid_at: i.paid_at, vat_pct: i.vat_pct,
+        job_number: j?.meta.job_number ?? null, job_id: i.job_id, ...this.who({ job_id: i.job_id }), created_by: i.created_by, ex_vat_cents: ex,
+        total_cents: D.totals([{ qty: 1, unitPriceCents: ex }], i.vat_pct).totalCents, overdue: i.status === 'sent' && !!i.due_date && i.due_date < today() };
+    }).sort((a, b) => Number(b.status === 'draft') - Number(a.status === 'draft') || b.invoice_number - a.invoice_number);
+  }
+  invoice(id: string): Res {
+    const i = this.d.invoices.find(x => x.id === id);
+    if (!i) return bad(404, 'no such invoice');
+    const j = this.job(i.job_id);
+    return good({ invoice: { ...i, lines: undefined, job_number: j?.meta.job_number ?? null, job_order_ref: j?.meta.client_order_ref ?? null, fault_reported: j?.meta.fault_reported ?? '',
+      job_closed: (j?.closedAt ?? '').slice(0, 10) || null, ...this.who({ job_id: i.job_id }), created_by_name: i.created_by }, lines: i.lines, totals: D.totals(i.lines, i.vat_pct), company: this.d.profile });
+  }
+  newInvoice(jobId: string): Res {
+    const j = this.job(jobId);
+    if (!j) return bad(404, 'no such job');
+    if (j.card.status !== 'closed') return bad(409, 'only a closed job can be invoiced');
+    if (this.d.invoices.some(i => i.job_id === jobId && i.status !== 'cancelled')) return bad(409, 'this job already has an invoice');
+    const lines = D.invoiceDraft({
+      jobType: j.meta.job_type, jobNumber: j.meta.job_number, minutesOnSite: this.src.minutesOf(jobId), technicians: 1 + (j.meta.helper_ids ?? []).length,
+      visits: j.card.visits.length, stockUsed: this.src.stockUsed(j.meta.job_number), boughtOut: [],
+    }, this.d.rates);
+    const id = nid('inv');
+    const number = this.d.nextInvoice++;
+    this.d.invoices.unshift({ id, invoice_number: number, status: 'draft', job_id: jobId, notes: null, client_ref: j.meta.client_order_ref, created_at: new Date().toISOString(), sent_at: null,
+      due_date: null, paid_at: null, paid_ref: null, cancel_note: null, created_by: this.src.name, vat_pct: Number(this.d.profile?.vat_pct ?? 15), pastel_batch_id: null,
+      lines: lines.map(l => ({ ...l, id: nid('dl') })) });
+    return good({ id, invoiceNumber: number, missing: D.missingToSend({ lines }) }, 201);
+  }
+  editInvoice(id: string, b: { clientRef?: string | null; notes?: string | null; lines: D.DocLine[] }): Res {
+    const i = this.d.invoices.find(x => x.id === id);
+    if (!i) return bad(404, 'no such invoice');
+    if (i.status !== 'draft') return bad(409, 'a sent invoice cannot be changed: cancel it and make a new one');
+    Object.assign(i, { client_ref: b.clientRef ?? null, notes: b.notes ?? null, lines: b.lines.filter(l => l.qty > 0).map(l => ({ ...l, id: nid('dl') })) });
+    return good({ id });
+  }
+  sendInvoice(id: string): Res {
+    const i = this.d.invoices.find(x => x.id === id);
+    if (!i) return bad(404, 'no such invoice');
+    if (i.status !== 'draft') return bad(409, 'already sent');
+    const missing = D.missingToSend({ lines: i.lines });
+    if (missing.length) return bad(409, ...missing);
+    Object.assign(i, { status: 'sent', sent_at: new Date().toISOString(), due_date: addDays(today(), Number(this.d.profile?.invoice_due_days ?? 30)) });
+    return good({ id, status: 'sent' });
+  }
+  paid(id: string, ref: string): Res {
+    const i = this.d.invoices.find(x => x.id === id && x.status === 'sent');
+    if (!i) return bad(409, 'only a sent invoice can be marked paid');
+    if (!ref || ref.trim().length < 2) return bad(400, 'the payment reference');
+    Object.assign(i, { status: 'paid', paid_at: today(), paid_ref: ref.trim() });
+    return good({ id, status: 'paid' });
+  }
+  cancelInvoice(id: string, note: string): Res {
+    const i = this.d.invoices.find(x => x.id === id);
+    if (!i) return bad(404, 'no such invoice');
+    if (!note || note.trim().length < 5) return bad(400, 'say why it is cancelled');
+    if (i.status === 'draft') { this.d.invoices = this.d.invoices.filter(x => x.id !== id); return good({ id, status: 'deleted' }); }
+    if (i.status !== 'sent') return bad(409, `the invoice is ${i.status}`);
+    Object.assign(i, { status: 'cancelled', cancel_note: note.trim() });
+    return good({ id, status: 'cancelled' });
+  }
+
+  // ---- Sage Pastel --------------------------------------------------------------------------
+  private pastelDocs(kind: 'invoice' | 'quote'): (P.PastelDoc & { id: string })[] {
+    const list = kind === 'invoice'
+      ? this.d.invoices.filter(i => (i.status === 'sent' || i.status === 'paid') && !i.pastel_batch_id).map(i => ({ id: i.id, number: i.invoice_number, date: (i.sent_at ?? i.created_at).slice(0, 10), due: i.due_date, ref: i.client_ref, notes: i.notes, job_id: i.job_id, store_id: null as string | null, lines: i.lines }))
+      : this.d.quotes.filter(q => (q.status === 'sent' || q.status === 'accepted') && !q.pastel_batch_id).map(q => ({ id: q.id, number: q.quote_number, date: (q.sent_at ?? q.created_at).slice(0, 10), due: q.valid_until, ref: q.client_ref, notes: q.notes, job_id: q.job_id, store_id: q.store_id, lines: q.lines }));
+    return list.map(x => {
+      const s = this.storeOf(x);
+      const jn = this.job(x.job_id)?.meta.job_number;
+      return {
+        id: x.id, kind, number: x.number, customerCode: s ? this.d.clientCodes[s.client] ?? null : null, date: x.date, dueDate: x.due, orderNumber: x.ref,
+        message: [jn ? `Job ${jn}` : null, x.notes].filter(Boolean).join('. ') || null, deliverTo: [s?.name ?? '', ...(s?.address ?? '').split(/,\s*/)], contact: null,
+        lines: x.lines.map(l => ({ ...l, stockCode: l.stockItemId ? this.src.stockCode(l.stockItemId)?.code ?? null : l.kind === 'stock' ? null : undefined, unit: l.stockItemId ? this.src.stockCode(l.stockItemId)?.unit ?? null : null })),
+      };
+    });
+  }
+  pastelSettings() { return { settings: this.d.pastel, lineTypes: P.LINE_TYPE_LABEL }; }
+  setPastel(b: P.PastelSettings): Res {
+    if (!(b.yearStartMonth >= 1 && b.yearStartMonth <= 12)) return bad(400, 'the month the financial year starts');
+    if (!/^[0-9]{2}$/.test(b.taxType ?? '')) return bad(400, 'tax type is two digits, e.g. 01');
+    this.d.pastel = { yearStartMonth: b.yearStartMonth, taxType: b.taxType, codes: b.codes ?? {}, store: b.store || null };
+    return good({ settings: this.d.pastel });
+  }
+  clients() {
+    const names = [...new Set(this.src.stores.map(s => s.client))].sort();
+    return names.map(n => ({ id: n, name: n, pastel_code: this.d.clientCodes[n] ?? null, stores: this.src.stores.filter(s => s.client === n).length }));
+  }
+  setClientCode(id: string, code: string | null): Res {
+    const c = (code ?? '').trim().toUpperCase();
+    if (c.length > 6) return bad(400, 'Pastel customer codes are at most 6 characters');
+    const clash = Object.entries(this.d.clientCodes).find(([n, v]) => n !== id && v && v.toUpperCase() === c);
+    if (c && clash) return bad(409, `${c} is already ${clash[0]}`);
+    this.d.clientCodes[id] = c || null;
+    return good({ id, code: c || null });
+  }
+  ready(kind: 'invoice' | 'quote') {
+    return this.pastelDocs(kind).map(d => ({ id: d.id, number: d.number, date: d.date, customerCode: d.customerCode, store: d.deliverTo[0], lines: d.lines.length, problems: P.missingForPastel(d, this.d.pastel) }));
+  }
+  batch(kind: 'invoice' | 'quote', by: string): Res {
+    const all = this.pastelDocs(kind);
+    const ok = all.filter(d => !P.missingForPastel(d, this.d.pastel).length);
+    const skipped = all.filter(d => !ok.includes(d)).map(d => ({ number: d.number, reasons: P.missingForPastel(d, this.d.pastel) }));
+    if (!ok.length) return bad(409, ...(skipped.length ? skipped.map(x => `${kind} ${x.number}: ${x.reasons.join('; ')}`) : [`no ${kind}s waiting to go to Pastel`]));
+    const file = P.pastelFile(ok, this.d.pastel, Number(this.d.profile?.vat_pct ?? 15));
+    const id = nid('pb');
+    this.d.batches.unshift({ id, kind, numbers: ok.map(d => d.number), file, created_at: new Date().toISOString(), created_by: by });
+    for (const d of ok) {
+      const doc = kind === 'invoice' ? this.d.invoices.find(i => i.id === d.id) : this.d.quotes.find(q => q.id === d.id);
+      if (doc) doc.pastel_batch_id = id;
+    }
+    return good({ id, kind, numbers: ok.map(d => d.number), skipped, filename: `pastel-${kind}s-${today()}-${id.slice(-6)}.csv`, file }, 201);
+  }
+  batches() { return this.d.batches.map(({ file: _f, ...b }) => b); }
+  batchFile(id: string) { return this.d.batches.find(b => b.id === id)?.file ?? null; }
+}

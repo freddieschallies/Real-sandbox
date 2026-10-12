@@ -386,5 +386,5 @@ test('Pastel Partner import file: header and detail rows, periods, codes', async
   assert.equal(f[3].split(',').length, 14, 'detail columns A to N');
   assert.equal(f[3], 'Detail,0,1,320.00,368.00,each,01,0,0,VALVE-01,Water inlet valve 24V,4,,001');
   assert.deepEqual(P.missingForPastel({ ...doc, customerCode: null, lines: [...doc.lines, { kind: 'travel' as const, description: 'Travel', qty: 40, unitPriceCents: 900 }] }, s),
-    ["the client's Pastel customer code", 'a Pastel code for travel lines (Accounting settings)']);
+    ["the client's Pastel customer code", 'a Pastel code for travel lines (Accounts, Pastel codes)']);
 });

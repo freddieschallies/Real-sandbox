@@ -52,7 +52,7 @@ export function missingForPastel(d: PastelDoc, s: PastelSettings): string[] {
     if (l.kind === 'stock') {
       if (!l.stockCode) noCode.add(`a Pastel item code for "${l.description}"`);
       else if (l.stockCode.length > 15) noCode.add(`item code ${l.stockCode} is longer than 15 characters`);
-    } else if (!s.codes[l.kind]?.code) noCode.add(`a Pastel code for ${l.kind.replace('_', '-')} lines (Accounting settings)`);
+    } else if (!s.codes[l.kind]?.code) noCode.add(`a Pastel code for ${l.kind.replace('_', '-')} lines (Accounts, Pastel codes)`);
   }
   return [...out, ...noCode];
 }

@@ -185,7 +185,7 @@ export function registerDocumentRoutes(app: FastifyInstance) {
       if (!q) throw new Refused(404, ['no such quote']);
       if (q.status !== 'draft') throw new Refused(409, ['already sent']);
       const missing = D.missingToSend({ lines: await linesOf(c, 'quote_id', id) });
-      if (!(await profile(c))) missing.push("the company's details (CEO: Company and rates)");
+      if (!(await profile(c))) missing.push("the company's details (CEO: Accounts, Company details and rates)");
       if (missing.length) throw new Refused(409, missing);
       const days = (await profile(c)).quote_valid_days;
       await c.query("UPDATE quotes SET status = 'sent', sent_at = now(), valid_until = $2, updated_at = now() WHERE id = $1", [id, addDays(today(), days)]);
@@ -350,7 +350,7 @@ export function registerDocumentRoutes(app: FastifyInstance) {
       if (i.status !== 'draft') throw new Refused(409, ['already sent']);
       const p = await profile(c);
       const missing = D.missingToSend({ lines: await linesOf(c, 'invoice_id', id) });
-      if (!p) missing.push("the company's details (CEO: Company and rates)");
+      if (!p) missing.push("the company's details (CEO: Accounts, Company details and rates)");
       if (missing.length) throw new Refused(409, missing);
       await c.query("UPDATE invoices SET status = 'sent', sent_at = now(), due_date = $2, updated_at = now() WHERE id = $1", [id, addDays(today(), p.invoice_due_days)]);
       await audit(c, req.actor.id, 'invoice_sent', 'invoice', id);
