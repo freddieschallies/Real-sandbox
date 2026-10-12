@@ -15,13 +15,16 @@ function randomUUID(): string {
 }
 import { load, save, clear } from './storage.ts';
 import { HttpTransport } from './http.ts';
+import { REAL } from './demoReal.ts';
 import { DemoTransport, seedDemo, type DemoState } from './demo.ts';
 import { Outbox, type Blocked, type Entry } from './outbox.ts';
 import { Offline, reasonsOf, type Request, type Transport, type Upload } from './transport.ts';
 import { apply, J } from './local.ts';
 import type { CardView, CatalogueLine, Flag, InventoryLine, JobStockLine, Policy, Session, StockLine, StockRequest, StockReturn, SupplierInvoice, Today } from './types.ts';
 
-const K = { session: 'rs.session', cache: 'rs.cache', outbox: 'rs.outbox', demo: 'rs.demo' };
+// The real-data demo keeps its own sign-in and demo data, so a browser that tried the made-up one starts fresh.
+const K = REAL ? { session: 'rs.real.session', cache: 'rs.real.cache', outbox: 'rs.real.outbox', demo: 'rs.real.demo' }
+  : { session: 'rs.session', cache: 'rs.cache', outbox: 'rs.outbox', demo: 'rs.demo' };
 
 interface Cache {
   today: Today | null; cards: Record<string, CardView>; stock: StockLine[]; flags: Flag[]; refreshedAt: string | null;

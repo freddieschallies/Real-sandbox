@@ -1,6 +1,7 @@
 // The mechanic's app: the fleet only. Everything hangs off a vehicle: its details, km, faults and
 // the mechanic's own job cards. Phone: tabs at the bottom. Desktop: menu, list and detail side by side.
 import { BottomTabs } from '../BottomTabs.tsx';
+import { usePhoneMenu } from '../menu.tsx';
 import { BrandLogo } from '../brand.tsx';
 import React, { useEffect, useState } from 'react';
 import { Image, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
@@ -24,6 +25,7 @@ export type Sel = { kind: 'vehicle'; id: string } | { kind: 'job'; id: string } 
 export function FleetApp() {
   const s = useStore();
   const ins = useSafeAreaInsets();
+  const menu = usePhoneMenu();
   const { width } = useWindowDimensions();
   const wide = width >= 900;
   const f = useFleet();
@@ -80,10 +82,10 @@ export function FleetApp() {
       {sel && (!wide || stack.length > 1) ? (
         <Pressable onPress={back} accessibilityRole="button" accessibilityLabel="Back" hitSlop={10}><Text style={{ color: K.bandText, fontSize: 34 }}>‹</Text></Pressable>
       ) : null}
-      <BrandLogo />
-      <View style={{ flex: 1 }}>
-        <Text style={{ color: K.bandText, fontSize: 22, fontWeight: '800' }}>Fleet</Text>
-        <Text style={{ color: K.bandText, opacity: 0.8 }}>{s.session?.user.name} · {s.session?.user.level === 'mechanic' ? 'Mechanic' : s.session?.user.level === 'creator' ? 'CEO' : 'Fleet'}</Text>
+      <BrandLogo height={wide ? 36 : 28} />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text numberOfLines={1} style={{ color: K.bandText, fontSize: wide ? 22 : 19, fontWeight: '800' }}>Fleet</Text>
+        <Text numberOfLines={1} style={{ color: K.bandText, opacity: 0.8 }}>{s.session?.user.name} · {s.session?.user.level === 'mechanic' ? 'Mechanic' : s.session?.user.level === 'creator' ? 'CEO' : 'Fleet'}</Text>
       </View>
       <SyncPill />
       <Pressable onPress={f.load} accessibilityRole="button" accessibilityLabel="Refresh" hitSlop={8}
@@ -119,7 +121,7 @@ export function FleetApp() {
       {header}
       <View style={{ flex: 1 }}>{detail ?? list}</View>
       {!sel ? (
-        <BottomTabs tabs={tabs} current={tab} onSelect={k => setTab(k)} accent={K.band} bottom={ins.bottom} />
+        <BottomTabs tabs={tabs} current={tab} onSelect={k => setTab(k)} accent={K.band} bottom={ins.bottom} pinned={menu.pinned} />
       ) : null}
     </View>
   );

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { actorWithDefaults as A, can, departmentsFor, effectivePermissions } from '../src/core/permissions.ts';
 import * as J from '../src/core/jobCard.ts';
 import * as R from '../src/core/rules.ts';
+import * as M from '../src/core/phoneMenu.ts';
 
 // ---- Permissions -----------------------------------------------------------
 
@@ -435,4 +436,23 @@ test('pay: normal, overtime (1.5x) and double time (Sundays and public holidays)
   assert.equal(T.publicHoliday('2026-04-06'), 'Family Day');
   assert.equal(T.publicHoliday('2026-08-10'), "National Women's Day (observed)", 'a Sunday holiday moves to Monday');
   assert.equal(T.payOf(day(0, 600), '2026-10-12', { weekdayNormalMin: 540, saturdayNormalMin: 0 }).overtimeMin, 60, 'company setting');
+});
+
+test('phone menu: up to five tabs show; more go under More; pinned ones first, a lone leftover joins the bar', () => {
+  const t = (...k: string[]) => k.map(key => ({ key }));
+  const keys = (x: { key: string }[]) => x.map(y => y.key).join(',');
+  const { arrangeTabs } = M;
+  let r = arrangeTabs(t('a', 'b', 'c', 'd', 'e'), null);
+  assert.equal(keys(r.bar), 'a,b,c,d,e'); assert.equal(r.more.length, 0);
+  r = arrangeTabs(t('a', 'b', 'c', 'd', 'e', 'f'), null);
+  assert.equal(keys(r.bar), 'a,b,c,d'); assert.equal(keys(r.more), 'e,f');
+  r = arrangeTabs(t('a', 'b', 'c', 'd', 'e', 'f'), ['f', 'c']);
+  assert.equal(keys(r.bar), 'f,c'); assert.equal(keys(r.more), 'a,b,d,e');
+  r = arrangeTabs(t('a', 'b', 'c'), ['c', 'a']);
+  assert.equal(keys(r.bar), 'c,a,b', 'a More with one tab is pointless');
+  r = arrangeTabs(t('a', 'b', 'c', 'd', 'e', 'f'), ['x', 'y']);
+  assert.equal(keys(r.bar), 'a,b,c,d', 'none of the pinned tabs: automatic');
+  assert.deepEqual(M.usualTabs('hr'), ['departments', 'timesheets', 'people']);
+  assert.ok(M.usualTabs('admin').includes('settings') && !M.usualTabs('management').includes('settings'));
+  assert.deepEqual(M.usualTabs('technician'), []);
 });

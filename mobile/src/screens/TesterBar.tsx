@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { Pressable, Text, View, useWindowDimensions } from 'react-native';
 import { useStore } from '../state.tsx';
 import { C } from '../theme.ts';
+import { realText as R } from '../demoReal.ts';
 
 const ROLES = [
   { who: 'demo', level: 'technician', label: 'Technician', short: 'Tech' },
@@ -55,12 +56,12 @@ export function TesterBar() {
       </Pressable>
     </View>
     {current === 'stockroom' ? (
-      <Pressable onPress={toggleDuty} accessibilityRole="switch" accessibilityState={{ checked: duty }} accessibilityLabel="Lindiwe also does the mechanic's work"
+      <Pressable onPress={toggleDuty} accessibilityRole="switch" accessibilityState={{ checked: duty }} accessibilityLabel={R("Lindiwe also does the mechanic's work")}
         style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#0B0C0E', borderBottomWidth: 1, borderBottomColor: C.line, opacity: busy ? 0.5 : 1 }}>
         <View style={{ width: 34, height: 20, borderRadius: 10, backgroundColor: duty ? C.good : C.panel2, justifyContent: 'center', paddingHorizontal: 2 }}>
           <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: '#FFF', alignSelf: duty ? 'flex-end' : 'flex-start' }} />
         </View>
-        <Text style={{ color: C.quiet, fontSize: 12, flex: 1 }}>Small company, no mechanic: the CEO also gives Lindiwe the mechanic's work</Text>
+        <Text style={{ color: C.quiet, fontSize: 12, flex: 1 }}>{R("Small company, no mechanic: the CEO also gives Lindiwe the mechanic's work")}</Text>
       </Pressable>
     ) : null}
     </View>

@@ -4,6 +4,7 @@ import { KitPeople, StockPersonView, type StockPerson } from '../staff/Staff.tsx
 import { OrderList, PartDetail, Thumb, useOrderList } from './Parts.tsx';
 import { WorkshopAdd, WorkshopItem, WorkshopList, useWorkshop } from '../fleet/Workshop.tsx';
 import { BottomTabs } from '../BottomTabs.tsx';
+import { usePhoneMenu } from '../menu.tsx';
 import { BrandLogo } from '../brand.tsx';
 import React, { useState } from 'react';
 import { Image, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
@@ -28,6 +29,7 @@ const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: '
 export function StockroomApp() {
   const s = useStore();
   const ins = useSafeAreaInsets();
+  const menu = usePhoneMenu();
   const { width } = useWindowDimensions();
   const wide = width >= 900;
   const room = useStockroom();
@@ -96,10 +98,10 @@ export function StockroomApp() {
           <Text style={{ color: K.bandText, fontSize: 34 }}>‹</Text>
         </Pressable>
       ) : null}
-      <BrandLogo />
-      <View style={{ flex: 1 }}>
-        <Text style={{ color: K.bandText, fontSize: 22, fontWeight: '800' }}>Stockroom</Text>
-        <Text style={{ color: K.bandText, opacity: 0.8 }}>{s.session?.user.name} · {s.session?.company.name}</Text>
+      <BrandLogo height={wide ? 36 : 28} />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text numberOfLines={1} style={{ color: K.bandText, fontSize: wide ? 22 : 19, fontWeight: '800' }}>Stockroom</Text>
+        <Text numberOfLines={1} style={{ color: K.bandText, opacity: 0.8 }}>{s.session?.user.name} · {s.session?.company.name}</Text>
       </View>
       <SyncPill />
       <Pressable onPress={room.load} accessibilityRole="button" accessibilityLabel="Refresh" hitSlop={8}
@@ -134,7 +136,7 @@ export function StockroomApp() {
       {header}
       <View style={{ flex: 1 }}>{detail ?? list}</View>
       {!sel ? (
-        <BottomTabs tabs={tabs} current={tab} onSelect={k => { if (tab === 'live') room.seenActivity(); setTab(k); }} accent={K.band} bottom={ins.bottom} />
+        <BottomTabs tabs={tabs} current={tab} onSelect={k => { if (tab === 'live') room.seenActivity(); setTab(k); }} accent={K.band} bottom={ins.bottom} pinned={menu.pinned} />
       ) : null}
     </View>
   );

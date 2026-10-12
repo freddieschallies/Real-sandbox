@@ -4,6 +4,7 @@ import type { DemoFleet } from './demoFleet.ts';
 import { DEMO_TECHS } from './demoFleet.ts';
 import type { DemoWorkshop } from './demoWorkshop.ts';
 import type { DemoStockState } from './demoStock.ts';
+import { EXAMPLE_TECH, REAL } from './demoReal.ts';
 
 export interface DemoStore { id: string; client: string; name: string; address: string | null; lat: number; lng: number; geofence_m: number }
 export interface DemoInspection {
@@ -19,6 +20,11 @@ export interface DemoProfile {
 const blank = (): DemoProfile => ({ photo_id: null, phone: null, email: null, emergency_name: null, emergency_phone: null, id_number: null, date_of_birth: null, home_address: null, start_date: null, notes: null });
 /** Demo contact details: 555 numbers and example.com addresses, so nothing real. */
 function seedProfiles(): Record<string, DemoProfile> {
+  // Real-data demo: the real phone and email where Servcraft has them, and nothing made up.
+  if (REAL) {
+    const real = [...Object.entries(REAL.people).map(([id, p]) => ({ id, ...p })), ...REAL.others];
+    return Object.fromEntries(real.map(p => [p.id, { ...blank(), phone: p.phone, email: p.email }]));
+  }
   const p = (id: string, phone: string, email: string, em: string, emPhone: string, start: string, addr: string): [string, DemoProfile] =>
     [id, { ...blank(), phone, email, emergency_name: em, emergency_phone: emPhone, start_date: start, home_address: addr, date_of_birth: '1990-01-01', id_number: 'DEMO-0000000' }];
   return Object.fromEntries([
@@ -44,8 +50,8 @@ function seedRecords(): DemoRecord[] {
   const d = (n: number) => new Date(Date.now() - n * 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
   return [
     { id: 'rec-1', employeeId: 'tech-3', type: 'observation', happenedOn: d(40), what: 'Arrived 50 minutes late at Spar Arboretum without phoning the office.', action: null, reason: null, author: 'Lilanie Schallies', createdAt: new Date(Date.now() - 40 * 86_400_000).toISOString() },
-    { id: 'rec-2', employeeId: 'tech-3', type: 'verbal_warning', happenedOn: d(12), what: 'Late again at FreshMart Meerensee, the store manager complained.', action: 'Verbal warning given in the office, with Pieter present', reason: 'Second late arrival in a month after being spoken to', author: 'Lilanie Schallies', createdAt: new Date(Date.now() - 12 * 86_400_000).toISOString() },
-    { id: 'rec-3', employeeId: 'me', type: 'commendation', happenedOn: d(20), what: 'Harbour Deli thanked us for fixing the cold room on a Sunday night.', action: null, reason: null, author: 'Lilanie Schallies', createdAt: new Date(Date.now() - 20 * 86_400_000).toISOString() },
+    { id: 'rec-2', employeeId: 'tech-3', type: 'verbal_warning', happenedOn: d(12), what: 'Late again at FreshMart Meerensee, the store manager complained.', action: REAL ? 'Verbal warning given in the office, with the department manager present' : 'Verbal warning given in the office, with Pieter present', reason: 'Second late arrival in a month after being spoken to', author: 'Lilanie Schallies', createdAt: new Date(Date.now() - 12 * 86_400_000).toISOString() },
+    { id: 'rec-3', employeeId: REAL ? EXAMPLE_TECH : 'me', type: 'commendation', happenedOn: d(20), what: 'Harbour Deli thanked us for fixing the cold room on a Sunday night.', action: null, reason: null, author: 'Lilanie Schallies', createdAt: new Date(Date.now() - 20 * 86_400_000).toISOString() },
   ];
 }
 
@@ -88,15 +94,15 @@ const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
 
 export function seedOffice(): DemoOfficeState {
   return {
-    stores: [
+    stores: ([
       { id: 'meerensee', client: 'FreshMart', name: 'FreshMart Meerensee', address: 'Meerensee Mall, Richards Bay', lat: -28.7743, lng: 32.0789, geofence_m: 150 },
       { id: 'empangeni', client: 'FreshMart', name: 'FreshMart Empangeni', address: 'Union St, Empangeni', lat: -28.7621, lng: 31.8932, geofence_m: 150 },
       { id: 'harbour', client: 'Harbour Deli', name: 'Harbour Deli, Alton', address: 'Hydrogen Line St, Alton North', lat: -28.7395, lng: 32.0201, geofence_m: 150 },
       { id: 'esikhawini', client: 'Boxer', name: 'Boxer Esikhawini', address: 'Esikhawini Mall', lat: -28.8706, lng: 31.9118, geofence_m: 150 },
       { id: 'arboretum', client: 'Spar', name: 'Spar Arboretum', address: 'Arboretum Centre, Richards Bay', lat: -28.7465, lng: 32.0584, geofence_m: 150 },
-    ],
+    ] as DemoStore[]).map(x => (REAL?.stores[x.id] ? { ...x, ...REAL.stores[x.id] } : x)),
     inspections: [{
-      id: 'insp-ayanda', vehicle_id: 'veh-5', registration: 'ND 771-330', driver_id: 'tech-3', driver: 'Ayanda Mthembu', previous_driver: 'Sipho Ndlovu',
+      id: 'insp-ayanda', vehicle_id: 'veh-5', registration: 'ND 771-330', driver_id: 'tech-3', driver: 'Ayanda Mthembu', previous_driver: REAL ? null : 'Sipho Ndlovu',
       inspected_at: ago(3), odometer_km: 45120, fuel_level: 'half', problems: ['bodywork'], new_problems: [], handover_by: 'remote_approval', handed_over_by_name: null,
       remote_reason: 'Picked it up at 05:40 from the yard, nobody there to sign', status: 'awaiting_approval', decided_at: null, decision_note: null,
     }],
@@ -109,6 +115,8 @@ export function seedOffice(): DemoOfficeState {
       { id: 'mech', full_name: 'Bongani Khumalo', login_level: 'mechanic', department: 'Workshop' },
       ...DEMO_TECHS.map(t => ({ id: t.id, full_name: t.full_name, login_level: 'technician', department: 'Refrigeration',
         trade: ({ me: 'foodservice', 'tech-2': 'electrician', 'tech-3': 'plumber', 'tech-4': 'assistant' } as const)[t.id as 'me'] ?? null })),
+      // Real-data demo: the rest of the staff, as technicians without a department yet.
+      ...(REAL?.others ?? []).map(o => ({ id: o.id, full_name: o.name, login_level: 'technician', department: '', trade: null })),
     ],
     changes: [],
     profiles: seedProfiles(),

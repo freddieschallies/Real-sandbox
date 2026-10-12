@@ -1444,6 +1444,27 @@ test('company logo: the CEO sets it and everyone in the company sees it; other p
   assert.equal(await pic('tech', sig.body.id), 403, 'other photos stay private');
 });
 
+test('phone menus: the CEO or an admin pins tabs per position; everyone gets their own position\'s choice', async () => {
+  assert.deepEqual((await call('stock', 'GET', '/me/phone-menu')).body, { pinned: null, canEdit: false }, 'automatic until chosen');
+  assert.equal((await call('stock', 'GET', '/phone-menus')).status, 403, 'not the stock controller');
+  assert.equal((await call('manager', 'PUT' as 'POST', '/phone-menus/stockroom', { pinned: ['issue'] })).status, 403, 'not a manager');
+  const list = (await call('admin', 'GET', '/phone-menus')).body;
+  const ceo = list.positions.find((p: { level: string }) => p.level === 'creator');
+  assert.ok(ceo.usual.includes('settings') && ceo.usual.length > 5, 'the CEO has more than five tabs');
+  assert.ok(!list.positions.some((p: { level: string }) => p.level === 'technician'), 'technicians have no tab bar');
+  const hr = list.positions.find((p: { level: string }) => p.level === 'hr');
+  assert.deepEqual(hr.usual, ['departments', 'timesheets', 'people']);
+  assert.equal((await call('admin', 'PUT' as 'POST', '/phone-menus/stockroom', { pinned: ['issue', 'nope'] })).status, 400, 'only tabs that position has');
+  assert.equal((await call('admin', 'PUT' as 'POST', '/phone-menus/stockroom', { pinned: ['issue', 'issue'] })).status, 400, 'each tab once');
+  assert.equal((await call('admin', 'PUT' as 'POST', '/phone-menus/stockroom', { pinned: ['issue', 'receive', 'room', 'order', 'people'] })).status, 400, 'four at most');
+  assert.equal((await call('admin', 'PUT' as 'POST', '/phone-menus/technician', { pinned: ['today'] })).status, 400);
+  assert.equal((await call('admin', 'PUT' as 'POST', '/phone-menus/stockroom', { pinned: ['people', 'issue'] })).status, 200);
+  assert.deepEqual((await call('stock', 'GET', '/me/phone-menu')).body, { pinned: ['people', 'issue'], canEdit: false });
+  assert.equal((await call('mech', 'GET', '/me/phone-menu')).body.pinned, null, 'other positions unchanged');
+  assert.equal((await call('director', 'PUT' as 'POST', '/phone-menus/stockroom', { pinned: null })).status, 200, 'the CEO puts it back to automatic');
+  assert.equal((await call('stock', 'GET', '/me/phone-menu')).body.pinned, null);
+});
+
 test('estimates: prices only from the price list, always marked not official', async () => {
   const J = `/jobs/${ids.job3}`;
   const item = (await call('tech', 'GET', J)).body.items[0].id;

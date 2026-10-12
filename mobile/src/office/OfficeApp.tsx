@@ -2,6 +2,9 @@
 // browser: menu, list and detail side by side. Works on a phone too, one screen at a time.
 import { BottomTabs } from '../BottomTabs.tsx';
 import { BrandLogo } from '../brand.tsx';
+import { usePhoneMenu } from '../menu.tsx';
+import { PhoneMenus } from '../menus/PhoneMenus.tsx';
+import { MENU_TABS, officeTabKeys } from '../../../server/src/core/phoneMenu.ts';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,7 +25,7 @@ import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 
 const K = { band: '#121212', bandText: '#F7F3EC', stripe: '#E8701A' };
-type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'stores';
+type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'stores' | 'settings';
 type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
@@ -38,8 +41,10 @@ const day = (s: string) => {
   return new Date(`${s}T12:00:00+02:00`).toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short' });
 };
 const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-/** On the phone the first four tabs show and the rest go under More: most used first. */
-const PHONE_ORDER: string[] = ['today', 'jobs', 'departments', 'timesheets', 'flags', 'people', 'map', 'vans', 'queries', 'quotes', 'invoices', 'accounts', 'handovers', 'stores'];
+/** On the phone, unless the CEO or an admin pinned others: the first four show and the rest go under More, most used first. */
+const PHONE_ORDER: string[] = MENU_TABS.office.map(t => t.key);
+/** Screens that use the whole width on a computer (no list and detail). */
+const FULL: Tab[] = ['today', 'accounts', 'map', 'departments', 'timesheets', 'settings'];
 const OFFICE_LEVELS = ['admin', 'management', 'hr', 'director', 'creator'];
 export const isOffice = (level?: string) => OFFICE_LEVELS.includes(level ?? '');
 
@@ -62,28 +67,33 @@ export function OfficeApp() {
   const work = s.session?.user.work ?? {};
   const does = (a: string) => s.session?.user.level === 'creator' || !!work[a];
 
-  const tabs: { key: Tab; label: string; short?: string; count?: number }[] = [
-    ...(jobsSide ? [
-      { key: 'today' as Tab, label: 'Today' },
-      { key: 'jobs' as Tab, label: 'Jobs', count: ov ? ov.jobs.carried_over + ov.jobs.urgent : undefined },
-    ] : []),
-    ...(does('jobs') ? [{ key: 'queries' as Tab, label: 'Queries', count: qs.unread }] : []),
-    ...(does('documents') ? [
-      { key: 'quotes' as Tab, label: 'Quotes', count: books.quotes.filter(q => q.status === 'draft').length || undefined },
-      { key: 'invoices' as Tab, label: 'Invoices', count: books.toInvoice.length || undefined },
-      { key: 'accounts' as Tab, label: 'Accounts', short: 'Pastel' },
-    ] : []),
-    ...(does('flags') ? [
-      { key: 'flags' as Tab, label: 'Flags', count: ov?.flags?.unresolved },
-      { key: 'handovers' as Tab, label: 'Handovers', short: 'Approve', count: ov?.handoversAwaitingApproval },
-    ] : []),
-    ...(does('flags') || s.session?.user.level === 'management' ? [{ key: 'map' as Tab, label: 'Team map', short: 'Map' }] : []),
-    ...(does('vanstock') ? [{ key: 'vans' as Tab, label: 'Van stock', short: 'Vans' }] : []),
-    ...(does('hr') ? [{ key: 'departments' as Tab, label: 'Departments' }] : []),
-    ...(does('hr') || s.session?.user.level === 'management' ? [{ key: 'timesheets' as Tab, label: 'Timesheets' }] : []),
-    ...(canPeople ? [{ key: 'people' as Tab, label: 'People' }] : []),
-    ...(jobsSide ? [{ key: 'stores' as Tab, label: 'Stores' }] : []),
+  const menu = usePhoneMenu();
+  const [menuStart, setMenuStart] = useState<string | undefined>(undefined);
+  const level = s.session?.user.level ?? '';
+  // Every tab the office has (in the order of the side menu on a computer); each person gets the ones their work allows.
+  const allTabs: { key: Tab; label: string; short?: string; count?: number }[] = [
+    { key: 'today', label: 'Today' },
+    { key: 'jobs', label: 'Jobs', count: ov ? ov.jobs.carried_over + ov.jobs.urgent : undefined },
+    { key: 'queries', label: 'Queries', count: qs.unread },
+    { key: 'quotes', label: 'Quotes', count: books.quotes.filter(q => q.status === 'draft').length || undefined },
+    { key: 'invoices', label: 'Invoices', count: books.toInvoice.length || undefined },
+    { key: 'accounts', label: 'Accounts', short: 'Pastel' },
+    { key: 'flags', label: 'Flags', count: ov?.flags?.unresolved },
+    { key: 'handovers', label: 'Handovers', short: 'Approve', count: ov?.handoversAwaitingApproval },
+    { key: 'map', label: 'Team map', short: 'Map' },
+    { key: 'vans', label: 'Van stock', short: 'Vans' },
+    { key: 'departments', label: 'Departments', short: 'Depts' },
+    { key: 'timesheets', label: 'Timesheets', short: 'Timesheet' },
+    { key: 'people', label: 'People' },
+    { key: 'stores', label: 'Stores' },
+    { key: 'settings', label: 'Settings' },
   ];
+  const mine = officeTabKeys(level, work, { people: canPeople, settings: menu.canEdit });
+  const tabs = allTabs.filter(t => mine.includes(t.key));
+  const arrange = () => { setMenuStart(level); go('settings'); };
+  // A tab this person no longer has (work switched off): open their first one instead.
+  const tabKeys = tabs.map(t => t.key).join();
+  useEffect(() => { if (tabs.length && !tabs.some(t => t.key === tab) && tab !== 'people') setTab(tabs[0].key); }, [tabKeys]);
 
   const list = (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 40 }}>
@@ -101,6 +111,7 @@ export function OfficeApp() {
       {tab === 'vans' ? <VanLists openTech={id => setSel({ kind: 'van', id })} /> : null}
       {tab === 'people' ? <PeopleList o={o} open={id => setSel({ kind: 'person', id })} /> : null}
       {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
+      {tab === 'settings' ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
       <Text style={st.small}>{o.d.loadedAt ? `Updated ${when(o.d.loadedAt)}` : o.loading ? 'Loading…' : 'Needs signal to load.'}</Text>
     </ScrollView>
@@ -148,7 +159,7 @@ export function OfficeApp() {
       <View style={{ flex: 1, backgroundColor: C.bg }}>
         {header}
         <View style={{ flex: 1, flexDirection: 'row' }}>
-          <View style={{ width: 200, borderRightWidth: 1, borderRightColor: C.line, padding: 12, gap: 6 }}>
+          <ScrollView style={{ width: 200, flexGrow: 0, borderRightWidth: 1, borderRightColor: C.line }} contentContainerStyle={{ padding: 12, gap: 6 }}>
             {tabs.map(t => (
               <Pressable key={t.key} onPress={() => go(t.key)} accessibilityRole="tab" accessibilityState={{ selected: tab === t.key }}
                 style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, minHeight: 48, borderRadius: 8, backgroundColor: tab === t.key ? C.panel2 : 'transparent', borderLeftWidth: 3, borderLeftColor: tab === t.key ? K.stripe : 'transparent' }}>
@@ -156,9 +167,9 @@ export function OfficeApp() {
                 {t.count ? <Pill text={String(t.count)} tone="warn" /> : null}
               </Pressable>
             ))}
-          </View>
-          <View style={{ width: tab === 'today' || tab === 'accounts' || tab === 'map' || tab === 'departments' || tab === 'timesheets' ? undefined : 460, flex: tab === 'today' || tab === 'accounts' || tab === 'map' || tab === 'departments' || tab === 'timesheets' ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
-          {tab !== 'today' && tab !== 'accounts' && tab !== 'map' && tab !== 'departments' && tab !== 'timesheets' ? <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}</View> : null}
+          </ScrollView>
+          <View style={{ width: FULL.includes(tab) ? undefined : 460, flex: FULL.includes(tab) ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
+          {!FULL.includes(tab) ? <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}</View> : null}
         </View>
       </View>
     );
@@ -168,7 +179,8 @@ export function OfficeApp() {
       {header}
       <View style={{ flex: 1 }}>{detail ?? list}</View>
       {!sel ? (
-        <BottomTabs tabs={[...tabs].sort((a, b) => PHONE_ORDER.indexOf(a.key) - PHONE_ORDER.indexOf(b.key))} current={tab} onSelect={k => go(k)} accent={K.stripe} bottom={ins.bottom} />
+        <BottomTabs tabs={[...tabs].sort((a, b) => PHONE_ORDER.indexOf(a.key) - PHONE_ORDER.indexOf(b.key))} current={tab} onSelect={k => go(k)} accent={K.stripe} bottom={ins.bottom}
+          pinned={menu.pinned} onArrange={menu.canEdit ? arrange : undefined} />
       ) : null}
     </View>
   );

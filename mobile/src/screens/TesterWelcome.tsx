@@ -4,6 +4,7 @@ import { Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { Body, Button, Card, Heading, Label, Notice, Screen, st } from '../ui.tsx';
 import { C } from '../theme.ts';
+import { REAL, realText as R } from '../demoReal.ts';
 
 const STEPS: [string, string[]][] = [
   ['As technician (Thabo)', [
@@ -83,22 +84,28 @@ export function TesterWelcome() {
   const [reset, setReset] = useState(false);
   const go = async (who: 'demo' | 'stock' | 'mech' | 'office' | 'admin' | 'manager' | 'hr') => { setBusy(who); await s.signIn('demo', '', who, 'demo'); setBusy(null); };
   return (
-    <Screen title="Real Sandbox" sub="Test drive · ZSP job cards and stock">
+    <Screen title="Real Sandbox" sub={`Test drive · ${REAL ? REAL.company.name : 'ZSP'} job cards and stock`}>
       <View style={{ gap: 6 }}>
-        <Text style={{ color: C.accent, fontSize: 28, fontWeight: '800' }}>Try it as any of the five</Text>
-        <Body quiet>Everything here is made up and stays in this browser. Once in, the bar at the top switches between them; what one does, the others see. (The real app only shows each person their own.)</Body>
+        <Text style={{ color: C.accent, fontSize: 28, fontWeight: '800' }}>Try it as anyone in the company</Text>
+        {REAL ? (
+          <Notice tone="info" title={`${REAL.company.name}'s real staff and customers`} lines={[
+            'The people, customers and company details are real, from Servcraft. The jobs, stock, vehicles and prices are examples.',
+            'Every warning, flag and hour not accounted for is on the Example Tech, a made-up technician, so nothing here is about a real person.',
+            'It all stays in this browser. Once in, the bar at the top switches between people; what one does, the others see.',
+          ]} />
+        ) : <Body quiet>Everything here is made up and stays in this browser. Once in, the bar at the top switches between them; what one does, the others see. (The real app only shows each person their own.)</Body>}
       </View>
-      <Button label="Open as technician" onPress={() => go('demo')} busy={busy === 'demo'} />
-      <Button label="Open as stock controller" kind="secondary" onPress={() => go('stock')} busy={busy === 'stock'} />
-      <Button label="Open as mechanic" kind="secondary" onPress={() => go('mech')} busy={busy === 'mech'} />
-      <Button label="Open as department manager (Pieter)" kind="secondary" onPress={() => go('manager')} busy={busy === 'manager'} />
-      <Button label="Open as HR (Precious)" kind="secondary" onPress={() => go('hr')} busy={busy === 'hr'} />
-      <Button label="Open as office admin (Zanele)" kind="secondary" onPress={() => go('admin')} busy={busy === 'admin'} />
-      <Button label="Open as CEO (Lilanie)" kind="secondary" onPress={() => go('office')} busy={busy === 'office'} />
+      <Button label={R('Open as technician (Thabo)')} onPress={() => go('demo')} busy={busy === 'demo'} />
+      <Button label={R('Open as stock controller (Lindiwe)')} kind="secondary" onPress={() => go('stock')} busy={busy === 'stock'} />
+      <Button label={R('Open as mechanic (Bongani)')} kind="secondary" onPress={() => go('mech')} busy={busy === 'mech'} />
+      <Button label={R('Open as department manager (Pieter)')} kind="secondary" onPress={() => go('manager')} busy={busy === 'manager'} />
+      <Button label={R('Open as HR (Precious)')} kind="secondary" onPress={() => go('hr')} busy={busy === 'hr'} />
+      <Button label={R('Open as office admin (Zanele)')} kind="secondary" onPress={() => go('admin')} busy={busy === 'admin'} />
+      <Button label={R('Open as CEO (Lilanie)')} kind="secondary" onPress={() => go('office')} busy={busy === 'office'} />
       {STEPS.map(([title, lines]) => (
         <Card key={title}>
-          <Heading>{title}</Heading>
-          {lines.map((l, i) => <Text key={i} style={[st.body, { color: C.text }]}>{i + 1}. {l}</Text>)}
+          <Heading>{R(title)}</Heading>
+          {lines.map((l, i) => <Text key={i} style={[st.body, { color: C.text }]}>{i + 1}. {R(l)}</Text>)}
         </Card>
       ))}
       <Card>

@@ -2,6 +2,7 @@
 // same rules as the server (core/documents.ts and core/pastel.ts).
 import * as D from '../../server/src/core/documents.ts';
 import * as P from '../../server/src/core/pastel.ts';
+import { REAL } from './demoReal.ts';
 
 type Line = D.DocLine & { id: string };
 export interface DemoQuote {
@@ -61,13 +62,14 @@ export function seedDocs(): DemoDocsState {
     ],
     nextQuote: 5003, nextInvoice: 7002,
     profile: {
-      legal_name: 'Zululand Service Providers', trading_name: 'ZSP', reg_no: null, vat_no: null, address: 'Alton, Richards Bay, KwaZulu-Natal',
-      phone: null, email: null, bank_details: null, quote_terms: 'Quote valid for 30 days. Prices exclude VAT unless shown.', invoice_terms: 'Payment within 30 days of invoice.',
+      legal_name: REAL?.company.legal_name ?? 'Zululand Service Providers', trading_name: REAL?.company.name ?? 'ZSP', reg_no: REAL?.company.reg_no ?? null, vat_no: REAL?.company.vat_no ?? null,
+      address: REAL?.company.address ?? 'Alton, Richards Bay, KwaZulu-Natal', phone: REAL?.company.phone ?? null, email: REAL?.company.email ?? null, bank_details: null, quote_terms: 'Quote valid for 30 days. Prices exclude VAT unless shown.', invoice_terms: 'Payment within 30 days of invoice.',
       vat_pct: 15, quote_valid_days: 30, invoice_due_days: 30,
     },
     rates: { labour_per_hour: 65000, call_out: 45000, travel_per_km: 900, bought_out_markup_pct: 20 },
     pastel: { yearStartMonth: 3, taxType: '01', codes: {}, store: null },
-    clientCodes: { FreshMart: null, 'Harbour Deli': null, Boxer: null, Spar: null },
+    // Real-data demo: the customers' account codes from Servcraft.
+    clientCodes: REAL ? Object.fromEntries(REAL.clients.map(c => [c.name, c.code])) : { FreshMart: null, 'Harbour Deli': null, Boxer: null, Spar: null },
     batches: [],
   };
 }
@@ -266,7 +268,8 @@ export class DemoDocs {
     return good({ settings: this.d.pastel });
   }
   clients() {
-    const names = [...new Set(this.src.stores.map(s => s.client))].sort();
+    // Real-data demo: every real customer, with or without stores in the demo.
+    const names = [...new Set([...this.src.stores.map(s => s.client), ...(REAL?.clients.map(c => c.name) ?? [])])].sort((a, b) => a.localeCompare(b));
     return names.map(n => ({ id: n, name: n, pastel_code: this.d.clientCodes[n] ?? null, stores: this.src.stores.filter(s => s.client === n).length }));
   }
   setClientCode(id: string, code: string | null): Res {

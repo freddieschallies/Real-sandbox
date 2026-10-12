@@ -74,6 +74,7 @@ export const CATALOGUE = {
   manage_access:              { group: 'System', label: 'Decide who has access to what', scoped: false },
   manage_users:               { group: 'System', label: 'Create and disable logins', scoped: false },
   manage_system_settings:     { group: 'System', label: 'System settings (thresholds, tracker)', scoped: false },
+  set_phone_menu:             { group: 'System', label: 'Choose the phone menus (which tabs are pinned at the bottom)', scoped: false },
   view_audit_log:             { group: 'System', label: 'See the audit log', scoped: false },
 } as const;
 
@@ -89,13 +90,15 @@ const ALL: DeptScope = { kind: 'all' };
 const technician: Permissions = { view_own_work: true, create_estimate: true };
 // The mechanic is a position of his own: the fleet only, no jobs.
 const mechanic: Permissions = { view_fleet: true, manage_fleet: true };
-const admin: Permissions = {
+const officeWork: Permissions = {
   ...technician,
   assign_jobs: true, view_all_job_cards: true, manage_stores_equipment: true,
   view_live_map_positions: true, view_all_fuel: true,
   view_quotes_invoices_stock: true, prepare_quotes_invoices: true,
 };
-const stockroom: Permissions = { ...admin, manage_stockroom: true, assign_stock: true, run_stocktake: true };
+// The admin also arranges the phone menus (with the CEO).
+const admin: Permissions = { ...officeWork, set_phone_menu: true };
+const stockroom: Permissions = { ...officeWork, manage_stockroom: true, assign_stock: true, run_stocktake: true };
 // A department manager runs his technicians: monitors them, assigns jobs, checks job cards and sets
 // his department's van stock list. Quotes, invoices and the stockroom are not part of it unless the
 // CEO switches them on. Staff records are for the CEO and HR, not managers by default.
@@ -111,7 +114,7 @@ const director: Permissions = {
   ...stockroom, ...management, ...hr, set_van_stock: ALL,
   view_live_driving_markers: ALL, view_flags: ALL, resolve_flags: ALL, view_employee_log: ALL, write_employee_log: ALL,
   edit_technician_settings: ALL, mark_technician_left: ALL, view_former_technicians: ALL,
-  set_prices: true, view_director_digest: true, view_company_reports: true, manage_access: true, manage_fleet: true,
+  set_prices: true, view_director_digest: true, view_company_reports: true, manage_access: true, manage_fleet: true, set_phone_menu: true,
 };
 const creator: Permissions = { ...director, manage_users: true, manage_system_settings: true, view_audit_log: true };
 

@@ -6,6 +6,9 @@ import { DemoDocs, seedDocs, type DemoDocsState } from './demoDocs.ts';
 import { DemoVan, seedVan, type DemoVanState } from './demoVan.ts';
 import { DemoTimes, type DemoTimesState } from './demoTimes.ts';
 import { DEMO_LOGO } from './demoLogo.ts';
+import { EXAMPLE_TECH, REAL, realDeep } from './demoReal.ts';
+import { APP_OF, MAX_PINNED, MENU_LABEL, MENU_LEVELS, MENU_TABS, cleanPinned, usualTabs } from '../../server/src/core/phoneMenu.ts';
+import type { LoginLevel } from '../../server/src/core/permissions.ts';
 import { DemoOffice, seedOffice, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
@@ -35,6 +38,8 @@ export interface DemoState {
   times?: DemoTimesState;
   /** A logo the CEO uploaded in the demo, instead of the ZSP one. */
   logoPhotoId?: string;
+  /** Tabs pinned to the bottom of the phone, per position (Settings → Phone menus). */
+  phoneMenus?: Record<string, string[]>;
   fleet?: DemoFleetState;
   who?: { id: string; name: string; level: string };
   fuel: { litres: number; at: string }[];
@@ -58,7 +63,7 @@ let seq = 0;
 const id = (p: string) => `${p}-${Date.now().toString(36)}-${(seq++).toString(36)}`;
 
 function job(n: number, type: J.JobType, priority: string, storeKey: keyof typeof STORES, fault: string, equipment: CardView['equipment'], extra: Partial<DemoJob['meta']> = {}): DemoJob {
-  const s = STORES[storeKey];
+  const s = { ...STORES[storeKey], ...(REAL?.stores[storeKey] ?? {}) };
   return {
     meta: {
       id: `job-${n}`, job_number: n, job_type: type, priority, fault_reported: fault, scheduled_date: today(),
@@ -125,7 +130,7 @@ export function seedDemo(): DemoState {
     flags: [{
       id: 'flag-1', flag_type: 'slow_to_site', severity: 'normal', raised_at: `${y}T14:12:00+02:00`, status: 'open',
       question: 'Your trip to Harbour Deli took 64 minutes; it normally takes 22. What happened?', explanation: null,
-      details: { overBy: 42, stoppedMinutes: 31 },
+      details: { overBy: 42, stoppedMinutes: 31 }, ...(REAL ? { tech: EXAMPLE_TECH } : {}),
     }],
     vehicle: null,
     photos: 0,
@@ -186,15 +191,16 @@ export class DemoTransport implements Transport {
         this.state.jobs.push(officeJob(10236, 'installation', 'scheduled', st('arboretum'), 'Install new 3-door display fridge and connect to the existing circuit', { id: 'tech-3', name: 'Ayanda Mthembu' }, tomorrow));
       }
       const y = new Date(Date.now() - 20 * 3600_000).toISOString();
+      // In the real-data demo the example incidents are the Example Tech's only (nothing about the real staff).
       this.state.flags.push(
-        { id: 'flag-sipho', flag_type: 'stock_return_short', severity: 'normal', raised_at: y, status: 'explained', tech: 'tech-2',
-          question: 'You sent back 1 of 2 contactors booked out for job 10220. Where is the other one?', explanation: 'Fitted the second one on the same unit, forgot to put it on the job card.', details: {} },
-        { id: 'flag-oil', flag_type: 'workshop_stock_short', severity: 'normal', raised_at: y, status: 'open', tech: 'mech',
-          question: 'Workshop Engine oil 15W-40 counted 2 L short (allowance 0.25 L). What happened?', explanation: null, details: {} },
+        { id: 'flag-sipho', flag_type: 'stock_return_short', severity: 'normal', raised_at: y, status: 'explained', tech: REAL ? EXAMPLE_TECH : 'tech-2',
+          question: `You sent back 1 of 2 contactors booked out for job ${REAL ? 10236 : 10220}. Where is the other one?`, explanation: 'Fitted the second one on the same unit, forgot to put it on the job card.', details: {} },
+        ...(REAL ? [] : [{ id: 'flag-oil', flag_type: 'workshop_stock_short', severity: 'normal', raised_at: y, status: 'open', tech: 'mech',
+          question: 'Workshop Engine oil 15W-40 counted 2 L short (allowance 0.25 L). What happened?', explanation: null, details: {} }]),
       );
     }
     const myHandover: DemoInspection | null = this.state.vehicle?.handover_status === 'awaiting_approval' ? {
-      id: 'insp-me', vehicle_id: this.state.vehicle.id, registration: this.state.vehicle.registration, driver_id: 'me', driver: 'Thabo Mkhize', previous_driver: 'Sipho Ndlovu',
+      id: 'insp-me', vehicle_id: this.state.vehicle.id, registration: this.state.vehicle.registration, driver_id: 'me', driver: 'Thabo Mkhize', previous_driver: REAL ? 'Ayanda Mthembu' : 'Sipho Ndlovu',
       inspected_at: new Date().toISOString(), odometer_km: this.van().odometerKm, fuel_level: 'half', problems: this.van().problems, new_problems: [],
       handover_by: 'remote_approval', handed_over_by_name: null, remote_reason: 'Nobody at the yard to sign', status: 'awaiting_approval', decided_at: null, decision_note: null,
     } : null;
@@ -292,6 +298,33 @@ export class DemoTransport implements Transport {
   }
 
   /** The office's routes; only office positions get here. */
+
+  /** Settings → Phone menus: which tabs each position has pinned to the bottom of the phone. */
+  private menuRoute(p: string, req: Request, b: any): Response | null {
+    if (p !== '/me/phone-menu' && !p.startsWith('/phone-menus')) return null;
+    const level = this.office().levelOf(this.who.id) ?? this.who.level;
+    const canEdit = ['admin', 'director', 'creator'].includes(level);
+    const menus = this.state.phoneMenus ?? {};
+    if (p === '/me/phone-menu') return ok({ pinned: menus[level] ?? null, canEdit });
+    if (!canEdit) return refuse(403, 'only the CEO or an admin arranges the phone menus');
+    if (p === '/phone-menus' && req.method === 'GET') {
+      return ok({ maxPinned: MAX_PINNED, positions: MENU_LEVELS.map(l => ({ level: l, label: MENU_LABEL[l], app: APP_OF[l], tabs: MENU_TABS[APP_OF[l]!], usual: usualTabs(l), pinned: menus[l] ?? null, updatedAt: null })) });
+    }
+    const m = p.match(/^\/phone-menus\/([^/]+)$/);
+    if (m && req.method === 'PUT') {
+      const app = APP_OF[m[1] as LoginLevel];
+      if (!app) return refuse(400, 'that position has no tab bar');
+      const want: string[] | null = Array.isArray(b?.pinned) ? b.pinned : null;
+      const pinned = want ? cleanPinned(app, want) : null;
+      if (want && (pinned!.length !== want.length || !pinned!.length)) return refuse(400, 'each tab once, up to four, and only tabs that position can have');
+      const next = { ...menus };
+      if (pinned) next[m[1]] = pinned; else delete next[m[1]];
+      this.state.phoneMenus = next;
+      this.persist(this.state);
+      return ok({ level: m[1], pinned });
+    }
+    return null;
+  }
   private officeRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
     const office = ['admin', 'management', 'hr', 'director', 'creator'].includes(this.who.level);
@@ -647,7 +680,8 @@ export class DemoTransport implements Transport {
     if (this.noSignal) throw new Offline('demo: no signal');
     await new Promise(r => setTimeout(r, 25));
     // A slip in the demo must never leave a screen blank: answer with the error instead.
-    try { return await this.handle(req); } catch (e) {
+    // In the real-data demo, the company's real people and stores stand in for the made-up ones.
+    try { return realDeep(await this.handle(req)); } catch (e) {
       console.error('demo error', req.method, req.path, e);
       return { status: 500, body: { error: 'demo error', reasons: [`the test drive hit a problem (${(e as Error)?.message ?? e}); Reset the demo on the welcome screen if it keeps happening`] } };
     }
@@ -686,6 +720,8 @@ export class DemoTransport implements Transport {
     if (vr) return vr;
     const tr = this.timesRoute(p, req, b);
     if (tr) return tr;
+    const mr = this.menuRoute(p, req, b);
+    if (mr) return mr;
     if (p === '/company/brand') return ok({ name: 'ZSP (demo)', logoPhotoId: this.state.logoPhotoId ?? null, logoDataUri: this.state.logoPhotoId ? null : DEMO_LOGO });
     const off = this.officeRoute(p, req, b);
     if (off) return off;
@@ -781,9 +817,9 @@ export class DemoTransport implements Transport {
       const mode = new URLSearchParams(req.path.split('?')[1] ?? '').get('mode') ?? 'driving';
       return ok({
         vehicle: { id: 'veh-1', registration: 'ND 412-778' },
-        lastDriver: van.lastDriverMe ? { id: 'me', name: 'Thabo Mkhize' } : { id: 'tech-2', name: 'Sipho Ndlovu' },
+        lastDriver: van.lastDriverMe ? { id: 'me', name: 'Thabo Mkhize' } : REAL ? { id: EXAMPLE_TECH, name: 'Ayanda Mthembu' } : { id: 'tech-2', name: 'Sipho Ndlovu' },
         lastInspection: { odometerKm: van.odometerKm, problems: van.problems, at: new Date(Date.now() - 86_400_000).toISOString(), by: 'Sipho Ndlovu' },
-        needsInspection: H.needsInspection(mode as 'driving', van.lastDriverMe ? 'me' : 'tech-2', 'me', true),
+        needsInspection: H.needsInspection(mode as 'driving', van.lastDriverMe ? 'me' : REAL ? EXAMPLE_TECH : 'tech-2', 'me', true),
       });
     }
     if (p === '/vehicles/scan') {

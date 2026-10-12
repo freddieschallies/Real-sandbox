@@ -1,5 +1,6 @@
 // Demo departments and van stock: each department's manager, the technicians under him, the van
 // stock list he sets, and each technician's van against it (a van short of it is flagged).
+import { REAL, mayHaveIncidents } from './demoReal.ts';
 import type { Flag } from './types.ts';
 import type { DemoOfficeState } from './demoOffice.ts';
 import type { DemoStockState } from './demoStock.ts';
@@ -14,12 +15,13 @@ export interface DemoVanState {
 }
 
 export function seedVan(): DemoVanState {
+  // Real-data demo: the Example Tech is in Refrigeration too, so his van (not a real person's) carries the van-short flag.
   return {
     departments: [
       { id: 'dep-ref', name: 'Refrigeration', managerId: 'mgr-1' },
       { id: 'dep-plumb', name: 'Plumbing', managerId: null },
     ],
-    memberOf: { me: 'dep-ref', 'tech-2': 'dep-ref', 'tech-4': 'dep-ref', 'tech-3': 'dep-plumb', 'mgr-1': 'dep-ref' },
+    memberOf: { me: 'dep-ref', 'tech-2': 'dep-ref', 'tech-4': 'dep-ref', 'tech-3': REAL ? 'dep-ref' : 'dep-plumb', 'mgr-1': 'dep-ref' },
     lists: { 'dep-ref': { 'st-1': 2, 'st-2': 2, 'st-3': 4, 'st-4': 8, 'st-5': 1, 'st-6': 2 } },
     changes: [],
   };
@@ -76,6 +78,8 @@ export class DemoVan {
     const text = short.map(s => `${s.description} ${s.have} of ${s.need}`).join(', ');
     const question = `Your van is short of the ${r.department} van stock list: ${text}. The stockroom tops it up.`;
     if (short.length) {
+      // Real-data demo: flags only on the Example Tech; a real person's van just shows what it is short of.
+      if (!mayHaveIncidents(userId)) return r;
       if (open) Object.assign(open, { details: { short }, question });
       else this.flags.unshift({ id: `flag-van-${userId}-${Date.now()}`, flag_type: 'van_stock_short', severity: 'normal', raised_at: new Date().toISOString(), status: 'open', question, explanation: null, details: { short }, tech: userId });
     } else if (open) Object.assign(open, { status: 'resolved', resolution_note: r.hasList ? `Van stock complete again (${by})` : 'No van stock list for his department any more' });
@@ -83,6 +87,7 @@ export class DemoVan {
   }
   checkAll(by: string) { for (const p of this.o.people.filter(x => x.login_level === 'technician')) this.check(p.id, by); }
   shortCount(userId: string) {
+    if (REAL) return this.report(userId).shortLines;
     const f = this.flags.find(x => x.flag_type === 'van_stock_short' && x.tech === userId && x.status !== 'resolved');
     return f ? ((f.details.short as unknown[]) ?? []).length : 0;
   }

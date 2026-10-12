@@ -4,6 +4,7 @@
 import * as T from '../../server/src/core/timesheet.ts';
 import type { Flag } from './types.ts';
 import type { DemoOfficeState } from './demoOffice.ts';
+import { mayHaveIncidents } from './demoReal.ts';
 
 export interface DemoTimesState { submitted: Record<string, { at: string; note: string | null; day: T.Day }>; seeded?: boolean; rules?: T.PayRules }
 export interface RealVisit { jobId: string; jobNumber: number; store: string; fault: string; techIds: string[]; visits: { goAt?: string; arrivedAt?: string; startedAt?: string; endedAt?: string; state: string; pauses: { reason: string; at: string; resumedAt?: string }[] }[] }
@@ -66,7 +67,11 @@ export class DemoTimes {
     const stores = this.o.stores;
     const reg = { me: 'ND 412-778', 'tech-2': 'ND 503-221', 'tech-3': 'ND 771-330', 'tech-4': 'ND 503-221' }[techId] ?? 'ND 412-778';
     const scan = 7 * 60 + Math.round(r() * 40);
-    let cursor = scan + (r() < 0.2 ? 45 + Math.round(r() * 35) : 10 + Math.round(r() * 15));
+    // Long gaps (time not accounted for) only for someone who may carry example incidents: in the
+    // real-data demo that is the Example Tech alone.
+    const gaps = mayHaveIncidents(techId);
+    const first = r() < 0.2 && gaps ? 45 + Math.round(r() * 35) : 10 + Math.round(r() * 15);
+    let cursor = scan + (gaps ? first : 5 + Math.round(first % 8));
     const endBy = dow === 6 ? 12 * 60 : 16 * 60 + 30;
     const visits: T.VisitIn[] = [];
     let hadBreak = false;
@@ -82,7 +87,8 @@ export class DemoTimes {
       visits.push({ jobId: `demo-${techId}-${date}-${i}`, jobNumber: 9800 + Math.floor(r() * 190), store: st.name, fault: FAULTS[Math.floor(r() * FAULTS.length)],
         goAt: at(date, go), arrivedAt: at(date, arrived), startedAt: at(date, arrived + 5), endedAt: at(date, ended), pauses,
         state: cont ? 'continue_later' : 'done', progressNote: cont ? 'Part ordered, back tomorrow' : null });
-      cursor = ended + (r() < 0.1 ? 40 + Math.round(r() * 30) : Math.round(r() * 12));
+      const gap = r() < 0.1 && gaps ? 40 + Math.round(r() * 30) : Math.round(r() * 12);
+      cursor = ended + (gaps ? gap : Math.round(gap / 3));
     }
     return T.buildDay(visits, [{ at: at(date, scan), registration: reg, mode: techId === 'tech-4' ? 'riding_along' : 'driving' }], at(date, 23 * 60));
   }
@@ -128,7 +134,7 @@ export class DemoTimes {
       if (!T.isWeekday(date) && !day.activity) continue;
       due.push({ ...this.sheet(techId, date), overdue: date < addDays(today, -1) || Number(new Date().toLocaleString('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', hour12: false })) >= 10 });
     }
-    for (const d of due.filter(x => x.overdue)) {
+    for (const d of due.filter(x => x.overdue && mayHaveIncidents(techId))) {
       if (!this.flags.some(f => f.flag_type === 'timesheet_missing' && (f.tech ?? 'me') === techId && f.details?.workDate === d.date)) {
         this.flags.push({ id: `flag-ts-${techId}-${d.date}`, flag_type: 'timesheet_missing', severity: 'normal', raised_at: new Date().toISOString(), status: 'open',
           question: `Your timesheet for ${d.label} was not submitted. Check it and submit it now.`, explanation: null, details: { workDate: d.date }, ...(techId === 'me' ? {} : { tech: techId }) });

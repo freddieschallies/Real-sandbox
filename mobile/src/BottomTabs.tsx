@@ -1,18 +1,21 @@
-// The tab bar at the bottom of the phone screens. Up to five tabs show as they are; with more, the
-// first four show and the rest go in a "More" menu, so the labels stay readable.
+// The tab bar at the bottom of the phone screens. Up to five tabs show as they are; with more, four
+// show and the rest go in a "More" menu, so the labels stay readable. The CEO or an admin chooses,
+// per position, which tabs are pinned to the bar (Settings → Phone menus).
 import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { C } from './theme.ts';
+import { arrangeTabs } from '../../server/src/core/phoneMenu.ts';
 
 export interface TabDef<T extends string> { key: T; label: string; short?: string; count?: number }
 
-export function BottomTabs<T extends string>({ tabs, current, onSelect, accent, bottom }: {
+export function BottomTabs<T extends string>({ tabs, current, onSelect, accent, bottom, pinned, onArrange }: {
   tabs: TabDef<T>[]; current: T; onSelect: (k: T) => void; accent: string; bottom: number;
+  /** The tabs pinned to the bar for this position; null = automatic. */ pinned?: string[] | null;
+  /** For whoever arranges the menus: a shortcut at the bottom of More. */ onArrange?: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const many = tabs.length > 5;
-  const shown = many ? tabs.slice(0, 4) : tabs;
-  const rest = many ? tabs.slice(4) : [];
+  const { bar: shown, more: rest } = arrangeTabs(tabs, pinned);
+  const many = rest.length > 0;
   const inRest = rest.find(t => t.key === current);
   const restCount = rest.reduce((n, t) => n + (t.count ?? 0), 0);
   const pick = (k: T) => { setOpen(false); onSelect(k); };
@@ -30,6 +33,12 @@ export function BottomTabs<T extends string>({ tabs, current, onSelect, accent, 
                 {t.count ? <Text style={{ color: C.warn, fontWeight: '800', fontSize: 15 }}>{t.count}</Text> : null}
               </Pressable>
             ))}
+            {onArrange ? (
+              <Pressable onPress={() => { setOpen(false); onArrange(); }} accessibilityRole="button" accessibilityLabel="Choose what is pinned to the bottom"
+                style={{ paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1, borderTopColor: C.line, marginTop: 4 }}>
+                <Text style={{ color: C.quiet, fontSize: 14, fontWeight: '700' }}>Choose what's pinned…</Text>
+              </Pressable>
+            ) : null}
           </View>
         </>
       ) : null}
