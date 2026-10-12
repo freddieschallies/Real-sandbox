@@ -41,6 +41,10 @@ export interface Store {
   /** Anything else (vehicle scan, fuel, flag answers): queued for the server. */
   queue(label: string, req: Omit<Request, 'idemKey'>, jobId?: string): void;
   newId(): string;
+  /** A one-off question to the server that is only useful with signal. Null when offline. */
+  ask(req: Omit<Request, 'idemKey'>): Promise<{ status: number; body: any } | null>;
+  /** Updates the day on the phone straight away (e.g. the vehicle he just scanned into). */
+  patchToday(fn: (t: Today) => Today): void;
   /** Keeps the van stock on the phone honest after materials are used offline. */
   adjustStock(stockItemId: string, delta: number): void;
   syncNow(): Promise<void>;
@@ -233,6 +237,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return { ok: true };
   }, [queue, setCacheAndSave]);
 
+  const ask = useCallback(async (req: Omit<Request, 'idemKey'>) => {
+    try { return await call(req); } catch (e) { if (e instanceof Offline) return null; throw e; }
+  }, [call]);
+
+  const patchToday = useCallback((fn: (t: Today) => Today) => {
+    setCacheAndSave(c => ({ ...c, today: c.today ? fn(c.today) : c.today }));
+  }, [setCacheAndSave]);
+
   const adjustStock = useCallback((stockItemId: string, delta: number) => {
     setCacheAndSave(c => ({ ...c, stock: c.stock.map(l => (l.id === stockItemId ? { ...l, qty: l.qty + delta } : l)) }));
   }, [setCacheAndSave]);
@@ -257,7 +269,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     online: session?.mode === 'demo' ? !demoNoSignal : net.isConnected !== false,
     syncing, demoNoSignal,
     signIn, signOut, policy, acknowledge, refresh, loadCard, jobAction, queue,
-    newId: randomUUID, adjustStock, syncNow, discardBlocked, setDemoNoSignal,
+    newId: randomUUID, ask, patchToday, adjustStock, syncNow, discardBlocked, setDemoNoSignal,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

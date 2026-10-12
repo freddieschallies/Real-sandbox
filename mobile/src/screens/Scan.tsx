@@ -1,16 +1,19 @@
 // Scan the barcode in the vehicle: tells the office (and the tracker) who is in which vehicle.
+// Taking over a vehicle as its driver means a handover inspection first (see Handover.tsx).
 import React, { useState } from 'react';
 import { Platform, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useStore } from '../state.tsx';
 import { useNav } from '../nav.tsx';
 import { nowIso } from '../device.ts';
-import { Body, Button, Choice, Field, Label, Notice, Screen, st } from '../ui.tsx';
+import { Body, Button, Card, Choice, Field, Label, Notice, Screen, st } from '../ui.tsx';
 import { SyncPill } from './SyncPill.tsx';
+import { Handover, type Lookup } from './Handover.tsx';
 import { C } from '../theme.ts';
 
 const REASONS = ['usual', 'breakdown', 'service', 'swapped_with_colleague', 'other'] as const;
 type Reason = typeof REASONS[number];
+type Mode = 'driving' | 'riding_along';
 
 export function Scan() {
   const s = useStore();
@@ -18,20 +21,50 @@ export function Scan() {
   const [perm, ask] = useCameraPermissions();
   const [code, setCode] = useState('');
   const [typed, setTyped] = useState(Platform.OS === 'web');
-  const [mode, setMode] = useState<'driving' | 'riding_along'>('driving');
+  const [mode, setMode] = useState<Mode>('driving');
   const [reason, setReason] = useState<Reason>('usual');
   const [note, setNote] = useState('');
   const [reasons, setReasons] = useState<string[] | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [handover, setHandover] = useState<Lookup | null>(null);
   const v = s.cache.today?.vehicle;
 
-  const confirm = () => {
+  const details = () => {
     const missing: string[] = [];
     if (code.trim().length < 3) missing.push('vehicle barcode');
     if (reason === 'other' && note.trim().length < 5) missing.push('a short note for "other"');
-    if (missing.length) { setReasons(missing); return; }
-    s.queue(`Scanned into vehicle ${code.trim()}`, { method: 'POST', path: '/vehicles/scan', json: { barcode: code.trim(), mode, at: nowIso(), reason, reasonNote: note.trim() || undefined } });
+    return missing;
+  };
+
+  const send = (inspection?: object, label?: string, registration?: string) => {
+    s.queue(label ?? `Scanned into vehicle ${code.trim()}`, {
+      method: 'POST', path: '/vehicles/scan',
+      json: { barcode: code.trim(), mode, at: nowIso(), reason, reasonNote: note.trim() || undefined, inspection },
+    });
+    if (registration) {
+      s.patchToday(t => ({ ...t, vehicle: { id: t.vehicle?.id ?? '', registration, mode, dropped_off_at: null, handover_status: inspection ? (inspection as { handoverBy: string }).handoverBy === 'remote_approval' ? 'awaiting_approval' : 'signed' : t.vehicle?.handover_status ?? null } }));
+    }
     nav.back();
   };
+
+  const next = async () => {
+    const missing = details();
+    if (missing.length) { setReasons(missing); return; }
+    setReasons(null);
+    setChecking(true);
+    const r = await s.ask({ method: 'GET', path: `/vehicles/lookup?barcode=${encodeURIComponent(code.trim())}&mode=${mode}` });
+    setChecking(false);
+    if (r && r.status !== 200) { setReasons(r.body?.reasons ?? ['unknown vehicle barcode']); return; }
+    // No signal: assume a handover is needed when driving; the office checks it when it arrives.
+    const look: Lookup = r ? r.body : { vehicle: { id: '', registration: code.trim() }, lastDriver: null, lastInspection: null, needsInspection: mode === 'driving', offline: true };
+    if (look.needsInspection) setHandover(look);
+    else send(undefined, `Scanned into ${look.vehicle.registration}`, look.vehicle.registration);
+  };
+
+  if (handover) {
+    return <Handover look={handover} onBack={() => setHandover(null)}
+      onDone={inspection => send(inspection, `Took over ${handover.vehicle.registration} (handover inspection)`, handover.vehicle.registration)} />;
+  }
 
   return (
     <Screen title="Vehicle" onBack={nav.back} right={<SyncPill />}>
@@ -61,8 +94,12 @@ export function Scan() {
           <Label>Why this vehicle?</Label>
           <Choice options={REASONS} value={reason} onChange={setReason} labels={{ usual: 'My usual vehicle', swapped_with_colleague: 'Swapped with colleague' }} />
           {reason !== 'usual' ? <Field label="Note" value={note} onChangeText={setNote} multiline /> : null}
-          <Text style={st.small}>If this is not your usual vehicle, your manager is told. The tracker is updated with the driver.</Text>
-          <Button label="Confirm" onPress={confirm} />
+          {mode === 'driving' ? (
+            <Card style={{ backgroundColor: C.panel2 }}>
+              <Text style={st.small}>Taking over a vehicle someone else drove means a handover inspection: photos, checks and signatures. You then carry full responsibility for it.</Text>
+            </Card>
+          ) : null}
+          <Button label={mode === 'driving' ? 'Next' : 'Confirm'} onPress={next} busy={checking} />
           <Button label="Scan again" kind="quiet" onPress={() => { setCode(''); setTyped(Platform.OS === 'web'); }} />
         </>
       ) : null}

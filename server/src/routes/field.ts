@@ -4,8 +4,9 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { Db, Q } from '../db.ts';
 import { audit, raiseFlag, tx } from '../db.ts';
-import { can } from '../core/permissions.ts';
+import { can, departmentsFor } from '../core/permissions.ts';
 import { fuelProblems } from '../core/rules.ts';
+import * as H from '../core/handover.ts';
 import { Iso, Point, Refused, Uuid, parse } from '../http.ts';
 import { openFile, readUpload, removeFile, saveFile } from '../uploads.ts';
 
@@ -28,13 +29,108 @@ async function nameOf(c: Q, userId: string): Promise<string> {
   return (await c.query('SELECT full_name FROM users WHERE id = $1', [userId])).rows[0]?.full_name ?? 'unknown';
 }
 
+const Inspection = z.object({
+  id: Uuid.optional(),
+  odometerKm: z.number().int().min(0).max(5_000_000),
+  fuelLevel: z.enum(H.FUEL_LEVELS),
+  checks: z.record(z.string(), z.object({ ok: z.boolean(), note: z.string().max(1000).optional() })),
+  sidePhotos: z.record(z.string(), Uuid),
+  damagePhotos: z.array(Uuid).max(30).default([]),
+  driverSignatureId: Uuid,
+  handoverBy: z.enum(['previous_driver', 'supervisor', 'remote_approval']),
+  handedOverByName: z.string().max(200).optional(),
+  handoverSignatureId: Uuid.optional(),
+  remoteReason: z.string().max(1000).optional(),
+}).strict();
+type InspectionIn = z.infer<typeof Inspection>;
+
+interface HandoverCtx {
+  lastDriver: { id: string; name: string } | null;
+  prev: H.PreviousInspection | null;
+  prevAt: string | null;
+  prevBy: string | null;
+}
+
+/** Who drove this vehicle last and what the last handover recorded. */
+async function handoverContext(c: Q, vehicleId: string): Promise<HandoverCtx> {
+  const last = (await c.query(
+    `SELECT s.user_id, u.full_name FROM vehicle_scans s JOIN users u ON u.id = s.user_id
+      WHERE s.vehicle_id = $1 AND s.mode = 'driving' ORDER BY s.scanned_at DESC LIMIT 1`, [vehicleId])).rows[0];
+  const prev = (await c.query(
+    `SELECT i.odometer_km, i.problems, i.inspected_at, u.full_name FROM vehicle_inspections i JOIN users u ON u.id = i.driver_id
+      WHERE i.vehicle_id = $1 AND i.status <> 'rejected' ORDER BY i.inspected_at DESC LIMIT 1`, [vehicleId])).rows[0];
+  return {
+    lastDriver: last ? { id: last.user_id, name: last.full_name } : null,
+    prev: prev ? { odometerKm: prev.odometer_km, problems: prev.problems } : null,
+    prevAt: prev?.inspected_at ?? null,
+    prevBy: prev?.full_name ?? null,
+  };
+}
+
+async function saveInspection(c: Q, me: string, v: { id: string; registration: string }, i: InspectionIn, h: HandoverCtx, at: string): Promise<string> {
+  const insp: H.Inspection = {
+    odometerKm: i.odometerKm, fuelLevel: i.fuelLevel, checks: i.checks, sidePhotos: i.sidePhotos, damagePhotos: i.damagePhotos,
+    driverSignatureId: i.driverSignatureId, handoverBy: i.handoverBy, handedOverByName: i.handedOverByName,
+    handoverSignatureId: i.handoverSignatureId, remoteReason: i.remoteReason,
+  };
+  const missing = H.missingOnInspection(insp, h.prev);
+  if (missing.length) throw new Refused(409, missing);
+  if (i.handoverBy === 'previous_driver' && !h.lastDriver) throw new Refused(409, ['nobody has driven this vehicle before: a supervisor must sign the handover']);
+
+  // Every photo must be one this driver uploaded, of the right kind.
+  const want: [string, string][] = [
+    ...H.SIDES.map(s => [i.sidePhotos[s], `vehicle_${s}`] as [string, string]),
+    ...i.damagePhotos.map(p => [p, 'vehicle_damage'] as [string, string]),
+    [i.driverSignatureId, 'handover_signature'],
+    ...(i.handoverSignatureId ? [[i.handoverSignatureId, 'handover_signature'] as [string, string]] : []),
+  ];
+  for (const [pid, kind] of want) {
+    const ok = await c.query('SELECT 1 FROM photos WHERE id = $1 AND kind = $2 AND taken_by = $3', [pid, kind, me]);
+    if (!ok.rowCount) throw new Refused(409, [`upload the ${kind.replace(/_/g, ' ')} photo first`]);
+  }
+  if (i.handoverSignatureId && i.handoverSignatureId === i.driverSignatureId) throw new Refused(409, ['the handover needs a second signature, not yours']);
+
+  const problems = H.problemsOf(insp);
+  const fresh = H.newProblems(insp, h.prev);
+  const status = i.handoverBy === 'remote_approval' ? 'awaiting_approval' : 'signed';
+  const id = i.id ?? randomUUID();
+  await c.query(
+    `INSERT INTO vehicle_inspections (id, vehicle_id, driver_id, previous_driver_id, inspected_at, odometer_km, fuel_level, checks,
+       problems, new_problems, photo_ids, driver_signature_id, acceptance_text, handover_by, handed_over_by_name,
+       handover_signature_id, remote_reason, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+    [id, v.id, me, h.lastDriver && h.lastDriver.id !== me ? h.lastDriver.id : null, at, i.odometerKm, i.fuelLevel, JSON.stringify(i.checks),
+      problems, fresh, [...H.SIDES.map(s => i.sidePhotos[s]), ...i.damagePhotos], i.driverSignatureId, H.ACCEPTANCE_TEXT,
+      i.handoverBy, i.handedOverByName?.trim() ?? null, i.handoverSignatureId ?? null, i.remoteReason?.trim() ?? null, status],
+  );
+
+  const myName = await nameOf(c, me);
+  const mgr = await managerOf(c, me);
+  if (fresh.length) {
+    const labels = fresh.map(k => H.CHECKS.find(x => x[0] === k)![1]);
+    const prevId = h.lastDriver && h.lastDriver.id !== me ? h.lastDriver.id : null;
+    await raiseFlag(c, {
+      type: 'vehicle_new_damage', technicianId: prevId, vehicleId: v.id, severity: 'high',
+      question: prevId ? `${myName} found problems on ${v.registration} that were not there when you took it over. Explain what happened.` : undefined,
+      details: { inspectionId: id, problems: fresh, labels },
+    });
+    const prevMgr = prevId ? await managerOf(c, prevId) : null;
+    for (const m of new Set([mgr, prevMgr])) await notify(c, m, 'vehicle_new_damage', `${v.registration}: new problems found at handover – ${labels.join('; ')}`, { inspectionId: id });
+  }
+  if (status === 'awaiting_approval') {
+    await notify(c, mgr, 'handover_approval', `${myName} took over ${v.registration} with nobody to sign the handover: approve or reject`, { inspectionId: id });
+  }
+  return id;
+}
+
 export function registerFieldRoutes(app: FastifyInstance, db: Db) {
   // ---- Photos that aren't on a work item: slips and signatures -----------
 
   app.post('/photos', async (req, reply) => {
     const up = await readUpload(req);
     const f = parse(z.object({
-      kind: z.enum(['signature', 'fuel_slip', 'supplier_slip', 'bought_out_slip']),
+      kind: z.enum(['signature', 'fuel_slip', 'supplier_slip', 'bought_out_slip', 'vehicle_front', 'vehicle_back', 'vehicle_left',
+        'vehicle_right', 'vehicle_dashboard', 'vehicle_damage', 'handover_signature']),
       takenAt: Iso, id: Uuid.optional(), jobId: Uuid.optional(),
     }), up.fields);
     if (f.kind === 'signature' && !f.jobId) throw new Refused(400, ['a signature belongs to a job: send jobId']);
@@ -81,8 +177,9 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
       [me, today],
     );
     const vehicle = await req.db.query(
-      `SELECT v.id, v.registration, s.mode, s.scanned_at, s.dropped_off_at
+      `SELECT v.id, v.registration, s.mode, s.scanned_at, s.dropped_off_at, i.status AS handover_status
          FROM vehicle_scans s JOIN vehicles v ON v.id = s.vehicle_id
+         LEFT JOIN vehicle_inspections i ON i.id = s.inspection_id
         WHERE s.user_id = $1 AND s.released_at IS NULL ORDER BY s.scanned_at DESC LIMIT 1`,
       [me],
     );
@@ -144,6 +241,21 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
 
   // ---- Vehicles: barcode scan-in is the master record of who is in which vehicle ----
 
+  // What the phone needs to know before the scan: who drove it last and whether an inspection is needed.
+  app.get('/vehicles/lookup', async req => {
+    const q = parse(z.object({ barcode: z.string().min(3).max(100), mode: z.enum(['driving', 'riding_along']).default('driving') }), req.query);
+    const v = (await req.db.query('SELECT id, registration, active FROM vehicles WHERE barcode = $1', [q.barcode])).rows[0];
+    if (!v || !v.active) throw new Refused(404, ['unknown vehicle barcode']);
+    const h = await handoverContext(req.db, v.id);
+    return {
+      vehicle: { id: v.id, registration: v.registration },
+      lastDriver: h.lastDriver,
+      lastInspection: h.prev ? { odometerKm: h.prev.odometerKm, problems: h.prev.problems, at: h.prevAt, by: h.prevBy } : null,
+      needsInspection: H.needsInspection(q.mode, h.lastDriver?.id ?? null, req.actor.id, !!h.prev),
+    };
+  });
+
+
   app.post('/vehicles/scan', async req => {
     const b = parse(z.object({
       barcode: z.string().min(3).max(100),
@@ -151,15 +263,25 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
       at: Iso,
       reason: z.enum(['usual', 'breakdown', 'service', 'swapped_with_colleague', 'other']).default('usual'),
       reasonNote: z.string().max(500).optional(),
+      inspection: Inspection.optional(),
     }), req.body);
     const me = req.actor.id;
     return tx(req.db, async c => {
-      const v = (await c.query('SELECT id, registration, active FROM vehicles WHERE barcode = $1', [b.barcode])).rows[0];
+      const v = (await c.query('SELECT id, registration, active FROM vehicles WHERE barcode = $1 FOR UPDATE', [b.barcode])).rows[0];
       if (!v || !v.active) throw new Refused(404, ['unknown vehicle barcode']);
       const usual = (await c.query('SELECT usual_vehicle_id FROM technician_settings WHERE user_id = $1', [me])).rows[0]?.usual_vehicle_id ?? null;
       const notUsual = usual !== null && usual !== v.id;
       if (notUsual && b.mode === 'driving' && b.reason === 'usual') throw new Refused(409, ['this is not your usual vehicle: choose a reason']);
       if (b.reason === 'other' && !b.reasonNote?.trim()) throw new Refused(409, ['say what the other reason is']);
+
+      // Handover inspection: taking over a vehicle as its driver means signing for its condition.
+      const h = await handoverContext(c, v.id);
+      const needed = H.needsInspection(b.mode, h.lastDriver?.id ?? null, me, !!h.prev);
+      let inspectionId: string | null = null;
+      if (needed && !b.inspection) throw new Refused(409, ['inspect the vehicle and sign for it before you drive it']);
+      if (b.inspection && b.mode === 'driving') {
+        inspectionId = await saveInspection(c, me, v, b.inspection, h, b.at);
+      }
 
       // Release whatever I was in before.
       await c.query('UPDATE vehicle_scans SET released_at = $2 WHERE user_id = $1 AND released_at IS NULL', [me, b.at]);
@@ -173,9 +295,9 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
         await c.query('INSERT INTO tracker_driver_outbox (vehicle_id, driver_id) VALUES ($1, $2)', [v.id, me]);
       }
       const { rows } = await c.query(
-        `INSERT INTO vehicle_scans (vehicle_id, user_id, mode, reason, reason_note, scanned_at)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-        [v.id, me, b.mode, b.reason, b.reasonNote ?? null, b.at],
+        `INSERT INTO vehicle_scans (vehicle_id, user_id, mode, reason, reason_note, scanned_at, inspection_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [v.id, me, b.mode, b.reason, b.reasonNote ?? null, b.at, inspectionId],
       );
 
       // Someone else's usual vehicle: both supervisors get a notice.
@@ -185,10 +307,52 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
         const mgrs = new Set([await managerOf(c, me), await managerOf(c, owner)]);
         for (const m of mgrs) await notify(c, m, 'vehicle_swap', msg, { vehicleId: v.id, scanId: rows[0].id });
       }
-      await audit(c, me, 'vehicle_scan', 'vehicle', v.id, { mode: b.mode, reason: b.reason });
+      await audit(c, me, 'vehicle_scan', 'vehicle', v.id, { mode: b.mode, reason: b.reason, inspectionId });
       // The scan only counts once the tracker shows this vehicle's ignition within 10 minutes;
       // the tracker connection fills ignition_confirmed_at or raises scan_not_confirmed.
-      return { scanId: rows[0].id, vehicle: { id: v.id, registration: v.registration }, mode: b.mode, awaitingIgnition: true };
+      const status = inspectionId ? (await c.query('SELECT status FROM vehicle_inspections WHERE id = $1', [inspectionId])).rows[0].status : null;
+      return { scanId: rows[0].id, vehicle: { id: v.id, registration: v.registration }, mode: b.mode, awaitingIgnition: true, inspectionId, handoverStatus: status };
+    });
+  });
+
+  // Supervisor: remote handovers waiting for a decision, and the decision itself.
+  app.get('/vehicles/inspections', async req => {
+    const q = parse(z.object({ status: z.enum(['signed', 'awaiting_approval', 'approved', 'rejected']).optional(), vehicleId: Uuid.optional() }), req.query);
+    const depts = departmentsFor(req.actor, 'resolve_flags');
+    if (!depts) throw new Refused(403, ['you cannot see vehicle handovers']);
+    const { rows } = await req.db.query(
+      `SELECT i.id, i.vehicle_id, v.registration, i.driver_id, d.full_name AS driver, i.previous_driver_id, p.full_name AS previous_driver,
+              i.inspected_at, i.odometer_km, i.fuel_level, i.checks, i.problems, i.new_problems, i.photo_ids,
+              i.driver_signature_id, i.handover_by, i.handed_over_by_name, i.handover_signature_id, i.remote_reason,
+              i.status, i.decided_at, i.decision_note
+         FROM vehicle_inspections i JOIN vehicles v ON v.id = i.vehicle_id JOIN users d ON d.id = i.driver_id
+         LEFT JOIN users p ON p.id = i.previous_driver_id
+        WHERE ($1::handover_status IS NULL OR i.status = $1) AND ($2::uuid IS NULL OR i.vehicle_id = $2)
+          AND ($3::uuid[] IS NULL OR d.department_id = ANY($3))
+        ORDER BY i.inspected_at DESC LIMIT 200`,
+      [q.status ?? null, q.vehicleId ?? null, depts === 'all' ? null : depts],
+    );
+    return rows;
+  });
+
+  app.post('/vehicles/inspections/:id/decide', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ approve: z.boolean(), note: z.string().trim().max(2000).optional() }), req.body);
+    if (!b.approve && (b.note ?? '').length < 5) throw new Refused(400, ['say why the handover is rejected']);
+    return tx(req.db, async c => {
+      const i = (await c.query(
+        `SELECT i.status, i.driver_id, u.department_id, v.registration FROM vehicle_inspections i
+           JOIN users u ON u.id = i.driver_id JOIN vehicles v ON v.id = i.vehicle_id WHERE i.id = $1 FOR UPDATE OF i`, [id])).rows[0];
+      if (!i) throw new Refused(404, ['no such inspection']);
+      if (!can(req.actor, 'resolve_flags', { employeeId: i.driver_id, employeeDepartmentId: i.department_id })) throw new Refused(403, ['not your department']);
+      if (i.driver_id === req.actor.id) throw new Refused(403, ['you cannot approve your own handover']);
+      if (i.status !== 'awaiting_approval') throw new Refused(409, ['this handover is not waiting for approval']);
+      const status = b.approve ? 'approved' : 'rejected';
+      await c.query('UPDATE vehicle_inspections SET status = $2, decided_by = $3, decided_at = now(), decision_note = $4 WHERE id = $1',
+        [id, status, req.actor.id, b.note ?? null]);
+      await notify(c, i.driver_id, `handover_${status}`, `Your handover of ${i.registration} was ${status}${b.note ? `: ${b.note}` : ''}`, { inspectionId: id });
+      await audit(c, req.actor.id, `handover_${status}`, 'vehicle_inspection', id);
+      return { id, status };
     });
   });
 
@@ -211,7 +375,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
       [req.actor.id],
     );
     if (!rows[0]) throw new Refused(409, ['you were not dropped off']);
-    await audit(db, req.actor.id, 'picked_up', 'vehicle_scan', rows[0].id, { at: b.at });
+    await audit(req.db, req.actor.id, 'picked_up', 'vehicle_scan', rows[0].id, { at: b.at });
     return { ok: true };
   });
 

@@ -12,6 +12,7 @@ const TITLE: Record<string, string> = {
   off_route: 'Stop not on the route', open_card_24h: 'Job card open over 24 hours', timesheet_mismatch: 'Timesheet does not match',
   fuel_mismatch: 'Fuel entry looks wrong', arrived_outside_geofence: 'Arrived away from the store', manager_unavailable: 'Closed without signature',
   open_supply_run: 'Supply run', new_supplier: 'New supplier',
+  vehicle_new_damage: 'New damage found on a vehicle you handed over', handover_not_signed: 'Vehicle handover not signed',
 };
 
 export function Flags() {

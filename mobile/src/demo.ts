@@ -2,6 +2,7 @@
 // It answers the same requests as the real one and uses the same rules engine, so what you
 // feel in demo mode is what the technicians will get. Data is invented.
 import * as J from '../../server/src/core/jobCard.ts';
+import * as H from '../../server/src/core/handover.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
 import type { CardView, Flag, StockLine, Today, TodayJob } from './types.ts';
 
@@ -18,6 +19,8 @@ export interface DemoState {
   flags: Flag[];
   vehicle: Today['vehicle'];
   photos: number;
+  /** The demo van: who drove it last and what the last handover recorded. */
+  van?: { lastDriverMe: boolean; odometerKm: number; problems: H.CheckKey[] };
   fuel: { litres: number; at: string }[];
 }
 
@@ -89,6 +92,7 @@ export function seedDemo(): DemoState {
     }],
     vehicle: null,
     photos: 0,
+    van: { lastDriverMe: false, odometerKm: 87450, problems: ['windscreen_mirrors'] },
     fuel: [],
   };
 }
@@ -112,6 +116,10 @@ export class DemoTransport implements Transport {
       jobMinutes: J.jobMinutes(c),
       items: c.items.map(it => ({ ...it, status: J.itemStatus(it, c.jobType), missing: J.missingOnItem(it, c.jobType) })),
     };
+  }
+
+  private van() {
+    return this.state.van ?? (this.state.van = { lastDriverMe: false, odometerKm: 87450, problems: ['windscreen_mirrors'] });
   }
 
   private findJob(jobId: string) { return this.state.jobs.find(j => j.meta.id === jobId); }
@@ -160,10 +168,31 @@ export class DemoTransport implements Transport {
       f.explanation = b.explanation; f.status = 'explained'; this.persist(this.state);
       return ok({ id: f.id, status: 'explained' });
     }
+    if (p === '/vehicles/lookup') {
+      const van = this.van();
+      const mode = new URLSearchParams(req.path.split('?')[1] ?? '').get('mode') ?? 'driving';
+      return ok({
+        vehicle: { id: 'veh-1', registration: 'ND 412-778' },
+        lastDriver: van.lastDriverMe ? { id: 'me', name: 'Thabo Mkhize' } : { id: 'tech-2', name: 'Sipho Ndlovu' },
+        lastInspection: { odometerKm: van.odometerKm, problems: van.problems, at: new Date(Date.now() - 86_400_000).toISOString(), by: 'Sipho Ndlovu' },
+        needsInspection: H.needsInspection(mode as 'driving', van.lastDriverMe ? 'me' : 'tech-2', 'me', true),
+      });
+    }
     if (p === '/vehicles/scan') {
-      this.state.vehicle = { id: 'veh-1', registration: 'ND 412-778', mode: b.mode, dropped_off_at: null };
+      const van = this.van();
+      let handoverStatus: 'signed' | 'awaiting_approval' | null = null;
+      if (b.mode === 'driving' && !van.lastDriverMe) {
+        if (!b.inspection) return refuse(409, 'inspect the vehicle and sign for it before you drive it');
+        const missing = H.missingOnInspection(b.inspection, { odometerKm: van.odometerKm, problems: van.problems });
+        if (missing.length) return refuse(409, ...missing);
+        // New problems go to the previous driver (Sipho, in the demo) to explain, not to you.
+        handoverStatus = b.inspection.handoverBy === 'remote_approval' ? 'awaiting_approval' : 'signed';
+        this.state.van = { lastDriverMe: true, odometerKm: b.inspection.odometerKm, problems: H.problemsOf(b.inspection) };
+      }
+      if (b.mode === 'driving') this.state.van = { ...this.van(), lastDriverMe: true };
+      this.state.vehicle = { id: 'veh-1', registration: 'ND 412-778', mode: b.mode, dropped_off_at: null, handover_status: handoverStatus ?? this.state.vehicle?.handover_status ?? null };
       this.persist(this.state);
-      return ok({ scanId: id('scan'), vehicle: { id: 'veh-1', registration: 'ND 412-778' }, mode: b.mode, awaitingIgnition: true });
+      return ok({ scanId: id('scan'), vehicle: { id: 'veh-1', registration: 'ND 412-778' }, mode: b.mode, awaitingIgnition: true, handoverStatus });
     }
     if (p === '/photos') { this.state.photos++; this.persist(this.state); return ok({ id: req.upload?.fields.id ?? id('photo') }, 201); }
     if (p === '/fuel') {

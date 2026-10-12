@@ -55,6 +55,27 @@ async function upload(who: string, url: string, fields: Record<string, string>, 
   return { status: res.statusCode, body: res.json() };
 }
 
+
+/** Uploads the photos and signatures a handover needs and returns the inspection the phone would send. */
+async function inspection(who: string, o: { odometerKm?: number; problem?: string; handoverBy?: 'previous_driver' | 'supervisor' | 'remote_approval'; name?: string } = {}) {
+  const photo = async (kind: string) => (await upload(who, '/photos', { kind, takenAt: '2026-10-15T06:40:00+02:00' })).body.id as string;
+  const sidePhotos: Record<string, string> = {};
+  for (const s of ['front', 'back', 'left', 'right', 'dashboard']) sidePhotos[s] = await photo(`vehicle_${s}`);
+  const checks: Record<string, { ok: boolean; note?: string }> = {};
+  for (const k of ['tyres', 'lights', 'windscreen_mirrors', 'bodywork', 'interior', 'spare_jack', 'fire_extinguisher', 'first_aid', 'triangle', 'licence_disc']) checks[k] = { ok: true };
+  const damagePhotos: string[] = [];
+  if (o.problem) { checks[o.problem] = { ok: false, note: 'Dent in the left rear door' }; damagePhotos.push(await photo('vehicle_damage')); }
+  const by = o.handoverBy ?? 'supervisor';
+  return {
+    odometerKm: o.odometerKm ?? 120000, fuelLevel: 'half', checks, sidePhotos, damagePhotos,
+    driverSignatureId: await photo('handover_signature'),
+    handoverBy: by,
+    ...(by === 'remote_approval'
+      ? { remoteReason: 'Previous driver already left for site' }
+      : { handedOverByName: o.name ?? 'Supervisor', handoverSignatureId: await photo('handover_signature') }),
+  };
+}
+
 before(async () => {
   const admin = new pg.Client({ connectionString: ADMIN_URL });
   await admin.connect();
@@ -305,7 +326,9 @@ test('vehicle scan-in: reason needed for another vehicle, managers told, tracker
   ids.v2 = await v('ND 503-221', 'RS-V2', ids.tech2);
   const noReason = await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V2', mode: 'driving', at: '2026-10-15T06:50:00+02:00' });
   assert.equal(noReason.status, 409);
-  const ok = await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V2', mode: 'driving', at: '2026-10-15T06:50:00+02:00', reason: 'breakdown' });
+  const noInspection = await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V2', mode: 'driving', at: '2026-10-15T06:50:00+02:00', reason: 'breakdown' });
+  assert.equal(noInspection.status, 409, 'never inspected: must inspect before driving');
+  const ok = await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V2', mode: 'driving', at: '2026-10-15T06:50:00+02:00', reason: 'breakdown', inspection: await inspection('tech') });
   assert.equal(ok.status, 200);
   assert.equal(ok.body.vehicle.registration, 'ND 503-221');
   const notes = await call('manager', 'GET', '/me/notifications');
@@ -313,9 +336,67 @@ test('vehicle scan-in: reason needed for another vehicle, managers told, tracker
   const outbox = await db.query('SELECT driver_id FROM tracker_driver_outbox WHERE vehicle_id = $1', [ids.v2]);
   assert.equal(outbox.rows[0].driver_id, ids.tech);
   // back into his own vehicle: no reason needed, the other scan is released
-  assert.equal((await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V1', mode: 'driving', at: '2026-10-15T06:55:00+02:00' })).status, 200);
+  assert.equal((await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V1', mode: 'driving', at: '2026-10-15T06:55:00+02:00', inspection: await inspection('tech', { odometerKm: 88000 }) })).status, 200);
   const open = await db.query('SELECT count(*)::int AS n FROM vehicle_scans WHERE user_id = $1 AND released_at IS NULL', [ids.tech]);
   assert.equal(open.rows[0].n, 1);
+});
+
+test('vehicle handover: inspect and sign to take over, new damage flagged to the previous driver, remote handover approved', async () => {
+  // tech drove V1 last (previous test). tech2 takes it over.
+  const look = await call('tech2', 'GET', '/vehicles/lookup?barcode=RS-V1');
+  assert.equal(look.status, 200);
+  assert.equal(look.body.needsInspection, true);
+  assert.equal(look.body.lastDriver.id, ids.tech);
+  assert.equal(look.body.lastInspection.odometerKm, 88000);
+  const scan = (b: object) => call('tech2', 'POST', '/vehicles/scan', { barcode: 'RS-V1', mode: 'driving', at: '2026-10-15T14:00:00+02:00', reason: 'swapped_with_colleague', ...b });
+
+  assert.equal((await scan({})).status, 409, 'no inspection, no vehicle');
+  const lower = await scan({ inspection: await inspection('tech2', { odometerKm: 87000, handoverBy: 'previous_driver', name: 'tech' }) });
+  assert.equal(lower.status, 409);
+  assert.match(lower.body.reasons.join(), /odometer cannot be lower/);
+  const half = await inspection('tech2', { odometerKm: 88150, problem: 'bodywork', handoverBy: 'previous_driver', name: 'tech' });
+  const noDamagePhoto = await scan({ inspection: { ...half, damagePhotos: [] } });
+  assert.match(noDamagePhoto.body.reasons.join(), /photo of each problem/);
+  const someoneElsesPhoto = await upload('tech', '/photos', { kind: 'vehicle_front', takenAt: '2026-10-15T14:00:00+02:00' });
+  assert.equal((await scan({ inspection: { ...half, sidePhotos: { ...half.sidePhotos, front: someoneElsesPhoto.body.id } } })).status, 409, 'photos must be his own');
+
+  const ok = await scan({ inspection: half });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.handoverStatus, 'signed');
+  const flag = (await db.query("SELECT technician_id, severity, question FROM flags WHERE flag_type = 'vehicle_new_damage'")).rows[0];
+  assert.equal(flag.technician_id, ids.tech, 'the previous driver answers for new damage');
+  assert.equal(flag.severity, 'high');
+  const row = (await db.query('SELECT previous_driver_id, problems, new_problems, acceptance_text FROM vehicle_inspections WHERE driver_id = $1', [ids.tech2])).rows.at(-1);
+  assert.equal(row.previous_driver_id, ids.tech);
+  assert.deepEqual(row.new_problems, ['bodywork']);
+  assert.match(row.acceptance_text, /accept full responsibility/);
+
+  // Same driver scanning back into the same vehicle: no new inspection. Passengers never inspect.
+  assert.equal((await call('tech2', 'GET', '/vehicles/lookup?barcode=RS-V1')).body.needsInspection, false);
+  assert.equal((await call('tech2', 'POST', '/vehicles/scan', { barcode: 'RS-V1', mode: 'driving', at: '2026-10-15T15:00:00+02:00', reason: 'swapped_with_colleague' })).status, 200);
+  assert.equal((await call('tech', 'POST', '/vehicles/scan', { barcode: 'RS-V1', mode: 'riding_along', at: '2026-10-15T15:01:00+02:00' })).status, 200);
+
+  // The bodywork problem is known now, so the next handover doesn't blame anyone for it again.
+  const back = await call('tech', 'POST', '/vehicles/scan', {
+    barcode: 'RS-V1', mode: 'driving', at: '2026-10-15T17:00:00+02:00',
+    inspection: await inspection('tech', { odometerKm: 88200, problem: 'bodywork', handoverBy: 'remote_approval' }),
+  });
+  assert.equal(back.status, 200);
+  assert.equal(back.body.handoverStatus, 'awaiting_approval');
+  assert.equal((await db.query("SELECT count(*)::int AS n FROM flags WHERE flag_type = 'vehicle_new_damage'")).rows[0].n, 1);
+  assert.equal((await call('tech', 'GET', '/me/today?date=2026-10-15')).body.vehicle.handover_status, 'awaiting_approval');
+
+  assert.equal((await call('tech', 'POST', `/vehicles/inspections/${back.body.inspectionId}/decide`, { approve: true })).status, 403);
+  const pending = await call('manager', 'GET', '/vehicles/inspections?status=awaiting_approval');
+  assert.equal(pending.body.length, 1);
+  assert.equal((await call('manager', 'POST', `/vehicles/inspections/${back.body.inspectionId}/decide`, { approve: false })).status, 400, 'a rejection needs a reason');
+  const approved = await call('manager', 'POST', `/vehicles/inspections/${back.body.inspectionId}/decide`, { approve: true });
+  assert.equal(approved.body.status, 'approved');
+  assert.equal((await call('manager', 'POST', `/vehicles/inspections/${back.body.inspectionId}/decide`, { approve: true })).status, 409);
+
+  // The record is evidence: nobody can change it afterwards, not even directly in the database.
+  await assert.rejects(db.query('UPDATE vehicle_inspections SET odometer_km = 1 WHERE id = $1', [back.body.inspectionId]), /cannot be edited/);
+  await assert.rejects(db.query('DELETE FROM vehicle_inspections WHERE id = $1', [back.body.inspectionId]), /cannot be deleted/);
 });
 
 test('fuel: slip required, logged against the vehicle, impossible litres flagged', async () => {

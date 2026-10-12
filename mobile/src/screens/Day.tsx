@@ -62,6 +62,12 @@ export function Day() {
           ) : (
             <Body>Not scanned into a vehicle. Tap to scan the barcode.</Body>
           )}
+          {t?.vehicle?.handover_status === 'awaiting_approval' ? (
+            <Text style={[st.small, { color: C.warn }]}>Handover awaiting your supervisor's approval</Text>
+          ) : null}
+          {t?.vehicle?.handover_status === 'rejected' ? (
+            <Text style={[st.small, { color: C.bad }]}>Handover rejected – speak to your supervisor</Text>
+          ) : null}
         </Card>
 
         {open.length ? (

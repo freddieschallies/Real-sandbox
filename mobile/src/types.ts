@@ -27,7 +27,10 @@ export interface TodayJob {
 export interface Today {
   date: string;
   jobs: TodayJob[];
-  vehicle: { id: string; registration: string; mode: 'driving' | 'riding_along'; dropped_off_at: string | null } | null;
+  vehicle: {
+    id: string; registration: string; mode: 'driving' | 'riding_along'; dropped_off_at: string | null;
+    handover_status?: 'signed' | 'awaiting_approval' | 'approved' | 'rejected' | null;
+  } | null;
   flagsToAnswer: number;
   unreadNotices: number;
 }

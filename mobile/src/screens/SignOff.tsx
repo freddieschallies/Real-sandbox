@@ -1,8 +1,7 @@
 // Store manager sign-off. A signature on the glass, or "manager unavailable" with who he spoke to.
 import React, { useRef, useState } from 'react';
-import { PanResponder, Platform, Text, View } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
-import { captureRef } from 'react-native-view-shot';
+import { Text, View } from 'react-native';
+import { SignaturePad, type SignaturePadHandle } from '../SignaturePad.tsx';
 import { useStore } from '../state.tsx';
 import { useNav } from '../nav.tsx';
 import { nowIso } from '../device.ts';
@@ -19,22 +18,9 @@ export function SignOff({ jobId }: { jobId: string }) {
   const [manager, setManager] = useState(v?.visits.at(-1)?.checkedInManager ?? '');
   const [reason, setReason] = useState('');
   const [spokeTo, setSpokeTo] = useState('');
-  const [paths, setPaths] = useState<string[]>([]);
   const [reasons, setReasons] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
-  const pad = useRef<View>(null);
-  const live = useRef('');
-
-  const responder = useRef(PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: e => { const { locationX: x, locationY: y } = e.nativeEvent; live.current = `M${x.toFixed(1)},${y.toFixed(1)}`; setPaths(p => [...p, live.current]); },
-    onPanResponderMove: e => {
-      const { locationX: x, locationY: y } = e.nativeEvent;
-      live.current += ` L${x.toFixed(1)},${y.toFixed(1)}`;
-      setPaths(p => [...p.slice(0, -1), live.current]);
-    },
-  })).current;
+  const pad = useRef<SignaturePadHandle>(null);
 
   if (!v) return <Screen title="Sign-off" onBack={nav.back}><Body quiet>Not found on the phone.</Body></Screen>;
 
@@ -49,14 +35,14 @@ export function SignOff({ jobId }: { jobId: string }) {
   const signed = async () => {
     const missing: string[] = [];
     if (!manager.trim()) missing.push('store manager name');
-    if (paths.join('').length < 60) missing.push('signature');
+    if (!pad.current?.signed()) missing.push('signature');
     if (missing.length) { setReasons(missing); return; }
     // Check the rules before saving the picture, so a refused sign-off leaves nothing behind.
     const pre = J.close(toCore(v), { signature: true, managerName: manager }, nowIso());
     if (!pre.ok) { setReasons(pre.reasons); return; }
     setBusy(true);
     try {
-      const uri = await captureRef(pad, { format: 'png', quality: 1, result: Platform.OS === 'web' ? 'data-uri' : 'tmpfile' });
+      const uri = await pad.current!.capture();
       const photoId = s.newId();
       s.queue('Manager signature', { method: 'POST', path: '/photos', upload: { fields: { kind: 'signature', takenAt: nowIso(), id: photoId, jobId }, fileUri: uri, mime: 'image/png' } }, jobId);
       close({ signature: true, managerName: manager.trim(), signaturePhotoId: photoId }, `Signed off by ${manager.trim()}`, { signature: true, managerName: manager.trim() });
@@ -92,14 +78,7 @@ export function SignOff({ jobId }: { jobId: string }) {
           <Field label="Manager's name" value={manager} onChangeText={setManager} autoCapitalize="words" />
           {v.storeManagers.length ? <Choice options={v.storeManagers} value={manager} onChange={setManager} labels={Object.fromEntries(v.storeManagers.map(m => [m, m]))} /> : null}
           <Label>Signature</Label>
-          <View ref={pad} collapsable={false} {...responder.panHandlers}
-            style={{ height: 220, backgroundColor: '#FFFFFF', borderRadius: 10, overflow: 'hidden' }}>
-            <Svg width="100%" height="100%">
-              {paths.map((d, i) => <Path key={i} d={d} stroke="#111" strokeWidth={3} fill="none" strokeLinecap="round" strokeLinejoin="round" />)}
-            </Svg>
-            {paths.length === 0 ? <Text pointerEvents="none" style={{ position: 'absolute', bottom: 12, left: 14, color: '#888' }}>Manager signs here</Text> : null}
-          </View>
-          <Button label="Clear signature" kind="quiet" onPress={() => setPaths([])} />
+          <SignaturePad ref={pad} hint="Manager signs here" height={220} />
           <Button label="Close job – signed" onPress={signed} busy={busy} />
         </>
       ) : (

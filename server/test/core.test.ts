@@ -248,3 +248,30 @@ test('exit checklist blocks leaving until jobs, stock and tools are settled', ()
   assert.equal(R.exitChecklist({ openJobCards: 2, stocktakeSignedOff: false, toolsAllAccountedFor: false }).length, 3);
   assert.deepEqual(R.exitChecklist({ openJobCards: 0, stocktakeSignedOff: true, toolsAllAccountedFor: true }), []);
 });
+
+import * as H from '../src/core/handover.ts';
+
+test('handover: who must inspect', () => {
+  assert.equal(H.needsInspection('driving', 'other', 'me', true), true);
+  assert.equal(H.needsInspection('driving', 'me', 'me', true), false);
+  assert.equal(H.needsInspection('driving', 'me', 'me', false), true, 'never inspected');
+  assert.equal(H.needsInspection('riding_along', 'other', 'me', true), false);
+});
+
+test('handover: everything recorded and signed before it counts', () => {
+  const full: H.Inspection = {
+    odometerKm: 1000, fuelLevel: 'half',
+    checks: Object.fromEntries(H.CHECKS.map(c => [c[0], { ok: true }])),
+    sidePhotos: Object.fromEntries(H.SIDES.map(s => [s, `p-${s}`])), damagePhotos: [],
+    driverSignatureId: 'sig', handoverBy: 'previous_driver', handedOverByName: 'Sipho', handoverSignatureId: 'sig2',
+  };
+  assert.deepEqual(H.missingOnInspection(full), []);
+  assert.ok(H.missingOnInspection({ ...full, checks: { ...full.checks, tyres: { ok: false } } }).some(m => /describe the problem/.test(m)));
+  assert.ok(H.missingOnInspection({ ...full, checks: { ...full.checks, tyres: { ok: false, note: 'Front left bald' } } }).includes('a photo of each problem found'));
+  assert.ok(H.missingOnInspection({ ...full, handoverSignatureId: undefined }).includes("previous driver's signature"));
+  assert.deepEqual(H.missingOnInspection({ ...full, handoverBy: 'remote_approval', handoverSignatureId: undefined, remoteReason: 'He left early' }), []);
+  assert.ok(H.missingOnInspection(full, { odometerKm: 2000, problems: [] })[0].startsWith('odometer cannot be lower'));
+  const dented = { ...full, checks: { ...full.checks, bodywork: { ok: false, note: 'Dent left door' } }, damagePhotos: ['d'] };
+  assert.deepEqual(H.newProblems(dented, { odometerKm: 900, problems: [] }), ['bodywork']);
+  assert.deepEqual(H.newProblems(dented, { odometerKm: 900, problems: ['bodywork'] }), []);
+});
