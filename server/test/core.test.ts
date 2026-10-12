@@ -401,3 +401,24 @@ test('van check: each line of the list against the van', () => {
   assert.deepEqual(r.lines.map(l => l.short), [0, 1.5]);
   assert.equal(St.vanCheck([], new Map()).complete, true, 'no list: nothing short');
 });
+
+test('timesheet day: travel, work, paused and not accounted from what the app recorded', async () => {
+  const T = await import('../src/core/timesheet.ts');
+  const t = (hhmm: string) => `2026-10-12T${hhmm}:00+02:00`;
+  const day = T.buildDay([
+    { jobId: 'a', jobNumber: 1, store: 'Spar', fault: 'Fridge', goAt: t('07:30'), arrivedAt: t('08:00'), startedAt: t('08:05'), endedAt: t('10:00'),
+      pauses: [{ reason: 'collecting_parts', at: t('08:30'), resumedAt: t('09:00') }], state: 'done' },
+    { jobId: 'b', jobNumber: 2, store: 'Boxer', fault: 'Oven', goAt: t('11:00'), arrivedAt: t('11:20'), startedAt: t('11:25'), endedAt: t('13:20'),
+      pauses: [{ reason: 'break', at: t('12:00'), resumedAt: t('12:30') }], state: 'continue_later', progressNote: 'Needs a part' },
+  ], [{ at: t('07:00'), registration: 'ND 1', mode: 'driving' }], t('23:00'));
+  assert.equal(day.start, new Date(t('07:00')).toISOString());
+  assert.equal(day.spanMin, 380, '07:00 to 13:20');
+  assert.equal(day.travelMin, 30 + 30 + 20, 'driving to both jobs, plus out for parts');
+  assert.equal(day.workMin, 90 + 90, 'on site less pauses');
+  assert.equal(day.pausedMin, 30);
+  assert.equal(day.unaccountedMin, 380 - 80 - 180 - 30, 'the yard before the first Go, and 10:00 to 11:00');
+  assert.equal(day.jobs[1].result, 'Continue later: Needs a part');
+  assert.equal(T.hm(day.unaccountedMin), '1:30');
+  assert.equal(T.buildDay([], []).activity, false);
+  assert.deepEqual(T.daysBetween('2026-10-30', '2026-11-02'), ['2026-10-30', '2026-10-31', '2026-11-01', '2026-11-02']);
+});

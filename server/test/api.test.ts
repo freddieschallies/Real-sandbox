@@ -1370,6 +1370,50 @@ test('timesheet: checked against the job timers, mismatch flagged, one sheet per
   assert.equal((await call('tech', 'POST', '/timesheets', { workDate: '2026-10-12', at: '2026-10-13T07:05:00+02:00', lines: [] })).status, 409);
 });
 
+test('daily timesheets: made by the app, the previous day submitted by the technician, missing ones flagged, HR exports them', async () => {
+  // HR's sheet for 12 Oct: job 1 (Go 07:00, arrived 07:30, out for parts 09:00 to 09:30, finished 10:00).
+  const hr = await call('hr', 'GET', '/timesheets?from=2026-10-12&to=2026-10-12');
+  assert.equal(hr.status, 200);
+  const tech = hr.body.technicians.find((t: { id: string }) => t.id === ids.tech);
+  const day = tech.days[0];
+  const j1 = day.day.jobs.find((j: { jobId: string }) => j.jobId === ids.job);
+  assert.ok(j1, 'the job is on his sheet');
+  assert.equal(j1.travelMin, 30 + 30, 'driving there, and out for parts');
+  assert.equal(j1.workMin, 150 - 30, 'on site less the time out for parts');
+  assert.ok(Array.isArray(day.flags), 'flags of the day are on the sheet');
+  assert.ok(tech.totals.workMin >= 120);
+  assert.equal((await call('manager', 'GET', '/timesheets?from=2026-10-12&to=2026-10-12')).status, 200, 'his manager sees his department');
+  assert.equal((await call('admin', 'GET', '/timesheets?from=2026-10-12&to=2026-10-12')).status, 403, 'not the admin');
+  assert.equal((await call('hr', 'GET', '/timesheets?from=2026-10-01&to=2026-11-15')).status, 400, 'up to a month at a time');
+  assert.equal((await call('hr', 'GET', `/timesheets?from=2026-10-12&to=2026-10-12&userId=${ids.tech}`)).body.technicians.length, 1, 'one person');
+
+  // He submits a finished day; time not accounted for needs a word.
+  const sheet = (await call('tech', 'GET', '/me/timesheets/2026-10-14')).body;
+  assert.equal(sheet.submitted, null);
+  if (sheet.day.unaccountedMin >= 30) {
+    assert.equal((await call('tech', 'POST', '/me/timesheets/2026-10-14/submit', { at: '2026-10-15T06:30:00+02:00' })).status, 400, 'say what the time was');
+  }
+  assert.equal((await call('tech', 'POST', '/me/timesheets/2026-10-14/submit', { at: '2026-10-14T16:00:00+02:00', note: 'Waited at the yard' })).status, 400, 'not before the day is over');
+  const sent = await call('tech', 'POST', '/me/timesheets/2026-10-14/submit', { at: '2026-10-15T06:30:00+02:00', note: 'Loaded the van at the yard first' });
+  assert.equal(sent.status, 200);
+  assert.equal((await call('tech', 'POST', '/me/timesheets/2026-10-14/submit', { at: '2026-10-15T06:31:00+02:00', note: 'again' })).status, 409, 'once');
+  assert.equal((await call('tech', 'GET', '/me/timesheets/2026-10-14')).body.submitted.note, 'Loaded the van at the yard first');
+  await assert.rejects(db.query("UPDATE timesheets SET note = 'changed' WHERE id = $1", [sent.body.id]), 'kept as submitted');
+
+  // A technician who has not submitted his finished days is flagged, and submitting closes the flag.
+  await db.query("UPDATE users SET created_at = now() - interval '5 days' WHERE id = $1", [ids.tech2]);
+  const owed = (await call('tech2', 'GET', '/me/timesheets')).body;
+  assert.ok(owed.due.length >= 1, 'he owes at least one day');
+  const late = owed.due.find((d: { overdue: boolean }) => d.overdue);
+  assert.ok(late, 'one is overdue');
+  const missing = await db.query("SELECT id FROM flags WHERE technician_id = $1 AND flag_type = 'timesheet_missing' AND details->>'workDate' = $2 AND status = 'open'", [ids.tech2, late.date]);
+  assert.equal(missing.rowCount, 1);
+  await call('tech2', 'GET', '/me/timesheets');
+  assert.equal((await db.query("SELECT 1 FROM flags WHERE technician_id = $1 AND flag_type = 'timesheet_missing' AND details->>'workDate' = $2", [ids.tech2, late.date])).rowCount, 1, 'flagged once');
+  assert.equal((await call('tech2', 'POST', `/me/timesheets/${late.date}/submit`, { at: new Date().toISOString(), note: 'Day off, sick' })).status, 200);
+  assert.equal((await db.query("SELECT status FROM flags WHERE id = $1", [missing.rows[0].id])).rows[0].status, 'resolved');
+});
+
 test('estimates: prices only from the price list, always marked not official', async () => {
   const J = `/jobs/${ids.job3}`;
   const item = (await call('tech', 'GET', J)).body.items[0].id;

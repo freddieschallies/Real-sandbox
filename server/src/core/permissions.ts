@@ -60,6 +60,7 @@ export const CATALOGUE = {
   view_employee_log:          { group: 'People', label: 'Read staff records (issues and warnings)', scoped: true },
   write_employee_log:         { group: 'People', label: 'Add and delete staff records', scoped: true },
   assign_departments:         { group: 'People', label: 'Put technicians and managers in departments', scoped: false },
+  view_timesheets:            { group: 'People', label: 'See and export technicians\' timesheets', scoped: true },
   edit_technician_settings:   { group: 'People', label: 'Technician settings (department, vehicle, home)', scoped: true },
   mark_technician_left:       { group: 'People', label: 'Start a leaver\'s exit checklist', scoped: true },
   view_former_technicians:    { group: 'People', label: 'See former technicians', scoped: true },
@@ -98,11 +99,11 @@ const stockroom: Permissions = { ...admin, manage_stockroom: true, assign_stock:
 const management: Permissions = {
   ...technician,
   assign_jobs: true, view_all_job_cards: true, view_live_map_positions: true, view_all_fuel: true, view_fleet: true,
-  view_live_driving_markers: OWN, view_flags: OWN, resolve_flags: OWN, set_van_stock: OWN,
+  view_live_driving_markers: OWN, view_flags: OWN, resolve_flags: OWN, set_van_stock: OWN, view_timesheets: OWN,
   edit_technician_settings: OWN, mark_technician_left: OWN, view_former_technicians: OWN,
 };
 // HR keeps the staff records and decides who works in which department, under which manager.
-const hr: Permissions = { view_employee_log: ALL, write_employee_log: ALL, assign_departments: true, view_former_technicians: ALL };
+const hr: Permissions = { view_employee_log: ALL, write_employee_log: ALL, assign_departments: true, view_former_technicians: ALL, view_timesheets: ALL };
 const director: Permissions = {
   ...stockroom, ...management, ...hr, set_van_stock: ALL,
   view_live_driving_markers: ALL, view_flags: ALL, resolve_flags: ALL, view_employee_log: ALL, write_employee_log: ALL,
@@ -185,7 +186,7 @@ export const WORK_AREAS = {
   flags:     { label: 'Flags and approvals', actions: ['view_flags', 'resolve_flags'] },
   prices:    { label: 'Prices and rates', actions: ['set_prices'] },
   access:    { label: 'Positions and access (People)', actions: ['manage_access'] },
-  hr:        { label: 'HR: staff records, and who works in which department', actions: ['view_employee_log', 'write_employee_log', 'assign_departments'] },
+  hr:        { label: 'HR: staff records, timesheets, and who works in which department', actions: ['view_employee_log', 'write_employee_log', 'assign_departments', 'view_timesheets'] },
   vanstock:  { label: 'Van stock lists (bill of quantities)', actions: ['set_van_stock'] },
 } as const satisfies Record<string, { label: string; actions: readonly Action[] }>;
 export type WorkArea = keyof typeof WORK_AREAS;

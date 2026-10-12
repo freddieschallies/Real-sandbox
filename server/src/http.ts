@@ -30,7 +30,7 @@ export function registerErrors(app: FastifyInstance) {
     if (err instanceof UploadError) return reply.code(400).send({ error: 'refused', reasons: [err.message] });
     if (err.code === 'FST_REQ_FILE_TOO_LARGE') return reply.code(413).send({ error: 'refused', reasons: ['photo is larger than 8 MB'] });
     if (err.statusCode && err.statusCode < 500) return reply.code(err.statusCode).send({ error: err.message });
-    app.log.error(err);
+    app.log.error(err); if (process.env.DEBUG_500) console.error('ERR500', err);
     return reply.code(500).send({ error: 'server error' });
   });
 }

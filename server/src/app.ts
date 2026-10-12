@@ -17,6 +17,7 @@ import { registerPastelRoutes } from './routes/pastel.ts';
 import { registerPeopleRoutes } from './routes/people.ts';
 import { registerStaffRoutes } from './routes/staff.ts';
 import { registerDepartmentRoutes } from './routes/departments.ts';
+import { registerTimesheetRoutes } from './routes/timesheets.ts';
 import { registerAccessRoutes } from './routes/access.ts';
 import { registerPlatformRoutes } from './routes/platform.ts';
 import { registerStockRoutes } from './routes/stock.ts';
@@ -46,6 +47,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerPeopleRoutes(app);
   registerStaffRoutes(app);
   registerDepartmentRoutes(app);
+  registerTimesheetRoutes(app);
   registerAccessRoutes(app, db);
   registerPlatformRoutes(app, db);
   registerStockRoutes(app, db, opts.invoiceReader ?? null);
