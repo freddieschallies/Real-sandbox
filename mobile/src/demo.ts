@@ -156,7 +156,7 @@ export class DemoTransport implements Transport {
 
   async send(req: Request): Promise<Response> {
     if (this.noSignal) throw new Offline('demo: no signal');
-    await new Promise(r => setTimeout(r, 120));
+    await new Promise(r => setTimeout(r, 25));
     const b = (req.json ?? {}) as any;
     const p = req.path.split('?')[0];
     let m: RegExpMatchArray | null;

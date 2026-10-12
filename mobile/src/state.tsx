@@ -60,6 +60,8 @@ export interface Store {
   syncNow(): Promise<void>;
   discardBlocked(): Promise<void>;
   setDemoNoSignal(v: boolean): void;
+  /** Puts the demo company back to how it started (made-up jobs, stock and stockroom). */
+  resetDemo(): Promise<void>;
 }
 
 const Ctx = createContext<Store | null>(null);
@@ -282,6 +284,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (!v) syncNow();
   }, [syncNow]);
 
+  const resetDemo = useCallback(async () => {
+    const fresh = seedDemo();
+    demoRef.current = new DemoTransport(fresh, st => save(K.demo, st));
+    await save(K.demo, fresh);
+    outbox.clearAll();
+    setCacheAndSave(() => EMPTY);
+  }, [outbox, setCacheAndSave]);
+
   void tick;
   const value: Store = {
     ready, session, needsPolicy, cache,
@@ -289,7 +299,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     online: session?.mode === 'demo' ? !demoNoSignal : net.isConnected !== false,
     syncing, demoNoSignal,
     signIn, signOut, policy, acknowledge, refresh, loadCard, jobAction, queue,
-    newId: randomUUID, ask, patchToday, patchCache, adjustStock, syncNow, discardBlocked, setDemoNoSignal,
+    newId: randomUUID, ask, patchToday, patchCache, adjustStock, syncNow, discardBlocked, setDemoNoSignal, resetDemo,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

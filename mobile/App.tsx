@@ -1,5 +1,5 @@
 import React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, Platform, View, useWindowDimensions } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StoreProvider, useStore } from './src/state.tsx';
@@ -20,6 +20,7 @@ import { Invoice } from './src/screens/Invoice.tsx';
 import { BookOut } from './src/screens/BookOut.tsx';
 import { Return } from './src/screens/Return.tsx';
 import { StockroomApp } from './src/stockroom/StockroomApp.tsx';
+import { TesterWelcome } from './src/screens/TesterWelcome.tsx';
 import { C } from './src/theme.ts';
 
 function Current() {
@@ -44,11 +45,27 @@ function Current() {
 function Root() {
   const s = useStore();
   if (!s.ready) return <View style={{ flex: 1, backgroundColor: C.bg, justifyContent: 'center' }}><ActivityIndicator color={C.accent} size="large" /></View>;
-  if (!s.session) return <Login />;
+  if (!s.session) return TESTER ? <TesterWelcome /> : <Login />;
   if (s.needsPolicy) return <Policy />;
   // Stock controllers get the stockroom app; everyone else on the phone gets the technician app.
   if (s.session.user.level === 'stockroom') return <NavProvider key={s.session.user.id}><StockroomApp /></NavProvider>;
   return <NavProvider key={s.session.user.id}><Current /></NavProvider>;
+}
+
+/** The shared test build: demo only, with a short guide instead of the sign-in screen. */
+const TESTER = process.env.EXPO_PUBLIC_TESTER === '1';
+
+/** In a browser on a big screen the technician app keeps phone width, like it will look on a phone. */
+function Frame({ children }: { children: React.ReactNode }) {
+  const s = useStore();
+  const { width } = useWindowDimensions();
+  const narrow = Platform.OS === 'web' && width > 640 && s.session?.user.level !== 'stockroom';
+  if (!narrow) return <>{children}</>;
+  return (
+    <View style={{ flex: 1, alignItems: 'center', backgroundColor: '#101214' }}>
+      <View style={{ flex: 1, width: 440, borderLeftWidth: 1, borderRightWidth: 1, borderColor: C.line, overflow: 'hidden' }}>{children}</View>
+    </View>
+  );
 }
 
 export default function App() {
@@ -56,7 +73,7 @@ export default function App() {
     <SafeAreaProvider>
       <StoreProvider>
         <View style={{ flex: 1, backgroundColor: C.bg }}>
-          <Root />
+          <Frame><Root /></Frame>
         </View>
         <StatusBar style="light" />
       </StoreProvider>
