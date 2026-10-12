@@ -361,3 +361,30 @@ test('order list: how many to order', async () => {
   assert.equal(S.orderQty(12, 10, 20), 0);
   assert.equal(S.orderQty(2.5, 10, null), 8);
 });
+
+test('Pastel Partner import file: header and detail rows, periods, codes', async () => {
+  const P = await import('../src/core/pastel.ts');
+  assert.equal(P.period('2026-03-15', 3), 1);
+  assert.equal(P.period('2026-02-10', 3), 12);
+  assert.equal(P.period('2026-10-12', 1), 10);
+  const s = { yearStartMonth: 3, taxType: '01', codes: { labour: { code: 'LAB001', lineType: 4 as const }, call_out: { code: '1000000', lineType: 6 as const } }, store: '001' };
+  const doc = {
+    kind: 'invoice' as const, number: 7001, customerCode: 'FRE001', date: '2026-10-12', dueDate: '2026-11-11', orderNumber: 'PO-14231',
+    message: 'Job 10231, ice machine', deliverTo: ['FreshMart Meerensee', 'Meerensee Mall, Richards Bay'], contact: 'Sipho Dube',
+    lines: [
+      { kind: 'labour' as const, description: 'Labour, job 10231', qty: 1.75, unitPriceCents: 65000 },
+      { kind: 'call_out' as const, description: 'Call-out', qty: 1, unitPriceCents: 45000 },
+      { kind: 'stock' as const, description: 'Water inlet valve 24V', qty: 1, unitPriceCents: 32000, stockCode: 'VALVE-01', unit: 'each' },
+    ],
+  };
+  assert.deepEqual(P.missingForPastel(doc, s), []);
+  const f = P.pastelFile([doc], s, 15).split('\r\n');
+  assert.equal(f[0], 'Header,,,,FRE001,8,12/10/2026,PO-14231,N,0,Job 10231 ice machine,,,FreshMart Meerensee,Meerensee Mall Richards Bay,,,,,0,11/11/2026,,,Sipho Dube,,,,N,');
+  assert.equal(f[0].split(',').length, 29, 'header columns A to AC');
+  assert.equal(f[1], 'Detail,0,1.75,650.00,747.50,,01,0,0,LAB001,Labour job 10231,4,,001');
+  assert.equal(f[2], 'Detail,0,1,450.00,517.50,,01,0,0,1000000,Call-out,6,,');
+  assert.equal(f[3].split(',').length, 14, 'detail columns A to N');
+  assert.equal(f[3], 'Detail,0,1,320.00,368.00,each,01,0,0,VALVE-01,Water inlet valve 24V,4,,001');
+  assert.deepEqual(P.missingForPastel({ ...doc, customerCode: null, lines: [...doc.lines, { kind: 'travel' as const, description: 'Travel', qty: 40, unitPriceCents: 900 }] }, s),
+    ["the client's Pastel customer code", 'a Pastel code for travel lines (Accounting settings)']);
+});

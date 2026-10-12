@@ -13,6 +13,7 @@ import { registerOfficeRoutes } from './routes/office.ts';
 import { registerControlRoutes } from './routes/control.ts';
 import { registerQueryRoutes } from './routes/queries.ts';
 import { registerDocumentRoutes } from './routes/documents.ts';
+import { registerPastelRoutes } from './routes/pastel.ts';
 import { registerAccessRoutes } from './routes/access.ts';
 import { registerPlatformRoutes } from './routes/platform.ts';
 import { registerStockRoutes } from './routes/stock.ts';
@@ -38,6 +39,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerControlRoutes(app);
   registerQueryRoutes(app);
   registerDocumentRoutes(app);
+  registerPastelRoutes(app);
   registerAccessRoutes(app, db);
   registerPlatformRoutes(app, db);
   registerStockRoutes(app, db, opts.invoiceReader ?? null);

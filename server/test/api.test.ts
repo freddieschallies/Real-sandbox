@@ -944,6 +944,32 @@ test('the office edits jobs (every change on the job), cancels them, and makes q
   assert.equal((await call('admin', 'GET', '/invoices')).body.find((x: { id: string }) => x.id === inv.body.id).status, 'paid');
   assert.ok(!(await call('admin', 'GET', '/office/to-invoice')).body.some((x: { id: string }) => x.id === closed));
   assert.equal((await call('tech', 'GET', '/invoices')).status, 403);
+
+  // Into Sage Pastel Partner: codes first, then one import batch; each invoice goes once.
+  const ready0 = (await call('admin', 'GET', '/pastel/ready?kind=invoice')).body;
+  const mineInv = ready0.find((x: { id: string }) => x.id === inv.body.id);
+  assert.ok(mineInv.problems.some((p: string) => /customer code/.test(p)), JSON.stringify(mineInv));
+  assert.equal((await call('admin', 'POST', '/pastel/batches', { kind: 'invoice' })).status, 409, 'nothing ready without codes');
+  const client = (await call('admin', 'GET', '/pastel/clients')).body.find((c: { name: string }) => c.name === 'FreshMart');
+  assert.equal((await call('admin', 'PUT', `/pastel/clients/${client.id}`, { code: 'FRESHMART' })).status, 400, 'max 6 characters');
+  assert.equal((await call('admin', 'PUT', `/pastel/clients/${client.id}`, { code: 'fre001' })).status, 200);
+  assert.equal((await call('admin', 'PUT', '/pastel/settings', { yearStartMonth: 3, taxType: '01', store: '001', codes: {
+    labour: { code: 'LAB001', lineType: 4 }, call_out: { code: 'CALL01', lineType: 4 }, travel: { code: '1050000', lineType: 6 }, bought_out: { code: '1000000', lineType: 6 }, other: { code: '1000000', lineType: 6 } } })).status, 200);
+  const stockLines = iv.lines.filter((l: { kind: string }) => l.kind === 'stock').length;
+  if (stockLines) await db.query("UPDATE stock_items SET code = upper(code) WHERE code IS NOT NULL");
+  const ready = (await call('admin', 'GET', '/pastel/ready?kind=invoice')).body.find((x: { id: string }) => x.id === inv.body.id);
+  assert.deepEqual(ready.problems, []);
+  const batch = await call('admin', 'POST', '/pastel/batches', { kind: 'invoice' });
+  assert.equal(batch.status, 201, JSON.stringify(batch.body));
+  assert.ok(batch.body.numbers.includes(7001));
+  const rows = batch.body.file.split('\r\n').filter(Boolean);
+  assert.match(rows[0], /^Header,,,,FRE001,\d+,\d\d\/\d\d\/\d{4},/);
+  assert.ok(rows.slice(1).every((r: string) => r.startsWith('Detail,0,')));
+  assert.ok(!(await call('admin', 'GET', '/pastel/ready?kind=invoice')).body.some((x: { id: string }) => x.id === inv.body.id), 'not sent twice');
+  const again = await app.inject({ method: 'GET', url: `/pastel/batches/${batch.body.id}/file`, headers: { authorization: `Bearer ${tokens.admin}` } });
+  assert.equal(again.statusCode, 200);
+  assert.match(String(again.headers['content-disposition']), /pastel-invoices-/);
+  assert.equal((await call('tech', 'GET', '/pastel/ready')).status, 403);
 });
 
 test('queries: the office or a technician asks any technician at any time; both see the conversation', async () => {
