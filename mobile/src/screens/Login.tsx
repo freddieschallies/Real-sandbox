@@ -9,13 +9,13 @@ export function Login() {
   const [server, setServer] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [busy, setBusy] = useState<'demo' | 'server' | null>(null);
+  const [busy, setBusy] = useState<'demo' | 'stock' | 'server' | null>(null);
   const [error, setError] = useState<string[] | null>(null);
 
-  const go = async (mode: 'demo' | 'server') => {
+  const go = async (mode: 'demo' | 'stock' | 'server') => {
     setBusy(mode); setError(null);
     const url = server.trim().replace(/\/+$/, '');
-    const r = mode === 'demo' ? await s.signIn('demo', '', 'demo', 'demo') : await s.signIn('server', url, email.trim(), password);
+    const r = mode === 'server' ? await s.signIn('server', url, email.trim(), password) : await s.signIn('demo', '', mode === 'stock' ? 'stock' : 'demo', 'demo');
     setBusy(null);
     if (!r.ok) setError(r.reasons);
   };
@@ -34,7 +34,8 @@ export function Login() {
       <Button label="Sign in" onPress={() => go('server')} busy={busy === 'server'} disabled={!server.trim() || !email.trim() || !password} />
       <View style={{ height: 1, backgroundColor: C.line, marginVertical: 12 }} />
       <Text style={st.small}>No server yet? Try the app with made-up jobs. Nothing you do in the demo is sent anywhere.</Text>
-      <Button label="Try the demo" kind="secondary" onPress={() => go('demo')} busy={busy === 'demo'} />
+      <Button label="Try the demo as technician" kind="secondary" onPress={() => go('demo')} busy={busy === 'demo'} />
+      <Button label="Try the demo as stock controller" kind="secondary" onPress={() => go('stock')} busy={busy === 'stock'} />
     </Screen>
   );
 }

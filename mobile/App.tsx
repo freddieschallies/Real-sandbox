@@ -19,6 +19,7 @@ import { MyStock } from './src/screens/MyStock.tsx';
 import { Invoice } from './src/screens/Invoice.tsx';
 import { BookOut } from './src/screens/BookOut.tsx';
 import { Return } from './src/screens/Return.tsx';
+import { StockroomApp } from './src/stockroom/StockroomApp.tsx';
 import { C } from './src/theme.ts';
 
 function Current() {
@@ -45,6 +46,8 @@ function Root() {
   if (!s.ready) return <View style={{ flex: 1, backgroundColor: C.bg, justifyContent: 'center' }}><ActivityIndicator color={C.accent} size="large" /></View>;
   if (!s.session) return <Login />;
   if (s.needsPolicy) return <Policy />;
+  // Stock controllers get the stockroom app; everyone else on the phone gets the technician app.
+  if (s.session.user.level === 'stockroom') return <NavProvider key={s.session.user.id}><StockroomApp /></NavProvider>;
   return <NavProvider key={s.session.user.id}><Current /></NavProvider>;
 }
 

@@ -1,7 +1,7 @@
 // The demo's pretend stockroom: what's on the technician's name, booking out, supplier invoices and returns,
 // following the same rules as the server (shared from server/src/core/stock.ts).
 import * as S from '../../server/src/core/stock.ts';
-import type { CatalogueLine, InventoryLine, JobStockLine, ReadLine, StockReturn, SupplierInvoice } from './types.ts';
+import type { CatalogueLine, InventoryLine, JobStockLine, ReadLine, StockRequest, StockReturn, SupplierInvoice } from './types.ts';
 
 export interface DemoStockState {
   items: { id: string; code: string; description: string; unit: string; supplierCode?: string | null; needsReview?: boolean }[];
@@ -11,6 +11,8 @@ export interface DemoStockState {
   jobLog: { jobId: string; stockItemId: string; booked: number; used: number; returned: number }[];
   invoices: SupplierInvoice[];
   returns: StockReturn[];
+  requests?: StockRequest[];
+  deliveries?: { supplierName: string; reference: string }[];
   nextNew: number;
 }
 
@@ -78,20 +80,8 @@ export class DemoStock {
     l[k] = S.round(l[k] + qty);
   }
 
-  /** In the demo the stock controller "receives" a return 30 seconds after it was sent. */
+  /** In the demo a scanned invoice is "read" 4 seconds after it arrives. */
   tick() {
-    for (const r of this.s.returns) {
-      if (r.status !== 'pending' || Date.now() - Date.parse(r.requested_at) < 30_000) continue;
-      for (const l of r.lines) {
-        l.qtyReceived = l.qty;
-        this.add(l.stockItemId, l.holdingJobId, -l.qty);
-        this.s.stockroom[l.stockItemId] = (this.s.stockroom[l.stockItemId] ?? 0) + l.qty;
-        if (l.holdingJobId) this.log(l.holdingJobId, l.stockItemId, 'returned', l.qty);
-      }
-      r.status = 'received';
-      r.received_at = new Date().toISOString();
-    }
-    // ...and a scanned invoice is "read" 4 seconds after it arrives.
     for (const i of this.s.invoices) {
       if (i.status === 'reading' && Date.now() - Date.parse(i.scanned_at) > 4_000) {
         const n = `INV-${Math.floor(70000 + Math.random() * 9999)}`;
@@ -129,19 +119,135 @@ export class DemoStock {
     return this.s.jobLog.filter(l => l.jobId === jobId).map(l => {
       const it = this.item(l.stockItemId)!;
       const on = this.s.holdings.find(h => h.stockItemId === l.stockItemId && h.holdingJobId === jobId)?.qty ?? 0;
-      return { stockItemId: it.id, code: it.code, description: it.description, unit: it.unit, booked: l.booked, used: l.used, returned: l.returned, onTechnician: on };
+      return { stockItemId: it.id, code: it.code, description: it.description, unit: it.unit, booked: l.booked, used: l.used, returned: l.returned, onTechnician: on, requested: this.asked(jobId, l.stockItemId) };
+    }).concat(this.pendingOnly(jobId));
+  }
+
+  private asked(jobId: string, stockItemId: string) {
+    return (this.s.requests ?? []).filter(r => r.job_id === jobId && r.status === 'pending').flatMap(r => r.lines)
+      .filter(l => l.stockItemId === stockItemId).reduce((n, l) => n + l.qtyRequested, 0);
+  }
+
+  private pendingOnly(jobId: string): JobStockLine[] {
+    const ids = new Set((this.s.requests ?? []).filter(r => r.job_id === jobId && r.status === 'pending').flatMap(r => r.lines.map(l => l.stockItemId)));
+    return [...ids].filter(id => !this.s.jobLog.some(l => l.jobId === jobId && l.stockItemId === id)).map(id => {
+      const it = this.item(id)!;
+      return { stockItemId: id, code: it.code, description: it.description, unit: it.unit, booked: 0, used: 0, returned: 0, onTechnician: 0, requested: this.asked(jobId, id) };
     });
   }
 
-  bookOut(jobId: string, lines: { stockItemId: string; qty: number }[]): Res {
-    const short = lines.filter(l => (this.s.stockroom[l.stockItemId] ?? 0) < l.qty).map(l => `${this.item(l.stockItemId)?.code}: only ${this.s.stockroom[l.stockItemId] ?? 0} in the stockroom`);
+  /** The technician asks; nothing moves until the stock controller issues it. */
+  request(jobId: string, b: { id?: string; at: string; lines: { stockItemId: string; qty: number }[] }, job: { number: number; store: string }): Res {
+    const short = b.lines.filter(l => (this.s.stockroom[l.stockItemId] ?? 0) < l.qty).map(l => `${this.item(l.stockItemId)?.code}: only ${this.s.stockroom[l.stockItemId] ?? 0} in the stockroom`);
     if (short.length) return bad(409, ...short);
-    for (const l of lines) {
-      this.s.stockroom[l.stockItemId] -= l.qty;
-      this.add(l.stockItemId, jobId, l.qty);
-      this.log(jobId, l.stockItemId, 'booked', l.qty);
+    const id = b.id ?? `req-${Date.now()}`;
+    (this.s.requests ??= []).push({
+      id, technician_id: 'me', technician: 'Thabo Mkhize', job_id: jobId, job_number: job.number, store: job.store, status: 'pending',
+      requested_at: new Date().toISOString(), decided_at: null, note: null,
+      lines: b.lines.map((l, i) => { const it = this.item(l.stockItemId)!; return { lineId: `${id}-${i}`, stockItemId: it.id, code: it.code, description: it.description, unit: it.unit, qtyRequested: l.qty, qtyIssued: null, inStockroom: this.s.stockroom[it.id] ?? 0 }; }),
+    });
+    return good({ id, status: 'pending' });
+  }
+
+  requests(status?: string): StockRequest[] {
+    return (this.s.requests ?? []).filter(r => !status || r.status === status)
+      .map(r => ({ ...r, lines: r.lines.map(l => ({ ...l, inStockroom: this.s.stockroom[l.stockItemId] ?? 0 })) }));
+  }
+
+  issue(id: string, b: { lines: { lineId: string; qtyIssued: number }[]; note?: string }): Res {
+    const r = (this.s.requests ?? []).find(x => x.id === id);
+    if (!r) return bad(404, 'no such request');
+    if (r.status !== 'pending') return bad(409, 'this request is already handled');
+    const given = new Map(b.lines.map(l => [l.lineId, l.qtyIssued]));
+    if (r.lines.some(l => !given.has(l.lineId))) return bad(400, 'tick every line: give the quantity issued (0 if none)');
+    const problems: string[] = [];
+    for (const l of r.lines) {
+      const g = given.get(l.lineId)!;
+      if (g > l.qtyRequested) problems.push(`${l.code}: more than was asked for (${l.qtyRequested})`);
+      else if (g > (this.s.stockroom[l.stockItemId] ?? 0)) problems.push(`${l.code}: only ${this.s.stockroom[l.stockItemId] ?? 0} in the stockroom`);
     }
-    return good(this.jobStock(jobId));
+    if (problems.length) return bad(409, ...problems);
+    if ([...given.values()].every(q => q === 0)) return bad(409, 'nothing issued: reject the request instead, with a reason');
+    for (const l of r.lines) {
+      const g = given.get(l.lineId)!;
+      l.qtyIssued = g;
+      if (g > 0) {
+        this.s.stockroom[l.stockItemId] -= g;
+        this.add(l.stockItemId, r.job_id, g);
+        if (r.job_id) this.log(r.job_id, l.stockItemId, 'booked', g);
+      }
+    }
+    Object.assign(r, { status: 'issued', decided_at: new Date().toISOString(), note: b.note ?? null });
+    return good({ id, status: 'issued', short: r.lines.filter(l => (l.qtyIssued ?? 0) < l.qtyRequested).map(l => l.code) });
+  }
+
+  reject(id: string, reason: string): Res {
+    const r = (this.s.requests ?? []).find(x => x.id === id);
+    if (!r) return bad(404, 'no such request');
+    if (r.status !== 'pending') return bad(409, 'this request is already handled');
+    if (!reason || reason.trim().length < 5) return bad(400, 'say why the request is rejected');
+    Object.assign(r, { status: 'rejected', decided_at: new Date().toISOString(), note: reason.trim() });
+    return good({ id, status: 'rejected' });
+  }
+
+  receive(id: string, b: { lines: { lineId: string; qtyReceived: number }[] }): Res {
+    const r = this.s.returns.find(x => x.id === id);
+    if (!r) return bad(404, 'no such return');
+    if (r.status !== 'pending') return bad(409, 'this return is already received');
+    const given = new Map(b.lines.map(l => [l.lineId, l.qtyReceived]));
+    if (r.lines.some(l => !given.has(l.lineId))) return bad(400, 'give the received quantity for every line of this return');
+    const short: { code: string; expected: number; received: number }[] = [];
+    for (const l of r.lines) {
+      const got = given.get(l.lineId)!;
+      if (got > l.qty) return bad(409, `${l.code}: more received than was returned (${l.qty})`);
+    }
+    for (const l of r.lines) {
+      const got = given.get(l.lineId)!;
+      l.qtyReceived = got;
+      if (got > 0) {
+        this.add(l.stockItemId, l.holdingJobId, -got);
+        this.s.stockroom[l.stockItemId] = (this.s.stockroom[l.stockItemId] ?? 0) + got;
+        if (l.holdingJobId) this.log(l.holdingJobId, l.stockItemId, 'returned', got);
+      }
+      if (got < l.qty) short.push({ code: l.code, expected: l.qty, received: got });
+    }
+    Object.assign(r, { status: 'received', received_at: new Date().toISOString() });
+    return good({ id, status: 'received', short });
+  }
+
+  stockroomList() {
+    return this.s.items.map(i => ({
+      id: i.id, code: i.code, description: i.description, unit: i.unit, needsReview: !!i.needsReview, supplierCode: i.supplierCode ?? null,
+      inStockroom: this.s.stockroom[i.id] ?? 0,
+      withTechnicians: this.s.holdings.filter(h => h.stockItemId === i.id).reduce((n, h) => n + h.qty, 0),
+    })).sort((a, b) => Number(b.needsReview) - Number(a.needsReview) || a.code.localeCompare(b.code));
+  }
+
+  nameItem(id: string, b: { code: string; description: string; unit: string }): Res {
+    const it = this.item(id);
+    if (!it) return bad(404, 'no such item');
+    if (this.s.items.some(x => x.id !== id && x.code.toLowerCase() === b.code.trim().toLowerCase())) return bad(409, `code ${b.code} is already used`);
+    Object.assign(it, { code: b.code.trim(), description: b.description.trim(), unit: b.unit.trim(), needsReview: false });
+    return good({ id, ...b, needsReview: false });
+  }
+
+  delivery(b: { supplierName: string; reference: string; lines: { stockItemId: string; qty: number }[] }): Res {
+    const d = (this.s.deliveries ??= []);
+    if (d.some(x => x.supplierName.toLowerCase() === b.supplierName.toLowerCase() && x.reference.toLowerCase() === b.reference.toLowerCase())) {
+      return bad(409, `delivery ${b.reference} from ${b.supplierName} was already received`);
+    }
+    d.push({ supplierName: b.supplierName, reference: b.reference });
+    for (const l of b.lines) this.s.stockroom[l.stockItemId] = (this.s.stockroom[l.stockItemId] ?? 0) + l.qty;
+    return good({ id: `del-${Date.now()}` });
+  }
+
+  overview() {
+    return {
+      toIssue: (this.s.requests ?? []).filter(r => r.status === 'pending').length,
+      toReceive: this.s.returns.filter(r => r.status === 'pending').length,
+      newItems: this.s.items.filter(i => i.needsReview).length,
+      invoicesToday: this.s.invoices.filter(i => i.status === 'confirmed').length,
+    };
   }
 
   use(jobId: string, stockItemId: string, qty: number): Res {
@@ -196,7 +302,7 @@ export class DemoStock {
     }
     if (problems.length) return bad(409, ...problems);
     const r: StockReturn = {
-      id: b.id ?? `ret-${Date.now()}`, status: 'pending', requested_at: new Date().toISOString(), received_at: null, note: null,
+      id: b.id ?? `ret-${Date.now()}`, technician: 'Thabo Mkhize', status: 'pending', requested_at: new Date().toISOString(), received_at: null, note: null,
       lines: b.lines.map((l, i) => {
         const it = this.item(l.stockItemId)!;
         return { lineId: `rl-${Date.now()}-${i}`, stockItemId: it.id, code: it.code, description: it.description, holdingJobId: l.holdingJobId,

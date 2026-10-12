@@ -15,7 +15,8 @@ export function MyStock() {
   const inv = s.cache.inventory ?? [];
   const invoices = s.cache.invoices ?? [];
   const returns = s.cache.returns ?? [];
-  const busy = invoices.some(i => i.status === 'reading') || returns.some(r => r.status === 'pending');
+  const requests = s.cache.requests ?? [];
+  const busy = invoices.some(i => i.status === 'reading') || returns.some(r => r.status === 'pending') || requests.some(r => r.status === 'pending');
 
   useEffect(() => { s.refresh(); }, []);
   // While an invoice is being read or a return is waiting, look again every few seconds.
@@ -48,6 +49,22 @@ export function MyStock() {
         </Card>
       ))}
       {reading.map(i => <Card key={i.id}><Body quiet>Reading a supplier invoice… you'll be asked to check it.</Body></Card>)}
+
+      {requests.filter(r => r.status === 'pending').length ? (
+        <>
+          <Heading>Requested, waiting for the stock controller</Heading>
+          {requests.filter(r => r.status === 'pending').map(r => (
+            <Card key={r.id}>
+              <Text style={st.small}>For job #{r.job_number}{r.store ? ` · ${r.store}` : ''}</Text>
+              {r.lines.map(l => <Body key={l.lineId}>{l.qtyRequested} × {l.description}</Body>)}
+              <Text style={st.small}>Not on your name until it is issued.</Text>
+            </Card>
+          ))}
+        </>
+      ) : null}
+      {requests.filter(r => r.status === 'rejected' && Date.now() - Date.parse(r.decided_at ?? r.requested_at) < 3 * 86_400_000).map(r => (
+        <Notice key={r.id} tone="bad" title={`Request for #${r.job_number} rejected`} lines={[r.note ?? '']} />
+      ))}
 
       {mustGo.length ? <><Heading>Must go back</Heading>{mustGo.map(l => <Line key={key(l)} l={l} />)}</> : null}
 

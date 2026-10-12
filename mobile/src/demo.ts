@@ -162,7 +162,13 @@ export class DemoTransport implements Transport {
     let m: RegExpMatchArray | null;
 
     if (p === '/auth/login') {
-      return ok({ token: 'demo', user: { id: 'me', name: 'Thabo Mkhize', level: 'technician' }, company: { id: 'demo', name: 'ZSP (demo)' } });
+      // The same pretend company seen as the technician or as the stock controller.
+      const controller = b.email === 'stock';
+      return ok({
+        token: controller ? 'demo-stock' : 'demo',
+        user: controller ? { id: 'stock', name: 'Lindiwe Zulu', level: 'stockroom' } : { id: 'me', name: 'Thabo Mkhize', level: 'technician' },
+        company: { id: 'demo', name: 'ZSP (demo)' },
+      });
     }
     if (p === '/policy/current') return ok({ id: 'policy-1', version: '1.0', body: DEMO_POLICY });
     if (p === '/policy/acknowledge') { this.state.acknowledged = true; this.persist(this.state); return ok({ ok: true }); }
@@ -191,8 +197,23 @@ export class DemoTransport implements Transport {
       const j = this.findJob(m[1]);
       if (!j) return refuse(404, 'no such job');
       if (j.card.status === 'closed') return refuse(409, 'job is closed');
-      return this.stockResult(this.stock().bookOut(m[1], b.lines));
+      return this.stockResult(this.stock().request(m[1], b, { number: j.meta.job_number, store: j.meta.store }), 201);
     }
+    if (p === '/me/stock-requests') return ok(this.stock().requests());
+    // Stock controller
+    if (p === '/stock/overview') return ok(this.stock().overview());
+    if (p === '/stock/issues') return ok(this.stock().requests(new URLSearchParams(req.path.split('?')[1] ?? '').get('status') ?? 'pending'));
+    if ((m = p.match(/^\/stock\/issues\/([^/]+)\/issue$/))) return this.stockResult(this.stock().issue(m[1], b));
+    if ((m = p.match(/^\/stock\/issues\/([^/]+)\/reject$/))) return this.stockResult(this.stock().reject(m[1], b.reason));
+    if (p === '/stock/returns') {
+      const st = new URLSearchParams(req.path.split('?')[1] ?? '').get('status') ?? 'pending';
+      return ok(this.stock().s.returns.filter(r => r.status === st));
+    }
+    if ((m = p.match(/^\/stock\/returns\/([^/]+)\/receive$/))) return this.stockResult(this.stock().receive(m[1], b));
+    if (p === '/stock/stockroom') return ok(this.stock().stockroomList());
+    if ((m = p.match(/^\/stock\/items\/([^/]+)$/)) && req.method === 'PATCH') return this.stockResult(this.stock().nameItem(m[1], b));
+    if (p === '/stock/deliveries') return this.stockResult(this.stock().delivery(b), 201);
+    if (p === '/stock/invoices') return ok(this.stock().s.invoices.filter(i => i.status === 'confirmed'));
     if (p === '/me/flags') return ok(this.state.flags.filter(f => f.status === 'open' || f.status === 'explained'));
     if ((m = p.match(/^\/flags\/([^/]+)\/explain$/))) {
       const f = this.state.flags.find(x => x.id === m![1]);

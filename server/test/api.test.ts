@@ -419,11 +419,37 @@ test('stock control: book out for a job, supplier invoice read and confirmed, us
   const tooMany = await call('tech', 'POST', `/jobs/${jobId}/stock-out`, { at: '2026-10-16T08:00:00+02:00', lines: [{ stockItemId: ids.seal, qty: 500 }] });
   assert.equal(tooMany.status, 409);
   assert.match(tooMany.body.reasons[0], /only \d+ in the stockroom/);
-  const out = await call('tech', 'POST', `/jobs/${jobId}/stock-out`, { at: '2026-10-16T08:00:00+02:00', lines: [{ stockItemId: ids.seal, qty: 3 }] });
-  assert.equal(out.status, 200);
-  assert.equal(out.body[0].booked, 3);
+  const asked = await call('tech', 'POST', `/jobs/${jobId}/stock-out`, { at: '2026-10-16T08:00:00+02:00', lines: [{ stockItemId: ids.seal, qty: 4 }] });
+  assert.equal(asked.status, 201);
+  assert.equal(asked.body.status, 'pending');
+  assert.equal(await holding('VALVE-01', jobId), undefined, 'nothing moves until the stock controller issues it');
+  assert.equal(await roomQty(), room0);
+  assert.equal((await call('tech', 'GET', `/jobs/${jobId}/stock`)).body[0].requested, 4);
+  assert.ok((await call('stock', 'GET', '/me/notifications')).body.some((n: { kind: string }) => n.kind === 'stock_request'));
+
+  // The stock controller picks it, ticks every line, and may issue less than asked.
+  assert.equal((await call('tech', 'GET', '/stock/issues')).status, 403);
+  const req1 = (await call('stock', 'GET', '/stock/issues')).body.find((r: { id: string }) => r.id === asked.body.id);
+  const line1 = req1.lines[0].lineId;
+  assert.equal((await call('stock', 'POST', `/stock/issues/${asked.body.id}/issue`, { at: '2026-10-16T08:10:00+02:00', lines: [] })).status, 400);
+  assert.equal((await call('stock', 'POST', `/stock/issues/${asked.body.id}/issue`, { at: '2026-10-16T08:10:00+02:00', lines: [{ lineId: line1, qtyIssued: 5 }] })).status, 409, 'not more than asked');
+  const pic = await upload('stock', '/photos', { kind: 'stock_item', takenAt: '2026-10-16T08:10:00+02:00' });
+  const issued = await call('stock', 'POST', `/stock/issues/${asked.body.id}/issue`, { at: '2026-10-16T08:10:00+02:00', lines: [{ lineId: line1, qtyIssued: 3, photoId: pic.body.id }] });
+  assert.equal(issued.status, 200, JSON.stringify(issued.body));
+  assert.deepEqual(issued.body.short, ['VALVE-01']);
+  assert.equal((await call('stock', 'POST', `/stock/issues/${asked.body.id}/issue`, { at: '2026-10-16T08:11:00+02:00', lines: [{ lineId: line1, qtyIssued: 3 }] })).status, 409, 'only once');
   assert.equal((await holding('VALVE-01', jobId))!.qty, 3);
   assert.equal(await roomQty(), room0 - 3);
+  const out = { body: (await call('tech', 'GET', `/jobs/${jobId}/stock`)).body };
+  assert.equal(out.body[0].booked, 3);
+  assert.equal(out.body[0].requested, 0);
+
+  // A request can be rejected, with a reason; nothing moves.
+  const asked2 = await call('tech', 'POST', `/jobs/${jobId}/stock-out`, { at: '2026-10-16T08:20:00+02:00', lines: [{ stockItemId: ids.seal, qty: 1 }] });
+  assert.equal((await call('stock', 'POST', `/stock/issues/${asked2.body.id}/reject`, { at: '2026-10-16T08:21:00+02:00', reason: '' })).status, 400);
+  assert.equal((await call('stock', 'POST', `/stock/issues/${asked2.body.id}/reject`, { at: '2026-10-16T08:21:00+02:00', reason: 'Use the one in your van first' })).status, 200);
+  assert.equal(await roomQty(), room0 - 3);
+  assert.equal((await call('tech', 'GET', '/me/stock-requests')).body.find((r: { id: string }) => r.id === asked2.body.id).status, 'rejected');
 
   // Supplier invoice: photo in, read automatically, technician checks and confirms.
   fakeReader = async () => ({
@@ -507,6 +533,22 @@ test('stock control: book out for a job, supplier invoice read and confirmed, us
   assert.equal(shortFlag.technician_id, ids.tech);
   assert.match(shortFlag.question, /stays on your name/);
   assert.equal((await call('stock', 'POST', `/stock/returns/${ret.body.id}/receive`, { lines: [] })).status, 400);
+
+  // Deliveries into the stockroom, and naming the new items from invoices.
+  const delivered = await call('stock', 'POST', '/stock/deliveries', { at: '2026-10-17T09:00:00+02:00', supplierName: 'Voltex Richards Bay', reference: 'DN-5512', lines: [{ stockItemId: ids.seal, qty: 10 }] });
+  assert.equal(delivered.status, 201);
+  assert.equal(await roomQty(), room0 - 3 + 1 + 10);
+  assert.equal((await call('stock', 'POST', '/stock/deliveries', { at: '2026-10-17T09:05:00+02:00', supplierName: 'voltex richards bay', reference: 'dn-5512', lines: [{ stockItemId: ids.seal, qty: 10 }] })).status, 409, 'same delivery twice');
+  assert.equal((await call('tech', 'POST', '/stock/deliveries', { at: '2026-10-17T09:00:00+02:00', supplierName: 'X', reference: 'Y', lines: [{ stockItemId: ids.seal, qty: 1 }] })).status, 403);
+  const room = (await call('stock', 'GET', '/stock/stockroom')).body;
+  const newOne = room.find((i: { code: string }) => i.code === 'NEW-1001');
+  assert.equal(newOne.needsReview, true);
+  assert.equal(newOne.withTechnicians, 1);
+  assert.equal((await call('stock', 'PATCH', `/stock/items/${newOne.id}`, { code: 'VALVE-01', description: 'Cable ties', unit: 'each' })).status, 409, 'code already used');
+  const named = await call('stock', 'PATCH', `/stock/items/${newOne.id}`, { code: 'TIE-300', description: 'Cable ties 300mm (100)', unit: 'pack' });
+  assert.equal(named.body.needsReview, false);
+  assert.equal((await holding('TIE-300', jobId))!.qty, 1, 'still on his name under the new code');
+  assert.equal((await call('stock', 'GET', '/stock/overview')).body.newItems, 1, 'NEW-1002 still to name');
 
   // The movement record can't be quietly changed.
   await assert.rejects(db.query('UPDATE stock_movements SET qty = 1 WHERE stock_item_id = $1', [ids.seal]), /cannot be edited/);

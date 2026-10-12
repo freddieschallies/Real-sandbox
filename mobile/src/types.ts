@@ -90,7 +90,7 @@ export interface InventoryLine {
 
 export interface CatalogueLine { id: string; code: string; description: string; unit: string; inStockroom: number }
 
-export interface JobStockLine { stockItemId: string; code: string; description: string; unit: string; booked: number; used: number; returned: number; onTechnician: number }
+export interface JobStockLine { stockItemId: string; code: string; description: string; unit: string; booked: number; used: number; returned: number; onTechnician: number; requested: number }
 
 export interface ReadLine { description: string; supplierCode: string | null; qty: number; unitPriceCents: number | null }
 
@@ -112,6 +112,13 @@ export interface SupplierInvoice {
 }
 
 export interface StockReturn {
-  id: string; status: 'pending' | 'received'; requested_at: string; received_at: string | null; note: string | null;
+  id: string; technician?: string; status: 'pending' | 'received'; requested_at: string; received_at: string | null; note: string | null;
   lines: { lineId: string; stockItemId: string; code: string; description: string; holdingJobId: string | null; jobNumber: number | null; qty: number; qtyReceived: number | null }[];
+}
+
+/** A request to the stockroom: nothing is on the technician's name until the stock controller issues it. */
+export interface StockRequest {
+  id: string; technician_id?: string; technician?: string; job_id: string | null; job_number: number | null; store: string | null;
+  status: 'pending' | 'issued' | 'rejected'; requested_at: string; decided_at: string | null; note: string | null;
+  lines: { lineId: string; stockItemId: string; code: string; description: string; unit: string; qtyRequested: number; qtyIssued: number | null; inStockroom: number }[];
 }

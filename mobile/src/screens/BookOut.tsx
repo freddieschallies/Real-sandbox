@@ -7,7 +7,7 @@ import { nowIso } from '../device.ts';
 import { Body, Button, Card, Field, Heading, Notice, Screen, Stepper, st } from '../ui.tsx';
 import { SyncPill } from './SyncPill.tsx';
 import { C } from '../theme.ts';
-import type { InventoryLine } from '../types.ts';
+import type { StockRequest } from '../types.ts';
 
 export function BookOut({ jobId }: { jobId: string }) {
   const s = useStore();
@@ -23,38 +23,35 @@ export function BookOut({ jobId }: { jobId: string }) {
 
   const book = () => {
     if (!chosen.length) { setReasons(['choose at least one item']); return; }
+    const id = s.newId();
+    const at = nowIso();
     const lines = chosen.map(([stockItemId, qty]) => ({ stockItemId, qty }));
-    s.queue(`Booked out ${lines.length} item${lines.length > 1 ? 's' : ''} for #${card?.job_number ?? ''}`,
-      { method: 'POST', path: `/jobs/${jobId}/stock-out`, json: { at: nowIso(), lines } }, jobId);
-    // Show it on the phone straight away; the office confirms when the request arrives.
-    s.patchCache(c => {
-      const inventory = (c.inventory ?? []).map(x => ({ ...x }));
-      const jobStock = (c.jobStock?.[jobId] ?? []).map(x => ({ ...x }));
-      const stock = c.stock.map(x => ({ ...x }));
-      for (const l of lines) {
+    s.queue(`Stock request for #${card?.job_number ?? ''} (${lines.length} item${lines.length > 1 ? 's' : ''})`,
+      { method: 'POST', path: `/jobs/${jobId}/stock-out`, json: { id, at, lines } }, jobId);
+    // Shown as requested straight away; it goes on his name only when the stock controller issues it.
+    const req: StockRequest = {
+      id, job_id: jobId, job_number: card?.job_number ?? null, store: card?.store ?? null, status: 'pending', requested_at: at, decided_at: null, note: null,
+      lines: lines.map((l, i) => {
         const it = cat.find(x => x.id === l.stockItemId)!;
-        const h = inventory.find(x => x.stockItemId === l.stockItemId && x.holdingJobId === jobId);
-        if (h) h.qty += l.qty;
-        else inventory.push({ stockItemId: it.id, code: it.code, description: it.description, unit: it.unit, needsReview: false, holdingJobId: jobId,
-          jobNumber: card?.job_number ?? null, jobStatus: card?.status ?? null, store: card?.store ?? null, qty: l.qty, pendingReturn: 0, mustReturn: false } as InventoryLine);
+        return { lineId: `${id}-${i}`, stockItemId: it.id, code: it.code, description: it.description, unit: it.unit, qtyRequested: l.qty, qtyIssued: null, inStockroom: it.inStockroom };
+      }),
+    };
+    s.patchCache(c => {
+      const jobStock = (c.jobStock?.[jobId] ?? []).map(x => ({ ...x }));
+      for (const l of req.lines) {
         const js = jobStock.find(x => x.stockItemId === l.stockItemId);
-        if (js) { js.booked += l.qty; js.onTechnician += l.qty; }
-        else jobStock.push({ stockItemId: it.id, code: it.code, description: it.description, unit: it.unit, booked: l.qty, used: 0, returned: 0, onTechnician: l.qty });
-        const st = stock.find(x => x.id === l.stockItemId);
-        if (st) st.qty += l.qty; else stock.push({ id: it.id, code: it.code, description: it.description, unit: it.unit, qty: l.qty });
+        if (js) js.requested += l.qtyRequested;
+        else jobStock.push({ stockItemId: l.stockItemId, code: l.code, description: l.description, unit: l.unit, booked: 0, used: 0, returned: 0, onTechnician: 0, requested: l.qtyRequested });
       }
-      return {
-        ...c, inventory, stock, jobStock: { ...c.jobStock, [jobId]: jobStock },
-        catalogue: (c.catalogue ?? []).map(x => ({ ...x, inStockroom: x.inStockroom - (basket[x.id] ?? 0) })),
-      };
+      return { ...c, requests: [req, ...(c.requests ?? [])], jobStock: { ...c.jobStock, [jobId]: jobStock } };
     });
     nav.back();
   };
 
   return (
-    <Screen title="Book out from stockroom" sub={card ? `For #${card.job_number} · ${card.store}` : undefined} onBack={nav.back} right={<SyncPill />}
-      footer={<Button label={chosen.length ? `Book out ${chosen.length} item${chosen.length > 1 ? 's' : ''}` : 'Book out'} onPress={book} disabled={!chosen.length} />}>
-      <Body quiet>What you book out goes on your name for this job until you use it on the job card or the stock controller confirms you returned it.</Body>
+    <Screen title="Book stock for this job" sub={card ? `#${card.job_number} · ${card.store}` : undefined} onBack={nav.back} right={<SyncPill />}
+      footer={<Button label={chosen.length ? `Send request: ${chosen.length} item${chosen.length > 1 ? 's' : ''}` : 'Send request'} onPress={book} disabled={!chosen.length} />}>
+      <Body quiet>The stock controller picks it and issues it to you. From then it is on your name for this job, until you use it on the job card or return it.</Body>
       {reasons ? <Notice tone="bad" title="Still needed:" lines={reasons} /> : null}
       <Field label="Search" value={q} onChangeText={setQ} placeholder="code or description" autoCorrect={false} />
       {!cat.length ? <Body quiet>The stockroom list isn't on the phone yet. It needs signal once.</Body> : null}

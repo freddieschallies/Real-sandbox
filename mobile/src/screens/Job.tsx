@@ -63,6 +63,7 @@ export function Job({ jobId }: { jobId: string }) {
 
       {(state === 'not_started' || state === 'continue_later' || (state === 'done' && v.status !== 'in_progress')) ? (
         <>
+          <JobStock jobId={jobId} closed={false} beforeLeaving />
           {state === 'continue_later' ? <Notice tone="warn" title="Continue later" lines={['Tap Go when you leave for this store again. A new visit starts.']} /> : null}
           <Button label="Go – I'm on the way" onPress={() => run(`On the way to ${v.store}`, c => J.go(c, nowIso()), 'go', { at: nowIso() })} />
         </>
@@ -109,7 +110,7 @@ export function Job({ jobId }: { jobId: string }) {
         </>
       ) : null}
 
-      <JobStock jobId={jobId} closed={state === 'closed'} />
+      {!['not_started', 'continue_later'].includes(state) ? <JobStock jobId={jobId} closed={state === 'closed'} /> : null}
 
       {state === 'working' ? (
         <>
@@ -225,7 +226,7 @@ function PauseBox({ onPause }: { onPause: (r: J.PauseReason) => boolean }) {
 }
 
 /** Stock for this job: booked out, used on the card, and still on the technician's name. */
-function JobStock({ jobId, closed }: { jobId: string; closed: boolean }) {
+function JobStock({ jobId, closed, beforeLeaving }: { jobId: string; closed: boolean; beforeLeaving?: boolean }) {
   const s = useStore();
   const nav = useNav();
   const lines = s.cache.jobStock?.[jobId] ?? [];
@@ -244,18 +245,21 @@ function JobStock({ jobId, closed }: { jobId: string; closed: boolean }) {
           {lines.map(l => (
             <View key={l.stockItemId} style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
               <Text style={[st.body, { flex: 1 }]} numberOfLines={1}>{l.description}</Text>
-              <Text style={st.small}>out {l.booked} · used {l.used}{l.returned ? ` · back ${l.returned}` : ''}</Text>
+              <Text style={st.small}>{l.requested ? `asked ${l.requested} · ` : ''}out {l.booked} · used {l.used}{l.returned ? ` · back ${l.returned}` : ''}</Text>
               <Text style={{ color: l.onTechnician > 0 ? (closed ? C.bad : C.warn) : C.good, fontWeight: '700', minWidth: 28, textAlign: 'right' }}>{l.onTechnician}</Text>
             </View>
           ))}
-          <Text style={st.small}>Last column: still on your name for this job.</Text>
+          <Text style={st.small}>Last column: on your name for this job. "Asked" waits for the stock controller.</Text>
         </Card>
-      ) : <Body quiet>Nothing booked out for this job yet.</Body>}
+      ) : <Body quiet>{beforeLeaving ? 'Book what you need before you leave the office.' : 'Nothing booked out for this job yet.'}</Body>}
+      {(s.cache.requests ?? []).filter(r => r.job_id === jobId && r.status === 'rejected').slice(0, 2).map(r => (
+        <Notice key={r.id} tone="bad" title="Stock request rejected" lines={[r.note ?? '']} />
+      ))}
       {closed && left.length ? <Notice tone="bad" title="Return what was not used" lines={left.map(l => `${l.onTechnician} × ${l.description}`)} /> : null}
       {closed && left.length ? <Button label="Return to stockroom" kind="secondary" onPress={() => nav.push({ name: 'return' })} /> : null}
       {!closed ? (
         <View style={{ flexDirection: 'row', gap: 10 }}>
-          <Button label="Book out" kind="secondary" onPress={() => nav.push({ name: 'bookout', jobId })} style={{ flex: 1 }} />
+          <Button label="Book stock" kind={beforeLeaving ? 'primary' : 'secondary'} onPress={() => nav.push({ name: 'bookout', jobId })} style={{ flex: 1 }} />
           <Button label="Scan invoice" kind="secondary" onPress={() => nav.push({ name: 'invoice', jobId })} style={{ flex: 1 }} />
         </View>
       ) : null}

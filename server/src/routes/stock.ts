@@ -61,36 +61,38 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
 
   // ---- Booking out from the stockroom for a job ----------------------------
 
-  app.post('/jobs/:id/stock-out', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+  // A request: nothing leaves the stockroom until the stock controller picks it and issues it.
+  app.post('/jobs/:id/stock-out', async (req: FastifyRequest<{ Params: { id: string } }>, reply) => {
     const jobId = parse(Uuid, req.params.id);
-    const b = parse(z.object({ at: Iso, lines: z.array(z.object({ stockItemId: Uuid, qty: z.number().positive() })).min(1).max(50) }), req.body);
+    const b = parse(z.object({ id: Uuid.optional(), at: Iso, lines: z.array(z.object({ stockItemId: Uuid, qty: z.number().positive() })).min(1).max(50) }), req.body);
     const me = req.actor.id;
-    return tx(req.db, async c => {
-      const job = (await c.query('SELECT status, job_number FROM jobs WHERE id = $1 FOR UPDATE', [jobId])).rows[0];
+    const out = await tx(req.db, async c => {
+      const job = (await c.query('SELECT status, job_number FROM jobs WHERE id = $1', [jobId])).rows[0];
       if (!job) throw new Refused(404, ['no such job']);
       if (!(await isOnJob(c, jobId, me))) throw new Refused(403, ['you are not assigned to this job']);
       if (job.status === 'closed') throw new Refused(409, ['job is closed']);
-      await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['stockroom']);
       const short: string[] = [];
       for (const l of b.lines) {
         const have = await stockroomQty(c, l.stockItemId);
         if (have < l.qty) {
           const it = (await c.query('SELECT code FROM stock_items WHERE id = $1', [l.stockItemId])).rows[0];
-          short.push(`${it?.code ?? 'unknown item'}: only ${have} in the stockroom`);
+          if (!it) throw new Refused(404, ['unknown stock item']);
+          short.push(`${it.code}: only ${have} in the stockroom`);
         }
       }
       if (short.length) throw new Refused(409, short);
+      const id = b.id ?? randomUUID();
+      await c.query('INSERT INTO stock_issues (id, technician_id, job_id, requested_at) VALUES ($1, $2, $3, $4)', [id, me, jobId, b.at]);
       for (const l of b.lines) {
-        await c.query(
-          `INSERT INTO stock_movements (stock_item_id, qty, kind, from_stockroom, to_technician_id, holding_job_id, job_id, created_by)
-           VALUES ($1, $2, 'assign', true, $3, $4, $4, $3)`,
-          [l.stockItemId, l.qty, me, jobId],
-        );
+        await c.query('INSERT INTO stock_issue_lines (issue_id, stock_item_id, qty_requested) VALUES ($1, $2, $3)', [id, l.stockItemId, l.qty]);
       }
-      await audit(c, me, 'stock_booked_out', 'job', jobId, { lines: b.lines, at: b.at });
-      return jobStock(c, jobId);
+      for (const u of await stockControllers(c)) await notify(c, u, 'stock_request', `${await nameOf(c, me)} needs ${b.lines.length} item${b.lines.length > 1 ? 's' : ''} for job #${job.job_number}`, { issueId: id });
+      return { id, status: 'pending' };
     });
+    return reply.code(201).send(out);
   });
+
+  app.get('/me/stock-requests', async req => issuesWhere(req.db, 'i.technician_id = $1', [req.actor.id]));
 
   app.get('/jobs/:id/stock', async (req: FastifyRequest<{ Params: { id: string } }>) => {
     const jobId = parse(Uuid, req.params.id);
@@ -265,7 +267,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
   app.post('/stock/returns/:id/receive', async (req: FastifyRequest<{ Params: { id: string } }>) => {
     if (!can(req.actor, 'manage_stockroom')) throw new Refused(403, ['stock controller only']);
     const id = parse(Uuid, req.params.id);
-    const b = parse(z.object({ lines: z.array(z.object({ lineId: Uuid, qtyReceived: z.number().min(0) })).min(1), note: z.string().trim().max(1000).optional() }), req.body);
+    const b = parse(z.object({ lines: z.array(z.object({ lineId: Uuid, qtyReceived: z.number().min(0), photoId: Uuid.optional() })).min(1), note: z.string().trim().max(1000).optional() }), req.body);
     const me = req.actor.id;
     return tx(req.db, async c => {
       const r = (await c.query('SELECT technician_id, status FROM stock_returns WHERE id = $1 FOR UPDATE', [id])).rows[0];
@@ -277,6 +279,10 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
         `SELECT l.id, l.stock_item_id, l.holding_job_id, l.qty, i.code FROM stock_return_lines l JOIN stock_items i ON i.id = l.stock_item_id
           WHERE l.return_id = $1`, [id])).rows;
       const given = new Map(b.lines.map(l => [l.lineId, l.qtyReceived]));
+      const photos = new Map(b.lines.filter(l => l.photoId).map(l => [l.lineId, l.photoId!]));
+      for (const pid of photos.values()) {
+        if (!(await c.query("SELECT 1 FROM photos WHERE id = $1 AND kind = 'stock_item' AND taken_by = $2", [pid, me])).rowCount) throw new Refused(409, ['upload the photo first']);
+      }
       if (lines.some(l => !given.has(l.id)) || b.lines.some(l => !lines.some(x => x.id === l.lineId))) {
         throw new Refused(400, ['give the received quantity for every line of this return']);
       }
@@ -284,7 +290,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
       for (const l of lines) {
         const got = given.get(l.id)!;
         if (got > Number(l.qty)) throw new Refused(409, [`${l.code}: more received than was returned (${l.qty})`]);
-        await c.query('UPDATE stock_return_lines SET qty_received = $2 WHERE id = $1', [l.id, got]);
+        await c.query('UPDATE stock_return_lines SET qty_received = $2, photo_id = $3 WHERE id = $1', [l.id, got, photos.get(l.id) ?? null]);
         if (got > 0) {
           await c.query(
             `INSERT INTO stock_movements (stock_item_id, qty, kind, from_technician_id, holding_job_id, to_stockroom, return_line_id, created_by)
@@ -309,6 +315,179 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
       return { id, status: 'received', short };
     });
   });
+  // ---- Stock controller ---------------------------------------------------------
+
+  const controller = (req: FastifyRequest, action: 'assign_stock' | 'manage_stockroom' = 'manage_stockroom') => {
+    if (!can(req.actor, action)) throw new Refused(403, ['stock controller only']);
+  };
+
+  app.get('/stock/overview', async req => {
+    controller(req);
+    const n = async (sql: string) => Number((await req.db.query(sql)).rows[0].n);
+    return {
+      toIssue: await n("SELECT count(*) AS n FROM stock_issues WHERE status = 'pending'"),
+      toReceive: await n("SELECT count(*) AS n FROM stock_returns WHERE status = 'pending'"),
+      newItems: await n('SELECT count(*) AS n FROM stock_items WHERE needs_review AND active'),
+      invoicesToday: await n("SELECT count(*) AS n FROM supplier_invoices WHERE status = 'confirmed' AND confirmed_at > now() - interval '1 day'"),
+    };
+  });
+
+  app.get('/stock/issues', async req => {
+    controller(req, 'assign_stock');
+    const q = parse(z.object({ status: z.enum(['pending', 'issued', 'rejected']).default('pending') }), req.query);
+    return issuesWhere(req.db, 'i.status = $1', [q.status]);
+  });
+
+  app.post('/stock/issues/:id/issue', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    controller(req, 'assign_stock');
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({
+      at: Iso, note: z.string().trim().max(1000).optional(),
+      lines: z.array(z.object({ lineId: Uuid, qtyIssued: z.number().min(0), photoId: Uuid.optional() })).min(1),
+    }), req.body);
+    const me = req.actor.id;
+    return tx(req.db, async c => {
+      const i = (await c.query('SELECT technician_id, job_id, status FROM stock_issues WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!i) throw new Refused(404, ['no such request']);
+      if (i.status !== 'pending') throw new Refused(409, ['this request is already handled']);
+      if (i.technician_id === me) throw new Refused(403, ['someone else must issue stock to you']);
+      await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['stockroom']);
+      const lines = (await c.query(
+        'SELECT l.id, l.stock_item_id, l.qty_requested, s.code FROM stock_issue_lines l JOIN stock_items s ON s.id = l.stock_item_id WHERE l.issue_id = $1', [id])).rows;
+      const given = new Map(b.lines.map(l => [l.lineId, l]));
+      if (lines.some(l => !given.has(l.id)) || b.lines.some(l => !lines.some(x => x.id === l.lineId))) {
+        throw new Refused(400, ['tick every line: give the quantity issued (0 if none)']);
+      }
+      const problems: string[] = [];
+      for (const l of lines) {
+        const g = given.get(l.id)!;
+        if (g.qtyIssued > Number(l.qty_requested)) problems.push(`${l.code}: more than was asked for (${l.qty_requested})`);
+        else if (g.qtyIssued > await stockroomQty(c, l.stock_item_id)) problems.push(`${l.code}: only ${await stockroomQty(c, l.stock_item_id)} in the stockroom`);
+        if (g.photoId) {
+          const ph = await c.query("SELECT 1 FROM photos WHERE id = $1 AND kind = 'stock_item' AND taken_by = $2", [g.photoId, me]);
+          if (!ph.rowCount) problems.push(`${l.code}: upload the photo first`);
+        }
+      }
+      if (problems.length) throw new Refused(409, problems);
+      let total = 0;
+      for (const l of lines) {
+        const g = given.get(l.id)!;
+        await c.query('UPDATE stock_issue_lines SET qty_issued = $2, photo_id = $3 WHERE id = $1', [l.id, g.qtyIssued, g.photoId ?? null]);
+        if (g.qtyIssued > 0) {
+          total += g.qtyIssued;
+          await c.query(
+            `INSERT INTO stock_movements (stock_item_id, qty, kind, from_stockroom, to_technician_id, holding_job_id, job_id, issue_line_id, created_by)
+             VALUES ($1, $2, 'assign', true, $3, $4, $4, $5, $6)`,
+            [l.stock_item_id, g.qtyIssued, i.technician_id, i.job_id, l.id, me],
+          );
+        }
+      }
+      if (total === 0) throw new Refused(409, ['nothing issued: reject the request instead, with a reason']);
+      await c.query("UPDATE stock_issues SET status = 'issued', decided_by = $2, decided_at = $3, note = $4 WHERE id = $1", [id, me, b.at, b.note ?? null]);
+      const short = lines.filter(l => given.get(l.id)!.qtyIssued < Number(l.qty_requested)).map(l => l.code);
+      await notify(c, i.technician_id, 'stock_issued', short.length ? `Stock issued to you, but short on ${short.join(', ')}` : 'Your stock request was issued: it is on your name now', { issueId: id });
+      await audit(c, me, 'stock_issued', 'stock_issue', id, { lines: b.lines });
+      return { id, status: 'issued', short };
+    });
+  });
+
+  app.post('/stock/issues/:id/reject', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    controller(req, 'assign_stock');
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ at: Iso, reason: z.string().trim().min(5, 'say why the request is rejected').max(1000) }), req.body);
+    return tx(req.db, async c => {
+      const i = (await c.query('SELECT technician_id, status FROM stock_issues WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!i) throw new Refused(404, ['no such request']);
+      if (i.status !== 'pending') throw new Refused(409, ['this request is already handled']);
+      await c.query("UPDATE stock_issues SET status = 'rejected', decided_by = $2, decided_at = $3, note = $4 WHERE id = $1", [id, req.actor.id, b.at, b.reason]);
+      await notify(c, i.technician_id, 'stock_rejected', `Your stock request was rejected: ${b.reason}`, { issueId: id });
+      await audit(c, req.actor.id, 'stock_request_rejected', 'stock_issue', id, { reason: b.reason });
+      return { id, status: 'rejected' };
+    });
+  });
+
+  // The stockroom itself: levels, items, and deliveries coming in from suppliers.
+  app.get('/stock/stockroom', async req => {
+    controller(req);
+    const { rows } = await req.db.query(
+      `SELECT i.id, i.code, i.description, i.unit, i.needs_review, i.supplier_code, COALESCE(s.qty, 0) AS in_stockroom,
+              COALESCE((SELECT SUM(h.qty) FROM technician_holdings h WHERE h.stock_item_id = i.id), 0) AS with_technicians
+         FROM stock_items i LEFT JOIN stockroom_stock s ON s.stock_item_id = i.id
+        WHERE i.active ORDER BY i.needs_review DESC, i.code`,
+    );
+    return rows.map(r => ({ id: r.id, code: r.code, description: r.description, unit: r.unit, needsReview: r.needs_review,
+      supplierCode: r.supplier_code, inStockroom: Number(r.in_stockroom), withTechnicians: Number(r.with_technicians) }));
+  });
+
+  app.post('/stock/items', async (req, reply) => {
+    controller(req);
+    const b = parse(z.object({ id: Uuid.optional(), code: z.string().trim().min(2).max(40), description: z.string().trim().min(2).max(300), unit: z.string().trim().min(1).max(20).default('each') }), req.body);
+    const out = await tx(req.db, async c => {
+      if ((await c.query('SELECT 1 FROM stock_items WHERE lower(code) = lower($1)', [b.code])).rowCount) throw new Refused(409, [`code ${b.code} is already used`]);
+      const id = b.id ?? randomUUID();
+      await c.query('INSERT INTO stock_items (id, code, description, unit) VALUES ($1, $2, $3, $4)', [id, b.code, b.description, b.unit]);
+      await audit(c, req.actor.id, 'stock_item_created', 'stock_item', id, b);
+      return { id };
+    });
+    return reply.code(201).send(out);
+  });
+
+  // Gives a new item (from a supplier invoice) its proper code and name.
+  app.patch('/stock/items/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    controller(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ code: z.string().trim().min(2).max(40), description: z.string().trim().min(2).max(300), unit: z.string().trim().min(1).max(20) }), req.body);
+    return tx(req.db, async c => {
+      const it = (await c.query('SELECT code, description, unit FROM stock_items WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!it) throw new Refused(404, ['no such item']);
+      if ((await c.query('SELECT 1 FROM stock_items WHERE lower(code) = lower($1) AND id <> $2', [b.code, id])).rowCount) throw new Refused(409, [`code ${b.code} is already used`]);
+      await c.query('UPDATE stock_items SET code = $2, description = $3, unit = $4, needs_review = false WHERE id = $1', [id, b.code, b.description, b.unit]);
+      await audit(c, req.actor.id, 'stock_item_named', 'stock_item', id, { before: it, after: b });
+      return { id, ...b, needsReview: false };
+    });
+  });
+
+  app.post('/stock/deliveries', async (req, reply) => {
+    controller(req);
+    const b = parse(z.object({
+      id: Uuid.optional(), at: Iso, supplierName: z.string().trim().min(2).max(200), reference: z.string().trim().min(1).max(60),
+      photoId: Uuid.optional(), lines: z.array(z.object({ stockItemId: Uuid, qty: z.number().positive() })).min(1).max(200),
+    }), req.body);
+    const me = req.actor.id;
+    const out = await tx(req.db, async c => {
+      if (b.photoId && !(await c.query("SELECT 1 FROM photos WHERE id = $1 AND kind = 'delivery_note' AND taken_by = $2", [b.photoId, me])).rowCount) {
+        throw new Refused(409, ['upload the delivery note photo first']);
+      }
+      const dup = await c.query('SELECT 1 FROM stock_deliveries WHERE lower(supplier_name) = lower($1) AND lower(reference) = lower($2)', [b.supplierName, b.reference]);
+      if (dup.rowCount) throw new Refused(409, [`delivery ${b.reference} from ${b.supplierName} was already received`]);
+      const supplierId = await learnSupplier(c, me, b.supplierName);
+      const id = b.id ?? randomUUID();
+      await c.query('INSERT INTO stock_deliveries (id, supplier_id, supplier_name, reference, photo_id, received_by, received_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [id, supplierId, b.supplierName, b.reference, b.photoId ?? null, me, b.at]);
+      for (const l of b.lines) {
+        await c.query(`INSERT INTO stock_movements (stock_item_id, qty, kind, to_stockroom, delivery_id, created_by) VALUES ($1, $2, 'receive', true, $3, $4)`,
+          [l.stockItemId, l.qty, id, me]);
+      }
+      await audit(c, me, 'stock_delivery_received', 'stock_delivery', id, { lines: b.lines.length });
+      return { id };
+    });
+    return reply.code(201).send(out);
+  });
+
+  // Supplier invoices the technicians booked, for the stock controller to check against.
+  app.get('/stock/invoices', async req => {
+    controller(req);
+    const { rows } = await req.db.query(
+      `SELECT i.id, i.status, u.full_name AS technician, j.job_number, i.supplier_name, i.invoice_number, i.total_cents, i.confirmed_at,
+              i.changed_from_read, i.photo_id,
+              (SELECT json_agg(json_build_object('description', l.description, 'qty', l.qty, 'unitPriceCents', l.unit_price_cents) ORDER BY l.line_no)
+                 FROM supplier_invoice_lines l WHERE l.invoice_id = i.id) AS lines
+         FROM supplier_invoices i JOIN users u ON u.id = i.technician_id LEFT JOIN jobs j ON j.id = i.job_id
+        WHERE i.status = 'confirmed' ORDER BY i.confirmed_at DESC LIMIT 100`,
+    );
+    return rows;
+  });
+
 }
 
 // ---- Helpers -------------------------------------------------------------------
@@ -353,10 +532,36 @@ async function jobStock(c: Q, jobId: string) {
   );
   const held = await c.query('SELECT stock_item_id, SUM(qty) AS qty FROM technician_holdings WHERE holding_job_id = $1 GROUP BY stock_item_id', [jobId]);
   const left = new Map(held.rows.map(r => [r.stock_item_id, Number(r.qty)]));
-  return rows.map(r => ({
+  // Asked for, not yet issued by the stock controller.
+  const asked = (await c.query(
+    `SELECT it.id AS stock_item_id, it.code, it.description, it.unit, SUM(l.qty_requested) AS qty
+       FROM stock_issues i JOIN stock_issue_lines l ON l.issue_id = i.id JOIN stock_items it ON it.id = l.stock_item_id
+      WHERE i.job_id = $1 AND i.status = 'pending' GROUP BY it.id`, [jobId])).rows;
+  const out = rows.map(r => ({
     stockItemId: r.stock_item_id, code: r.code, description: r.description, unit: r.unit,
-    booked: Number(r.booked), used: Number(r.used), returned: Number(r.returned), onTechnician: left.get(r.stock_item_id) ?? 0,
+    booked: Number(r.booked), used: Number(r.used), returned: Number(r.returned), onTechnician: left.get(r.stock_item_id) ?? 0, requested: 0,
   }));
+  for (const a of asked) {
+    const o = out.find(x => x.stockItemId === a.stock_item_id);
+    if (o) o.requested = Number(a.qty);
+    else out.push({ stockItemId: a.stock_item_id, code: a.code, description: a.description, unit: a.unit, booked: 0, used: 0, returned: 0, onTechnician: 0, requested: Number(a.qty) });
+  }
+  return out;
+}
+
+async function issuesWhere(c: Q, where: string, params: unknown[]) {
+  const { rows } = await c.query(
+    `SELECT i.id, i.technician_id, u.full_name AS technician, i.job_id, j.job_number, s.name AS store, i.status, i.requested_at, i.decided_at, i.note,
+            json_agg(json_build_object('lineId', l.id, 'stockItemId', l.stock_item_id, 'code', it.code, 'description', it.description, 'unit', it.unit,
+                     'qtyRequested', l.qty_requested, 'qtyIssued', l.qty_issued, 'inStockroom', COALESCE(ss.qty, 0)) ORDER BY it.code) AS lines
+       FROM stock_issues i JOIN users u ON u.id = i.technician_id
+       JOIN stock_issue_lines l ON l.issue_id = i.id JOIN stock_items it ON it.id = l.stock_item_id
+       LEFT JOIN stockroom_stock ss ON ss.stock_item_id = l.stock_item_id
+       LEFT JOIN jobs j ON j.id = i.job_id LEFT JOIN stores s ON s.id = j.store_id
+      WHERE ${where} GROUP BY i.id, u.full_name, j.job_number, s.name ORDER BY i.requested_at LIMIT 100`,
+    params,
+  );
+  return rows.map(r => ({ ...r, lines: r.lines.map((l: Record<string, unknown>) => ({ ...l, qtyRequested: Number(l.qtyRequested), qtyIssued: l.qtyIssued == null ? null : Number(l.qtyIssued), inStockroom: Number(l.inStockroom) })) }));
 }
 
 async function returnsWhere(c: Q, where: string, params: unknown[]) {

@@ -10,7 +10,7 @@ import { DemoTransport, seedDemo, type DemoState } from './demo.ts';
 import { Outbox, type Blocked, type Entry } from './outbox.ts';
 import { Offline, reasonsOf, type Request, type Transport, type Upload } from './transport.ts';
 import { apply, J } from './local.ts';
-import type { CardView, CatalogueLine, Flag, InventoryLine, JobStockLine, Policy, Session, StockLine, StockReturn, SupplierInvoice, Today } from './types.ts';
+import type { CardView, CatalogueLine, Flag, InventoryLine, JobStockLine, Policy, Session, StockLine, StockRequest, StockReturn, SupplierInvoice, Today } from './types.ts';
 
 const K = { session: 'rs.session', cache: 'rs.cache', outbox: 'rs.outbox', demo: 'rs.demo' };
 
@@ -18,6 +18,9 @@ interface Cache {
   today: Today | null; cards: Record<string, CardView>; stock: StockLine[]; flags: Flag[]; refreshedAt: string | null;
   inventory?: InventoryLine[]; invoices?: SupplierInvoice[]; returns?: StockReturn[]; catalogue?: CatalogueLine[];
   jobStock?: Record<string, JobStockLine[]>;
+  requests?: StockRequest[];
+  /** The stock controller app's own data. */
+  ctl?: unknown;
 }
 const EMPTY: Cache = { today: null, cards: {}, stock: [], flags: [], refreshedAt: null, inventory: [], invoices: [], returns: [], catalogue: [], jobStock: {} };
 
@@ -142,8 +145,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const invoices = await get<SupplierInvoice[]>('/me/supplier-invoices', prev.invoices ?? []);
       const returns = await get('/me/returns', prev.returns ?? []);
       const catalogue = await get('/stock/catalogue', prev.catalogue ?? []);
-      setCacheAndSave(() => ({
-        today, cards, stock, flags, inventory, returns, catalogue, jobStock,
+      const requests = await get('/me/stock-requests', prev.requests ?? []);
+      setCacheAndSave(c => ({
+        ...c, today, cards, stock, flags, inventory, returns, catalogue, jobStock, requests,
         invoices: invoices.map(i => ({ ...i, localPhotoUri: prev.invoices?.find(x => x.id === i.id)?.localPhotoUri })),
         refreshedAt: new Date().toISOString(),
       }));

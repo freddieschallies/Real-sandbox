@@ -96,6 +96,28 @@ export function Day() {
           </Card>
         ))}
 
+        {jobs.some(j => j.status !== 'closed') ? (
+          <>
+            <Text style={st.heading}>Book stock before you leave</Text>
+            <Card>
+              {jobs.filter(j => j.status !== 'closed').map(j => {
+                const js = s.cache.jobStock?.[j.id] ?? [];
+                const asked = js.reduce((n, l) => n + l.requested, 0);
+                const onMe = js.reduce((n, l) => n + l.onTechnician, 0);
+                return (
+                  <View key={j.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 56 }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[st.body, { fontWeight: '700' }]} numberOfLines={1}>#{j.job_number} {j.store}</Text>
+                      <Text style={st.small}>{onMe ? `${onMe} on your name` : 'Nothing booked yet'}{asked ? ` · ${asked} waiting for stockroom` : ''}</Text>
+                    </View>
+                    <Button label="Book" kind="secondary" onPress={() => nav.push({ name: 'bookout', jobId: j.id })} style={{ minWidth: 88 }} />
+                  </View>
+                );
+              })}
+            </Card>
+          </>
+        ) : null}
+
         <Text style={st.heading}>Other</Text>
         <Card onPress={() => nav.push({ name: 'stock' })} accessibilityLabel="My stock">
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
