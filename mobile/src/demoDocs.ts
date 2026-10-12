@@ -18,6 +18,9 @@ export interface DemoInvoice {
 }
 export interface DemoDocsState {
   quotes: DemoQuote[]; invoices: DemoInvoice[]; nextQuote: number; nextInvoice: number;
+  /** Credit notes against sent or paid invoices (kept as issued). */
+  credits?: { id: string; credit_number: number; invoice_id: string; job_id: string; amount_cents: number; vat_pct: number; reason: string; created_at: string; created_by: string }[];
+  nextCredit?: number;
   profile: Record<string, unknown> | null; rates: Record<string, number>;
   pastel: P.PastelSettings; clientCodes: Record<string, string | null>; batches: { id: string; kind: 'invoice' | 'quote'; numbers: number[]; file: string; created_at: string; created_by: string }[];
 }
@@ -218,7 +221,7 @@ export class DemoDocs {
       const j = this.job(i.job_id);
       return { id: i.id, invoice_number: i.invoice_number, status: i.status, created_at: i.created_at, sent_at: i.sent_at, due_date: i.due_date, paid_at: i.paid_at, vat_pct: i.vat_pct,
         job_number: j?.meta.job_number ?? null, job_id: i.job_id, ...this.who({ job_id: i.job_id }), created_by: i.created_by, ex_vat_cents: ex,
-        total_cents: D.totals([{ qty: 1, unitPriceCents: ex }], i.vat_pct).totalCents, overdue: i.status === 'sent' && !!i.due_date && i.due_date < today() };
+        credited_cents: this.creditedOn(i.id), total_cents: D.totals([{ qty: 1, unitPriceCents: ex }], i.vat_pct).totalCents, overdue: i.status === 'sent' && !!i.due_date && i.due_date < today() };
     }).sort((a, b) => Number(b.status === 'draft') - Number(a.status === 'draft') || b.invoice_number - a.invoice_number);
   }
   invoice(id: string): Res {
@@ -226,7 +229,32 @@ export class DemoDocs {
     if (!i) return bad(404, 'no such invoice');
     const j = this.job(i.job_id);
     return good({ invoice: { ...i, lines: undefined, job_number: j?.meta.job_number ?? null, job_order_ref: j?.meta.client_order_ref ?? null, fault_reported: j?.meta.fault_reported ?? '',
-      job_closed: (j?.closedAt ?? '').slice(0, 10) || null, ...this.who({ job_id: i.job_id }), created_by_name: i.created_by }, lines: i.lines, totals: D.totals(i.lines, i.vat_pct), company: this.d.profile });
+      job_closed: (j?.closedAt ?? '').slice(0, 10) || null, ...this.who({ job_id: i.job_id }), created_by_name: i.created_by }, lines: i.lines, totals: D.totals(i.lines, i.vat_pct),
+      credits: (this.d.credits ?? []).filter(c => c.invoice_id === id).map(c => ({ ...c, total_cents: D.totals([{ qty: 1, unitPriceCents: c.amount_cents }], c.vat_pct).totalCents })), company: this.d.profile });
+  }
+  private creditedOn(invoiceId: string) { return (this.d.credits ?? []).filter(c => c.invoice_id === invoiceId).reduce((n, c) => n + c.amount_cents, 0); }
+  /** A credit note against a sent or paid invoice: in full, or part (excl. VAT), with the reason. */
+  credit(id: string, b: { amountCents?: number; reason?: string }, by: string): Res {
+    const i = this.d.invoices.find(x => x.id === id);
+    if (!i) return bad(404, 'no such invoice');
+    if (!b.reason || b.reason.trim().length < 5) return bad(400, 'say why it is credited');
+    if (!['sent', 'paid'].includes(i.status)) return bad(409, i.status === 'draft' ? 'a draft invoice is changed or deleted, not credited' : `the invoice is ${i.status}`);
+    const left = this.exVat(i.lines) - this.creditedOn(id);
+    if (left <= 0) return bad(409, `invoice ${i.invoice_number} is already credited in full`);
+    const amount = b.amountCents ? Math.round(b.amountCents) : left;
+    if (amount <= 0) return bad(400, 'the amount to credit');
+    if (amount > left) return bad(409, `at most R ${(left / 100).toFixed(2)} (excl. VAT) is left to credit on invoice ${i.invoice_number}`);
+    const n = this.d.nextCredit ?? 9001;
+    this.d.nextCredit = n + 1;
+    (this.d.credits ??= []).push({ id: nid('cn'), credit_number: n, invoice_id: id, job_id: i.job_id, amount_cents: amount, vat_pct: i.vat_pct, reason: b.reason.trim(), created_at: new Date().toISOString(), created_by: by });
+    return good({ creditNumber: n, amountCents: amount }, 201);
+  }
+  /** A job's billing, for the office's filters. */
+  billingOf(jobId: string) {
+    const inv = this.d.invoices.filter(i => i.job_id === jobId && i.status !== 'cancelled').sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+    const credited = (this.d.credits ?? []).filter(c => c.job_id === jobId).reduce((n, c) => n + c.amount_cents, 0);
+    return { invoice_number: inv?.invoice_number ?? null, invoice_status: inv?.status ?? null, credited_cents: credited,
+      billing: credited > 0 ? 'credited' : inv?.status === 'draft' ? 'draft_invoice' : inv ? 'invoiced' : 'not_invoiced' };
   }
   newInvoice(jobId: string): Res {
     const j = this.job(jobId);

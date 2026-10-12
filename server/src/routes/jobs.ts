@@ -83,15 +83,20 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     const mine = !can(req.actor, 'view_all_job_cards');
     const { rows } = await req.db.query(
       `SELECT j.id, j.job_number, j.job_type, j.priority, j.status, j.scheduled_date, j.fault_reported,
-              s.name AS store, u.full_name AS lead_technician
-         FROM jobs j JOIN stores s ON s.id = j.store_id JOIN users u ON u.id = j.lead_technician_id
+              s.name AS store, u.full_name AS lead_technician, j.lead_technician_id,
+              -- Billing, for the office's filters: its invoice (not cancelled) and anything credited.
+              inv.invoice_number, inv.status::text AS invoice_status,
+              (SELECT coalesce(sum(cn.amount_cents), 0)::bigint FROM credit_notes cn WHERE cn.job_id = j.id) AS credited_cents
+         FROM jobs j
+         LEFT JOIN LATERAL (SELECT i.invoice_number, i.status FROM invoices i WHERE i.job_id = j.id AND i.status <> 'cancelled' ORDER BY i.created_at DESC LIMIT 1) inv ON true JOIN stores s ON s.id = j.store_id JOIN users u ON u.id = j.lead_technician_id
         WHERE ($1::boolean = false OR j.lead_technician_id = $2
                OR EXISTS (SELECT 1 FROM job_helpers h WHERE h.job_id = j.id AND h.user_id = $2))
           AND ($3::text IS NULL OR j.status::text = $3)
         ORDER BY (j.status IN ('closed', 'cancelled')), j.scheduled_date, j.priority, j.job_number`,
       [mine, req.actor.id, q.status ?? null],
     );
-    return rows;
+    return rows.map(r => ({ ...r, credited_cents: Number(r.credited_cents),
+      billing: Number(r.credited_cents) > 0 ? 'credited' : r.invoice_status === 'draft' ? 'draft_invoice' : r.invoice_status ? 'invoiced' : 'not_invoiced' }));
   });
 
   app.get('/jobs/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {

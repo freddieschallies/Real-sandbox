@@ -98,6 +98,8 @@ export function OfficeApp() {
   const arrange = () => { setMenuStart(level); go('settings'); };
   // Until the person picks a tab, show their first one (their work may load after the screen does);
   // after that, only move them if the tab they are on is no longer theirs.
+  // Invoices and credit notes change a job's billing: the job list is fresh each time it opens.
+  useEffect(() => { if (tab === 'jobs') o.load(); }, [tab]);
   const tabKeys = tabs.map(t => t.key).join();
   useEffect(() => {
     if (!tabs.length) return;
@@ -253,20 +255,47 @@ function TodayView({ o, go, flags }: { o: OfficeHook; go: (t: Tab, x?: Sel) => v
 
 // ---- Jobs ---------------------------------------------------------------------------------------
 
-const FILTERS = ['open', 'today', 'carried', 'closed'] as const;
+const FILTERS = ['open', 'today', 'carried', 'closed', 'all'] as const;
+const BILLING = ['any', 'not_invoiced', 'invoiced', 'credited'] as const;
 function JobList({ o, open, add, selected }: { o: OfficeHook; open: (id: string) => void; add?: () => void; selected: string | null }) {
   const [f, setF] = useState<(typeof FILTERS)[number]>('open');
+  const [bill, setBill] = useState<(typeof BILLING)[number]>('any');
+  const [tech, setTech] = useState<string>('');
+  const [type, setType] = useState<string>('');
   const [q, setQ] = useState('');
   const t = ymd(new Date());
   const shut = (st: string) => st === 'closed' || st === 'cancelled';
-  const jobs = o.d.jobs.filter(j => (f === 'closed' ? shut(j.status) : !shut(j.status)) && (f !== 'today' || j.scheduled_date === t) && (f !== 'carried' || j.scheduled_date < t))
-    .filter(j => !q.trim() || `${j.job_number} ${j.store} ${j.fault_reported} ${j.lead_technician}`.toLowerCase().includes(q.trim().toLowerCase()))
+  const techs = [...new Set(o.d.jobs.map(j => j.lead_technician))].sort();
+  const jobs = o.d.jobs
+    .filter(j => f === 'all' || (f === 'closed' ? shut(j.status) : !shut(j.status)) && (f !== 'today' || j.scheduled_date === t) && (f !== 'carried' || j.scheduled_date < t))
+    // Billing: not invoiced means a closed job with no invoice sent yet (a draft counts as not sent).
+    .filter(j => bill === 'any' || (bill === 'credited' ? j.billing === 'credited' : bill === 'invoiced' ? j.billing === 'invoiced' || j.billing === 'credited'
+      : j.status === 'closed' && (j.billing === 'not_invoiced' || j.billing === 'draft_invoice')))
+    .filter(j => !tech || j.lead_technician === tech)
+    .filter(j => !type || j.job_type === type)
+    .filter(j => !q.trim() || `${j.job_number} ${j.store} ${j.fault_reported} ${j.lead_technician} ${j.invoice_number ?? ''}`.toLowerCase().includes(q.trim().toLowerCase()))
     .sort((a, b) => Number(b.priority === 'urgent' && b.status !== 'closed') - Number(a.priority === 'urgent' && a.status !== 'closed'));
+  const filtered = bill !== 'any' || !!tech || !!type || !!q.trim();
   return (
     <>
       {add ? <Button label="New job" onPress={add} /> : null}
-      <Choice options={FILTERS} value={f} onChange={setF} labels={{ open: 'All open', today: 'Today', carried: 'Carried over', closed: 'Closed / cancelled' }} />
-      <TextInput value={q} onChangeText={setQ} placeholder="Search number, store, fault, technician" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Search jobs" />
+      <Choice options={FILTERS} value={f} onChange={setF} labels={{ open: 'All open', today: 'Today', carried: 'Carried over', closed: 'Closed / cancelled', all: 'All jobs' }} />
+      <Label>Invoicing</Label>
+      <Choice options={BILLING} value={bill} onChange={v => { setBill(v); if (v !== 'any' && f !== 'closed') setF('all'); }}
+        labels={{ any: 'Any', not_invoiced: 'Not invoiced', invoiced: 'Invoiced', credited: 'Credited' }} />
+      <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+        <View style={{ flex: 1, minWidth: 180 }}>
+          <Select label="Technician" value={tech} onChange={setTech} options={[{ value: '', label: 'Everyone' }, ...techs.map(n => ({ value: n, label: n }))]} />
+        </View>
+        <View style={{ flex: 1, minWidth: 180 }}>
+          <Select label="Job type" value={type} onChange={setType} options={[{ value: '', label: 'All types' }, ...Object.entries(TYPE).map(([k, l]) => ({ value: k, label: l }))]} />
+        </View>
+      </View>
+      <TextInput value={q} onChangeText={setQ} placeholder="Search number, store, fault, technician, invoice" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Search jobs" />
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text style={[st.small, { flex: 1 }]}>{jobs.length} job{jobs.length === 1 ? '' : 's'}</Text>
+        {filtered ? <Button label="Clear filters" kind="quiet" onPress={() => { setBill('any'); setTech(''); setType(''); setQ(''); }} /> : null}
+      </View>
       {jobs.map(j => <JobRow key={j.id} j={j} on={selected === j.id} onPress={() => open(j.id)} />)}
       {!jobs.length ? <Body quiet>No jobs here.</Body> : null}
     </>
@@ -280,6 +309,9 @@ function JobRow({ j, on, onPress }: { j: OfficeJob; on: boolean; onPress: () => 
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Text style={[st.body, { fontWeight: '800' }]}>#{j.job_number}</Text>
         <Text numberOfLines={1} style={[st.body, { flex: 1 }]}>{j.store}</Text>
+        {j.billing === 'credited' ? <Pill text={`Credited${j.invoice_number ? ` · INV ${j.invoice_number}` : ''}`} tone="bad" />
+          : j.billing === 'invoiced' ? <Pill text={`Invoiced · INV ${j.invoice_number}`} tone="good" />
+          : j.status === 'closed' ? <Pill text={j.billing === 'draft_invoice' ? 'Draft invoice' : 'Not invoiced'} tone="warn" /> : null}
         <Pill text={STATUS[j.status]?.text ?? j.status} tone={STATUS[j.status]?.tone ?? 'quiet'} />
       </View>
       <Body numberOfLines={2}>{j.fault_reported}</Body>

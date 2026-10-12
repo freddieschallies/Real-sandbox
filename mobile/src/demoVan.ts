@@ -19,7 +19,7 @@ export function seedVan(): DemoVanState {
   // Real-data demo: the Example Tech is in Foodservice too, so his van (not a real person's) carries the van-short flag.
   return {
     departments: [
-      // The usual five (Admin is the office staff's); Refrigeration is offered to switch on.
+      // The usual five (Admin is the office staff's).
       { id: 'dep-admin', name: 'Admin', managerId: null },
       { id: 'dep-elec', name: 'Electrical', managerId: null },
       { id: 'dep-ref', name: 'Foodservice', managerId: 'mgr-1' },
@@ -38,7 +38,17 @@ const bad = (status: number, ...reasons: string[]): Res => ({ ok: false, status,
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 export class DemoVan {
-  constructor(public v: DemoVanState, private o: DemoOfficeState, private st: DemoStockState, private flags: Flag[]) { this.syncNames(); }
+  constructor(public v: DemoVanState, private o: DemoOfficeState, private st: DemoStockState, private flags: Flag[]) {
+    // Demo data saved by an older test drive: its Refrigeration department is Foodservice now, and
+    // the usual departments it did not have yet are added.
+    const ref = v.departments.find(d => d.name === 'Refrigeration');
+    if (ref && !v.departments.some(d => d.name === 'Foodservice')) ref.name = 'Foodservice';
+    for (const [id, name] of [['dep-admin', 'Admin'], ['dep-elec', 'Electrical'], ['dep-svc', 'Service'], ['dep-plumb', 'Plumbing']] as const) {
+      if (!v.departments.some(d => d.name === name)) v.departments.push({ id: v.departments.some(d => d.id === id) ? `${id}-2` : id, name, managerId: null });
+    }
+    for (const f of flags) if (f.question?.includes('Refrigeration van stock list')) f.question = f.question.replace('Refrigeration van stock list', 'Foodservice van stock list');
+    this.syncNames();
+  }
 
   private name(id: string | null) { return id ? this.o.people.find(p => p.id === id)?.full_name ?? id : null; }
   private person(id: string) { return this.o.people.find(p => p.id === id); }

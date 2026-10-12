@@ -369,12 +369,13 @@ export function registerDocumentRoutes(app: FastifyInstance) {
     const { rows } = await req.db.query(
       `SELECT i.id, i.invoice_number, i.status, i.created_at, i.sent_at, to_char(i.due_date, 'YYYY-MM-DD') AS due_date, i.paid_at, i.vat_pct::float AS vat_pct,
               j.job_number, j.id AS job_id, ${WHO}, u.full_name AS created_by,
-              (SELECT coalesce(sum(round(l.qty * l.unit_price_cents)), 0)::bigint FROM document_lines l WHERE l.invoice_id = i.id) AS ex_vat_cents
+              (SELECT coalesce(sum(round(l.qty * l.unit_price_cents)), 0)::bigint FROM document_lines l WHERE l.invoice_id = i.id) AS ex_vat_cents,
+              (SELECT coalesce(sum(cn.amount_cents), 0)::bigint FROM credit_notes cn WHERE cn.invoice_id = i.id) AS credited_cents
          FROM invoices i JOIN jobs j ON j.id = i.job_id JOIN stores s ON s.id = j.store_id JOIN clients c ON c.id = s.client_id JOIN users u ON u.id = i.created_by
         WHERE ($1::text IS NULL OR i.status::text = $1) ORDER BY (i.status = 'draft') DESC, i.invoice_number DESC LIMIT 500`, [req.query.status ?? null]);
     return rows.map(r => {
       const ex = Number(r.ex_vat_cents);
-      return { ...r, ex_vat_cents: ex, total_cents: D.totals([{ qty: 1, unitPriceCents: ex }], r.vat_pct).totalCents, overdue: r.status === 'sent' && r.due_date && r.due_date < today() };
+      return { ...r, ex_vat_cents: ex, credited_cents: Number(r.credited_cents), total_cents: D.totals([{ qty: 1, unitPriceCents: ex }], r.vat_pct).totalCents, overdue: r.status === 'sent' && r.due_date && r.due_date < today() };
     });
   });
 
@@ -388,7 +389,35 @@ export function registerDocumentRoutes(app: FastifyInstance) {
         WHERE i.id = $1`, [id])).rows[0];
     if (!i) throw new Refused(404, ['no such invoice']);
     const lines = await linesOf(req.db, 'invoice_id', id);
-    return { invoice: i, lines, totals: D.totals(lines, i.vat_pct), company: await profile(req.db) };
+    const credits = (await req.db.query(
+      `SELECT cn.id, cn.credit_number, cn.amount_cents::bigint AS amount_cents, cn.vat_pct::float AS vat_pct, cn.reason, cn.created_at, u.full_name AS created_by
+         FROM credit_notes cn JOIN users u ON u.id = cn.created_by WHERE cn.invoice_id = $1 ORDER BY cn.credit_number`, [id])).rows
+      .map(r => ({ ...r, amount_cents: Number(r.amount_cents), total_cents: D.totals([{ qty: 1, unitPriceCents: Number(r.amount_cents) }], r.vat_pct).totalCents }));
+    return { invoice: i, lines, totals: D.totals(lines, i.vat_pct), credits, company: await profile(req.db) };
+  });
+
+  // A credit note against an invoice already sent or paid: in full, or part of it (excluding VAT),
+  // with the reason. The invoice itself never changes; together they never credit more than it was.
+  app.post('/invoices/:id/credit', async (req: FastifyRequest<{ Params: { id: string } }>, reply) => {
+    prep(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ amountCents: z.number().int().positive().optional(), reason: z.string().trim().min(5, 'say why it is credited').max(500) }), req.body);
+    const out = await tx(req.db, async c => {
+      const i = (await c.query('SELECT status, job_id, invoice_number, vat_pct::float AS vat_pct FROM invoices WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!i) throw new Refused(404, ['no such invoice']);
+      if (!['sent', 'paid'].includes(i.status)) throw new Refused(409, [i.status === 'draft' ? 'a draft invoice is changed or deleted, not credited' : `the invoice is ${i.status}`]);
+      const ex = Number((await c.query('SELECT coalesce(sum(round(qty * unit_price_cents)), 0)::bigint AS n FROM document_lines WHERE invoice_id = $1', [id])).rows[0].n);
+      const done = Number((await c.query('SELECT coalesce(sum(amount_cents), 0)::bigint AS n FROM credit_notes WHERE invoice_id = $1', [id])).rows[0].n);
+      const left = ex - done;
+      if (left <= 0) throw new Refused(409, [`invoice ${i.invoice_number} is already credited in full`]);
+      const amount = b.amountCents ?? left;
+      if (amount > left) throw new Refused(409, [`at most R ${(left / 100).toFixed(2)} (excl. VAT) is left to credit on invoice ${i.invoice_number}`]);
+      const cn = (await c.query('INSERT INTO credit_notes (invoice_id, job_id, amount_cents, vat_pct, reason, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, credit_number',
+        [id, i.job_id, amount, i.vat_pct, b.reason, req.actor.id])).rows[0];
+      await audit(c, req.actor.id, 'invoice_credited', 'invoice', id, { creditNumber: cn.credit_number, amountCents: amount });
+      return { id: cn.id, creditNumber: cn.credit_number, amountCents: amount, full: amount === left && done === 0 };
+    });
+    return reply.code(201).send(out);
   });
 
   /** A draft invoice for a closed job, worked out from the job card: time on site, call-outs, parts used, items bought. */

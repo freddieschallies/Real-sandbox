@@ -14,7 +14,8 @@ export interface Overview {
   stock: { to_issue: number; to_receive: number; workshop_below_min: number };
   technicians: { active: number; without_work: number };
 }
-export interface OfficeJob { id: string; job_number: number; job_type: string; priority: string; status: string; scheduled_date: string; fault_reported: string; store: string; lead_technician: string; lead_id?: string; helper_ids?: string[] }
+export interface OfficeJob { id: string; job_number: number; job_type: string; priority: string; status: string; scheduled_date: string; fault_reported: string; store: string; lead_technician: string; lead_id?: string; helper_ids?: string[];
+  /** Billing: its invoice (not cancelled) and anything credited. */ invoice_number?: number | null; invoice_status?: string | null; credited_cents?: number; billing?: 'not_invoiced' | 'draft_invoice' | 'invoiced' | 'credited' }
 export interface Store { id: string; client: string; name: string; address: string | null; lat: number; lng: number; open_jobs: number }
 export interface Tech { id: string; full_name: string; department: string | null; open_jobs: number; working_now: number; vehicle: string | null }
 export interface OfficeFlag { id: string; flag_type: string; severity: string; raised_at: string; question: string | null; explanation: string | null; status: string; technician: string | null; job_number: number | null }

@@ -338,6 +338,7 @@ export function InvoiceList({ b, open }: { b: Books; open: (id: string) => void 
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <Text style={[st.body, { fontWeight: '800' }]}>INV{i.invoice_number}</Text>
             <Text style={[st.body, { flex: 1 }]} numberOfLines={1}>{i.store}</Text>
+            {(i as { credited_cents?: number }).credited_cents ? <Pill text="Credited" tone="bad" /> : null}
             {i.overdue ? <Pill text="Overdue" tone="bad" /> : <Pill text={STATUS[i.status]?.t ?? i.status} tone={STATUS[i.status]?.tone ?? 'quiet'} />}
           </View>
           <Text style={st.small}>{i.client} · job {i.job_number} · {R(i.total_cents)} incl. VAT{i.status === 'sent' ? ` · due ${day(i.due_date)}` : ''}</Text>
@@ -354,7 +355,9 @@ export function InvoiceDetail({ b, id }: { b: Books; id: string }) {
   const [notes, setNotes] = useState('');
   const [ref, setRef] = useState('');
   const [ans, setAns] = useState<Ans | null>(null);
-  const [panel, setPanel] = useState<'none' | 'paid' | 'cancel'>('none');
+  const [panel, setPanel] = useState<'none' | 'paid' | 'cancel' | 'credit'>('none');
+  const [full, setFull] = useState(true);
+  const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const load = async () => {
     const r = await b.ask('GET', `/invoices/${id}`);
@@ -395,13 +398,37 @@ export function InvoiceDetail({ b, id }: { b: Books; id: string }) {
           <Text style={st.small}>Once sent it is locked; it is due in {b.company?.profile?.invoice_due_days ?? 30} days. A mistake after sending: cancel it and make a new one.</Text>
         </>
       ) : null}
-      {i.status === 'sent' ? (
+      {(d.credits ?? []).length ? (
+        <Card style={{ borderColor: C.bad }}>
+          <Heading>Credited</Heading>
+          {(d.credits as { id: string; credit_number: number; amount_cents: number; total_cents: number; reason: string; created_at: string; created_by: string }[]).map(c => (
+            <View key={c.id} style={{ borderTopWidth: 1, borderTopColor: C.line, paddingTop: 6, gap: 2 }}>
+              <Text style={[st.body, { fontWeight: '800' }]}>Credit note {c.credit_number} · {R(c.amount_cents)} excl. VAT ({R(c.total_cents)} incl.)</Text>
+              <Text style={st.small}>{c.reason} · {day(c.created_at.slice(0, 10))} · {c.created_by}</Text>
+            </View>
+          ))}
+        </Card>
+      ) : null}
+      {i.status === 'sent' || i.status === 'paid' ? (
         <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
-          <Button label="Mark paid" onPress={() => setPanel('paid')} style={{ flexGrow: 1, flexBasis: 140 }} />
-          <Button label="Cancel invoice" kind="secondary" onPress={() => setPanel('cancel')} style={{ flexGrow: 1, flexBasis: 140 }} />
+          {i.status === 'sent' ? <Button label="Mark paid" onPress={() => setPanel('paid')} style={{ flexGrow: 1, flexBasis: 140 }} /> : null}
+          <Button label="Credit this invoice" kind="secondary" onPress={() => setPanel('credit')} style={{ flexGrow: 1, flexBasis: 140 }} />
+          {i.status === 'sent' ? <Button label="Cancel invoice" kind="secondary" onPress={() => setPanel('cancel')} style={{ flexGrow: 1, flexBasis: 140 }} /> : null}
         </View>
       ) : null}
-      {panel !== 'none' ? (
+      {panel === 'credit' ? (
+        <Card>
+          <Heading>Credit note</Heading>
+          <Text style={st.small}>The invoice stays as it was sent; the credit note gives back all of it or part of it, with the reason.</Text>
+          <Choice options={['full', 'part'] as const} value={full ? 'full' : 'part'} onChange={v => setFull(v === 'full')} labels={{ full: 'All that is left', part: 'Part of it' }} />
+          {!full ? <Field label="Amount to credit, excl. VAT (R)" value={amount} onChangeText={setAmount} keyboardType="decimal-pad" placeholder="e.g. 450" /> : null}
+          <Field label="Why is it credited?" value={note} onChangeText={setNote} />
+          <Reasons a={ans} />
+          <Button label="Issue the credit note" kind="danger" disabled={note.trim().length < 5 || (!full && !(Number(amount.replace(',', '.')) > 0))}
+            onPress={() => doThen(`/invoices/${id}/credit`, { reason: note.trim(), ...(full ? {} : { amountCents: Math.round(Number(amount.replace(',', '.')) * 100) }) })} />
+        </Card>
+      ) : null}
+      {panel === 'paid' || panel === 'cancel' ? (
         <Card>
           <Field label={panel === 'paid' ? 'Payment reference (e.g. EFT 22831)' : 'Why is it cancelled?'} value={note} onChangeText={setNote} />
           <Reasons a={ans} />

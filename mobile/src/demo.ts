@@ -463,7 +463,7 @@ export class DemoTransport implements Transport {
     if (p === '/office/stores' && req.method === 'GET') return ok(o.stores());
     if (p === '/office/stores') return done(o.addStore(b));
     if (p === '/office/technicians') return ok(o.technicians(id => (id === 'me' ? this.state.vehicle?.registration ?? null : this.fleet().technicians(null).find(t => t.id === id)?.registration ?? null)));
-    if (p === '/jobs' && req.method === 'GET') return ok(o.jobs(q.get('status')));
+    if (p === '/jobs' && req.method === 'GET') { const d = this.docs(); return ok(o.jobs(q.get('status')).map(j => ({ ...j, ...d.billingOf(j.id) }))); }
     if (p === '/jobs') {
       const store = o.store(b.storeId);
       const missing = [!store ? 'which store' : null, !b.faultReported || b.faultReported.trim().length < 3 ? 'what the fault is' : null, !b.scheduledDate ? 'the date' : null,
@@ -568,6 +568,7 @@ export class DemoTransport implements Transport {
     if ((m = p.match(/^\/invoices\/([^/]+)\/send$/))) return done(d.sendInvoice(m[1]));
     if ((m = p.match(/^\/invoices\/([^/]+)\/paid$/))) return done(d.paid(m[1], b.ref));
     if ((m = p.match(/^\/invoices\/([^/]+)\/cancel$/))) return done(d.cancelInvoice(m[1], b.note));
+    if ((m = p.match(/^\/invoices\/([^/]+)\/credit$/))) return done(d.credit(m[1], b, this.who.name));
     if (p === '/pastel/settings') return get ? ok(d.pastelSettings()) : done(d.setPastel(b));
     if (p === '/pastel/clients') return ok(d.clients());
     if ((m = p.match(/^\/pastel\/clients\/([^/]+)$/))) return done(d.setClientCode(decodeURIComponent(m[1]), b.code));

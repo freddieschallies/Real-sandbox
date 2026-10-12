@@ -12,7 +12,7 @@ import { rememberPhoto } from '../photo.ts';
 export interface DeptData {
   canManage: boolean;
   departments: { id: string; name: string; active?: boolean; logo_photo_id?: string | null; manager_id: string | null; manager: string | null; technicians: number; staff?: number; van_lines: number }[];
-  /** The usual departments not set up yet (Refrigeration, for one), to add with a tap. */
+  /** The usual departments not set up yet (one switched off and removed, say), to add with a tap. */
   missing?: string[];
   managers: { id: string; full_name: string; login_level: string }[];
   members?: { id: string; full_name: string; login_level: string; trade: string | null; department_id: string | null }[];

@@ -1558,6 +1558,25 @@ test('technicians submit quotes: on a job not finished, or from scratch with a j
   assert.equal((await call('mech', 'POST', '/me/quotes', { storeId: ids.store, title: 'x', ...work })).status, 403, 'not the mechanic');
 });
 
+test('credit notes: part or all of a sent invoice, with a reason; the office filters jobs by invoiced and credited', async () => {
+  const inv = (await call('admin', 'GET', '/invoices')).body.find((x: { invoice_number: number }) => x.invoice_number === 7001);
+  const jobsBefore = (await call('admin', 'GET', '/jobs')).body;
+  assert.equal(jobsBefore.find((j: { id: string }) => j.id === inv.job_id).billing, 'invoiced');
+  assert.ok(jobsBefore.some((j: { billing: string }) => j.billing === 'not_invoiced'), 'and jobs not invoiced yet');
+  assert.equal((await call('tech', 'POST', `/invoices/${inv.id}/credit`, { reason: 'Wrong part charged' })).status, 403);
+  assert.equal((await call('admin', 'POST', `/invoices/${inv.id}/credit`, { reason: 'no' })).status, 400, 'a reason');
+  assert.equal((await call('admin', 'POST', `/invoices/${inv.id}/credit`, { amountCents: inv.ex_vat_cents + 1, reason: 'Overcharged on labour' })).status, 409, 'not more than the invoice');
+  const part = await call('admin', 'POST', `/invoices/${inv.id}/credit`, { amountCents: 10000, reason: 'Call-out charged twice' });
+  assert.equal(part.status, 201); assert.equal(part.body.creditNumber, 9001);
+  const rest = await call('admin', 'POST', `/invoices/${inv.id}/credit`, { reason: 'Client disputes the rest of the invoice' });
+  assert.equal(rest.status, 201); assert.equal(rest.body.amountCents, inv.ex_vat_cents - 10000, 'the rest');
+  assert.equal((await call('admin', 'POST', `/invoices/${inv.id}/credit`, { reason: 'Once more please' })).status, 409, 'nothing left to credit');
+  const d = (await call('admin', 'GET', `/invoices/${inv.id}`)).body;
+  assert.equal(d.credits.length, 2); assert.equal(d.invoice.status, 'paid', 'the invoice itself does not change');
+  assert.equal((await call('admin', 'GET', '/jobs')).body.find((j: { id: string }) => j.id === inv.job_id).billing, 'credited');
+  await assert.rejects(db.query('DELETE FROM credit_notes WHERE invoice_id = $1', [inv.id]), 'credit notes are kept');
+});
+
 test('phone menus: the CEO or an admin pins tabs per position; everyone gets their own position\'s choice', async () => {
   assert.deepEqual((await call('stock', 'GET', '/me/phone-menu')).body, { pinned: null, canEdit: false }, 'automatic until chosen');
   assert.equal((await call('stock', 'GET', '/phone-menus')).status, 403, 'not the stock controller');
