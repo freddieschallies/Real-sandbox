@@ -588,7 +588,7 @@ export class DemoTransport implements Transport {
       const kitWrite = this.does('stockroom');
       const office = ['admin', 'management', 'director', 'creator'].includes(this.who.level);
       if (p === '/me/kit') { const k = this.stock().kitFor(this.who.id, false); this.persist(this.state); return ok(k); }
-      if (p === '/kit/people') return kitWrite ? ok(this.stock().kitPeople(this.office().o.people)) : refuse(403, 'the stockroom keeps tools and PPE');
+      if (p === '/kit/people') return kitWrite ? ok(this.stock().kitPeople(this.office().stockroomPeople())) : refuse(403, 'the stockroom keeps tools and PPE');
       if ((m = p.match(/^\/people\/([^/]+)\/kit$/))) {
         if (req.method === 'GET') return (kitWrite || office || m[1] === this.who.id) ? ok(this.stock().kitFor(m[1], kitWrite)) : refuse(403, 'not your list');
         if (!kitWrite) return refuse(403, 'the stockroom keeps tools and PPE');

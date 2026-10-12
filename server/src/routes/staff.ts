@@ -5,7 +5,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { audit, tx, type Q } from '../db.ts';
 import { notify } from './field.ts';
-import { can, type Actor } from '../core/permissions.ts';
+import { POSITION_LABEL, TRADES, can, seesPeople, type Actor, type LoginLevel, type Trade } from '../core/permissions.ts';
 import { DateOnly, Refused, Uuid, parse } from '../http.ts';
 
 export const ENTRY_TYPES = {
@@ -26,7 +26,7 @@ export const recordsAllowed = (a: Actor, u: { id: string; department_id: string 
   read: can(a, 'view_employee_log', subject(u)) && a.id !== u.id, write: can(a, 'write_employee_log', subject(u)) && a.id !== u.id,
 });
 export const kitAllowed = (a: Actor, userId: string) => ({
-  read: a.id === userId || can(a, 'assign_stock') || can(a, 'view_all_job_cards') || can(a, 'manage_access'), write: can(a, 'assign_stock'),
+  read: a.id === userId || can(a, 'assign_stock') || seesPeople(a), write: can(a, 'assign_stock'),
 });
 
 async function kitList(c: Q, userId: string) {
@@ -118,17 +118,20 @@ export function registerStaffRoutes(app: FastifyInstance) {
     await person(req.db, id);
     return { ...(await kitList(req.db, id)), canWrite: kitAllowed(req.actor, id).write };
   });
-  // The stockroom's overview: everyone and what they hold.
+  // The stockroom's People: names with their PPE, tools and stock, and nothing personal (no contact
+  // details, no ID number, no address, not where they are).
   app.get('/kit/people', async req => {
     if (!can(req.actor, 'assign_stock')) throw new Refused(403, ['the stockroom keeps tools and PPE']);
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
-    return (await req.db.query(
-      `SELECT u.id, u.full_name, u.login_level, u.trade,
+    const rows = (await req.db.query(
+      `SELECT u.id, u.full_name, u.login_level, u.trade, p.photo_id,
               count(k.id) FILTER (WHERE k.status = 'issued' AND k.kind = 'tool')::int AS tools,
               count(k.id) FILTER (WHERE k.status = 'issued' AND k.kind = 'ppe')::int AS ppe,
-              count(k.id) FILTER (WHERE k.status = 'issued' AND k.replace_by <= $1::date)::int AS due
-         FROM users u LEFT JOIN person_kit k ON k.user_id = u.id
-        WHERE u.status <> 'left' GROUP BY u.id ORDER BY (u.login_level = 'technician') DESC, u.full_name`, [today])).rows;
+              count(k.id) FILTER (WHERE k.status = 'issued' AND k.replace_by <= $1::date)::int AS due,
+              COALESCE((SELECT SUM(h.qty) FROM technician_holdings h WHERE h.technician_id = u.id AND h.qty > 0), 0)::float AS stock
+         FROM users u LEFT JOIN person_kit k ON k.user_id = u.id LEFT JOIN user_profiles p ON p.user_id = u.id
+        WHERE u.status <> 'left' GROUP BY u.id, p.photo_id ORDER BY (u.login_level = 'technician') DESC, u.full_name`, [today])).rows;
+    return rows.map(r => ({ ...r, position: POSITION_LABEL[r.login_level as LoginLevel], tradeLabel: r.trade ? TRADES[r.trade as Trade] : null }));
   });
 
   app.get('/me/kit', async req => ({ ...(await kitList(req.db, req.actor.id)), canWrite: false }));

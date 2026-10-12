@@ -5,6 +5,8 @@ import { Pressable, Text, TextInput, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, Stepper, st } from '../ui.tsx';
 import { C } from '../theme.ts';
+import { Avatar } from '../office/Profile.tsx';
+import type { Holding } from '../stockroom/useStockroom.ts';
 
 const day = (s: string) => new Date(s.length === 10 ? `${s}T12:00:00+02:00` : s).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' });
 const todayIso = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
@@ -131,7 +133,7 @@ export function useKit(path: string) {
   return { k, err, load };
 }
 
-export function KitCard({ userId, name, mine, onChange }: { userId: string; name: string; mine?: boolean; onChange?: () => void }) {
+export function KitCard({ userId, name, mine, onChange, between, title }: { userId: string; name: string; mine?: boolean; onChange?: () => void; between?: React.ReactNode; title?: string }) {
   const kit = useKit(mine ? '/me/kit' : `/people/${userId}/kit`);
   const { k, err } = kit;
   const load = () => { kit.load(); onChange?.(); };
@@ -155,11 +157,12 @@ export function KitCard({ userId, name, mine, onChange }: { userId: string; name
   );
   return (
     <Card>
-      <Label>{mine ? 'My tools and PPE' : `Tools and PPE on ${first}'s name`}</Label>
+      <Label>{title ?? (mine ? 'My tools and PPE' : `Tools and PPE on ${first}'s name`)}</Label>
       {k.dueForReplacement ? <Notice tone="warn" title={`${k.dueForReplacement} item${k.dueForReplacement > 1 ? 's' : ''} due for replacement`} /> : null}
       <Text style={[st.body, { fontWeight: '800' }]}>PPE ({group('ppe').length})</Text>
       {group('ppe').map(row)}
       {!group('ppe').length ? <Body quiet>No PPE on record.</Body> : null}
+      {between}
       <Text style={[st.body, { fontWeight: '800', marginTop: 6 }]}>Tools ({group('tool').length})</Text>
       {group('tool').map(row)}
       {!group('tool').length ? <Body quiet>No tools on record.</Body> : null}
@@ -244,27 +247,65 @@ function CloseKit({ item, done }: { item: KitItem; done: () => void }) {
   );
 }
 
-/** The stockroom's People tab: everyone, with what they hold. */
-export function KitPeople({ open, selected, tick = 0 }: { open: (p: { id: string; full_name: string }) => void; selected: string | null; tick?: number }) {
+/** The stockroom's People tab: names with their PPE, stock and tools. Nothing personal. */
+export interface StockPerson { id: string; full_name: string; login_level: string; position: string; tradeLabel: string | null; photo_id: string | null; tools: number; ppe: number; stock: number; due: number }
+export function KitPeople({ open, selected, tick = 0 }: { open: (p: StockPerson) => void; selected: string | null; tick?: number }) {
   const s = useStore();
-  const [list, setList] = useState<{ id: string; full_name: string; login_level: string; tools: number; ppe: number; due: number }[] | null>(null);
+  const [list, setList] = useState<StockPerson[] | null>(null);
   const [find, setFind] = useState('');
   useEffect(() => { s.ask({ method: 'GET', path: '/kit/people' }).then(r => { if (r?.status === 200) setList(r.body); }); }, [selected, tick]);
   const words = find.toLowerCase().split(/\s+/).filter(Boolean);
   return (
     <>
-      <Text style={st.small}>Tools and PPE on each person's name. Tap someone to issue, take back or write off.</Text>
       <TextInput value={find} onChangeText={setFind} placeholder="Search name" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Search people" />
-      {(list ?? []).filter(p => words.every(w => p.full_name.toLowerCase().includes(w))).map(p => (
-        <Card key={p.id} onPress={() => open(p)} accessibilityLabel={`Kit for ${p.full_name}`} style={selected === p.id ? { borderColor: C.accent, borderWidth: 2 } : undefined}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Text style={[st.body, { fontWeight: '700', flex: 1 }]}>{p.full_name}</Text>
+      {(list ?? []).filter(p => words.every(w => `${p.full_name} ${p.position} ${p.tradeLabel ?? ''}`.toLowerCase().includes(w))).map(p => (
+        <Card key={p.id} onPress={() => open(p)} accessibilityLabel={`Person ${p.full_name}`} style={selected === p.id ? { borderColor: C.accent, borderWidth: 2 } : undefined}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <Avatar id={p.photo_id} name={p.full_name} size={40} />
+            <View style={{ flex: 1 }}>
+              <Text style={[st.body, { fontWeight: '700' }]}>{p.full_name}</Text>
+              <Text style={st.small}>{p.tradeLabel ?? p.position} · {p.ppe} PPE · {p.stock} stock · {p.tools} tool{p.tools === 1 ? '' : 's'}</Text>
+            </View>
             {p.due ? <Pill text={`${p.due} to replace`} tone="warn" /> : null}
           </View>
-          <Text style={st.small}>{p.ppe} PPE · {p.tools} tool{p.tools === 1 ? '' : 's'}</Text>
         </Card>
       ))}
       {!list ? <Body quiet>Loading…</Body> : null}
+    </>
+  );
+}
+
+/** One person as the stockroom sees them: name, PPE, the stock they hold, tools. */
+export function StockPersonView({ p, holdings, onChange }: { p: StockPerson; holdings: Holding[]; onChange?: () => void }) {
+  const mine = holdings.filter(h => h.technicianId === p.id || h.technician === p.full_name);
+  const back = mine.filter(h => h.mustReturn);
+  const stock = (
+    <>
+      <Text style={[st.body, { fontWeight: '800', marginTop: 6 }]}>Stock ({mine.reduce((n, h) => n + h.qty, 0)})</Text>
+      {back.length ? <Notice tone="bad" title={`${back.reduce((n, h) => n + h.qty, 0)} to bring back`} lines={['Left over from closed jobs.']} /> : null}
+      {mine.map((h, i) => (
+        <View key={i} style={{ borderTopWidth: 1, borderTopColor: C.line, paddingVertical: 8, flexDirection: 'row', gap: 8, alignItems: 'center' }} accessibilityLabel={`Stock ${h.code}`}>
+          <View style={{ flex: 1 }}>
+            <Text style={[st.body, { fontWeight: '700' }]}>{h.description}</Text>
+            <Text style={st.small}>{h.code} · {h.jobNumber ? `job ${h.jobNumber}${h.store ? `, ${h.store}` : ''}` : 'van stock'}{h.pendingReturn ? ` · ${h.pendingReturn} on the way back` : ''}</Text>
+          </View>
+          {h.mustReturn ? <Pill text="Bring back" tone="bad" /> : null}
+          <Text style={{ color: C.text, fontSize: 20, fontWeight: '800' }}>{h.qty}</Text>
+        </View>
+      ))}
+      {!mine.length ? <Body quiet>No stock on {p.full_name.split(' ')[0]}.</Body> : null}
+    </>
+  );
+  return (
+    <>
+      <View style={{ flexDirection: 'row', gap: 14, alignItems: 'center' }}>
+        <Avatar id={p.photo_id} name={p.full_name} size={72} />
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: C.text, fontSize: 24, fontWeight: '800' }}>{p.full_name}</Text>
+          <Text style={st.body}>{[p.position, p.tradeLabel].filter(Boolean).join(' · ')}</Text>
+        </View>
+      </View>
+      <KitCard userId={p.id} name={p.full_name} title="PPE, stock and tools" between={stock} onChange={onChange} />
     </>
   );
 }

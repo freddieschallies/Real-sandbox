@@ -248,6 +248,11 @@ export class DemoOffice {
     };
   }
 
+  /** What the stockroom may see of people: names, position, trade, picture. Nothing personal. */
+  stockroomPeople() {
+    return this.o.people.map(p => ({ id: p.id, full_name: p.full_name, login_level: p.login_level, position: POSITION_LABEL[p.login_level], tradeLabel: p.trade ? TRADES[p.trade] : null, photo_id: this.profiles()[p.id]?.photo_id ?? null }));
+  }
+
   private profiles() { return this.o.profiles ?? (this.o.profiles = seedProfiles()); }
 
   /** One person's profile; `crew` says who is in which vehicle, `spot` where a vehicle is. */

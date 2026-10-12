@@ -190,3 +190,13 @@ export type Trade = keyof typeof TRADES;
 export function workOf(p: Permissions): Record<WorkArea, boolean> {
   return Object.fromEntries(Object.entries(WORK_AREAS).map(([k, a]) => [k, a.actions.every(x => !!p[x as Action])])) as Record<WorkArea, boolean>;
 }
+
+/**
+ * Who may open people's profiles (contact details, where they are). The office does; the stock
+ * controller does not: the stockroom sees only names with their stock, tools and PPE.
+ */
+export function seesPeople(a: Actor): boolean {
+  if (can(a, 'manage_access')) return true;
+  if (a.level === 'stockroom') return false;
+  return can(a, 'view_all_job_cards') || can(a, 'assign_jobs');
+}

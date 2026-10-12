@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Db, Q } from '../db.ts';
 import { audit, tx } from '../db.ts';
-import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, POSITION_LABEL, TRADES, WORK_AREAS, can, isScoped, workOf, type Action, type LoginLevel, type Trade, type WorkArea } from '../core/permissions.ts';
+import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, POSITION_LABEL, TRADES, WORK_AREAS, can, isScoped, workOf, type Action, type LoginLevel, type Trade, type WorkArea, seesPeople } from '../core/permissions.ts';
 import { Refused, Uuid, parse } from '../http.ts';
 import { loadActor } from '../auth.ts';
 import { notify } from './field.ts';
@@ -113,7 +113,7 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
 
   /** Everyone, for the office. Only whoever manages access (the CEO, or someone given it) can change positions, trades and work. */
   app.get('/people', async req => {
-    if (!can(req.actor, 'manage_access') && !can(req.actor, 'view_all_job_cards') && !can(req.actor, 'assign_jobs')) throw new Refused(403, ['people are not part of your work']);
+    if (!seesPeople(req.actor)) throw new Refused(403, ['people are not part of your work']);
     const manage = can(req.actor, 'manage_access');
     const { rows } = await req.db.query(
       `SELECT u.id, u.full_name, u.login_level, u.trade, d.name AS department, u.status, p.photo_id

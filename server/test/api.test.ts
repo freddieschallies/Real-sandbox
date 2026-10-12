@@ -1182,7 +1182,11 @@ test('tools and PPE: the stockroom keeps each person\'s list; stock goes out and
   assert.equal(await onHand(), 4, 'returned boots back in stock');
   assert.equal((await call('stock', 'POST', `/kit/${b.body.id}/close`, { status: 'returned' })).status, 409);
   const everyone = (await call('stock', 'GET', '/kit/people')).body;
-  assert.equal(everyone.find((x: { id: string }) => x.id === ids.tech).tools, 0);
+  const t = everyone.find((x: { id: string }) => x.id === ids.tech);
+  assert.equal(t.tools, 0);
+  assert.ok(!('phone' in t) && !('email' in t), 'the stockroom sees names, not contact details');
+  assert.equal((await call('stock', 'GET', `/people/${ids.tech}`)).status, 403, 'the stock controller cannot open profiles');
+  assert.equal((await call('stock', 'GET', '/people')).status, 403);
   const list = (await call('stock', 'GET', `/people/${ids.tech}/kit`)).body;
   assert.equal(list.held.length, 0);
   assert.equal(list.history.length, 2);

@@ -3,13 +3,13 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { audit, tx } from '../db.ts';
-import { POSITION_LABEL, TRADES, can, type LoginLevel, type Trade } from '../core/permissions.ts';
+import { POSITION_LABEL, TRADES, can, type LoginLevel, type Trade, seesPeople } from '../core/permissions.ts';
 import { DateOnly, Refused, Uuid, parse } from '../http.ts';
 import { kitAllowed, recordsAllowed } from './staff.ts';
 
 export function registerPeopleRoutes(app: FastifyInstance) {
   const office = (req: FastifyRequest) => {
-    if (!can(req.actor, 'manage_access') && !can(req.actor, 'view_all_job_cards') && !can(req.actor, 'assign_jobs')) throw new Refused(403, ['people are not part of your work']);
+    if (!seesPeople(req.actor)) throw new Refused(403, ['people are not part of your work']);
   };
 
   app.get('/people/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {

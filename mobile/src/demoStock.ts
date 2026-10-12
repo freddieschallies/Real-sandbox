@@ -137,11 +137,13 @@ export class DemoStock {
     const held = mine.filter(k => k.status === 'issued').map(view).sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
     return { held, history: mine.filter(k => k.status !== 'issued').map(view).sort((a, b) => (b.closed_at ?? '').localeCompare(a.closed_at ?? '')), dueForReplacement: held.filter(k => k.due).length, canWrite };
   }
-  kitPeople(people: { id: string; full_name: string; login_level: string; trade?: string | null }[]) {
+  kitPeople(people: { id: string; full_name: string; login_level: string; position: string; tradeLabel: string | null; photo_id: string | null }[]) {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
     return people.map(p => {
       const h = (this.s.kit ?? []).filter(k => k.userId === p.id && k.status === 'issued');
-      return { id: p.id, full_name: p.full_name, login_level: p.login_level, trade: p.trade ?? null, tools: h.filter(k => k.kind === 'tool').length, ppe: h.filter(k => k.kind === 'ppe').length, due: h.filter(k => k.replaceBy && k.replaceBy <= today).length };
+      const stock = this.s.holdings.filter(x => x.qty > 0 && ((x.tech ?? 'me') === p.id || x.tech === p.full_name)).reduce((n, x) => n + x.qty, 0);
+      return { id: p.id, full_name: p.full_name, login_level: p.login_level, position: p.position, tradeLabel: p.tradeLabel, photo_id: p.photo_id,
+        tools: h.filter(k => k.kind === 'tool').length, ppe: h.filter(k => k.kind === 'ppe').length, stock, due: h.filter(k => k.replaceBy && k.replaceBy <= today).length };
     }).sort((a, b) => Number(b.login_level === 'technician') - Number(a.login_level === 'technician') || a.full_name.localeCompare(b.full_name));
   }
   issueKit(userId: string, who: string, by: string, b: { kind: 'tool' | 'ppe'; name?: string; detail?: string; qty?: number; stockItemId?: string; replaceBy?: string }): Res {

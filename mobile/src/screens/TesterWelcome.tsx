@@ -22,7 +22,7 @@ const STEPS: [string, string[]][] = [
     'To receive: count and tick what Thabo sent back.',
     'Stock: the whole inventory by item or technician; Live: every movement as it happens; Issued register.',
     'Stock: three separate categories, Stock (parts for jobs), Tools and PPE. Technicians book only stock onto jobs. Change an item\'s category on the part screen.',
-    'Tools & PPE: everyone\'s list. Sipho\'s boots are due for replacement. Issue him gloves from stock, take something back (it goes back into stock), or write it off as lost or damaged with a note.',
+    'People: open anyone to see their PPE, the stock they hold and their tools (names only, no personal details). Sipho\'s boots are due for replacement: issue him gloves from stock, take something back (it goes back into stock), or write it off as lost or damaged with a note.',
     'To order: fills by itself as items drop below their minimum (fuses and contactors are low). Mark one as ordered; receiving the delivery takes it off.',
     'Open a part (Stock → the part → Open part): add a photo of it, set its minimum and supplier, and see where it was last used.',
     'Workshop: what the mechanic keeps and the minimums. Issue oil from the stockroom to the workshop, set which oil the daily checks use, take stock back.',

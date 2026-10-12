@@ -1,6 +1,6 @@
 // The stock controller's app. Phone: tabs at the bottom, list then detail. Desktop (wide screen):
 // menu, list and the open request side by side. Nothing leaves or enters the stockroom without this.
-import { KitCard, KitPeople } from '../staff/Staff.tsx';
+import { KitPeople, StockPersonView, type StockPerson } from '../staff/Staff.tsx';
 import { OrderList, PartDetail, Thumb, useOrderList } from './Parts.tsx';
 import { WorkshopAdd, WorkshopItem, WorkshopList, useWorkshop } from '../fleet/Workshop.tsx';
 import React, { useState } from 'react';
@@ -18,7 +18,7 @@ import type { StockRequest, StockReturn } from '../types.ts';
 const K = { band: '#1E6F6A', bandText: '#E8FFFB', tick: '#3FB57A' };
 
 type Tab = 'issue' | 'receive' | 'room' | 'order' | 'people' | 'workshop' | 'live' | 'items';
-type Sel = { kind: 'issue'; id: string } | { kind: 'return'; id: string } | { kind: 'item'; id: string } | { kind: 'delivery' } | { kind: 'ws'; id: string } | { kind: 'wsadd' } | { kind: 'part'; id: string } | { kind: 'kit'; id: string; name: string } | null;
+type Sel = { kind: 'issue'; id: string } | { kind: 'return'; id: string } | { kind: 'item'; id: string } | { kind: 'delivery' } | { kind: 'ws'; id: string } | { kind: 'wsadd' } | { kind: 'part'; id: string } | { kind: 'kit'; id: string; p: StockPerson } | null;
 type Photo = { id: string; uri: string; mime: string };
 
 const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
@@ -41,7 +41,7 @@ export function StockroomApp() {
     { key: 'receive', label: 'To receive', count: room.ctl.returns.length },
     { key: 'room', label: 'Stock' },
     { key: 'order', label: 'To order', count: ol.d?.toOrder.length },
-    { key: 'people', label: 'Tools & PPE' },
+    { key: 'people', label: 'People' },
     { key: 'workshop', label: 'Workshop', count: ws.data?.belowMin },
     { key: 'live', label: 'Live', count: (room.ctl.activity ?? []).filter(a => !room.ctl.seenActivityAt || a.at > room.ctl.seenActivityAt).length },
     { key: 'items', label: 'New items', count: o?.newItems ?? room.ctl.room.filter(i => i.needsReview).length },
@@ -53,7 +53,7 @@ export function StockroomApp() {
       {tab === 'receive' ? <ReturnList items={room.ctl.returns} open={id => setSel({ kind: 'return', id })} selected={sel?.kind === 'return' ? sel.id : null} /> : null}
       {tab === 'room' ? <RoomList items={room.ctl.room} holdings={room.ctl.holdings ?? []} onDelivery={() => setSel({ kind: 'delivery' })} onPart={id => setSel({ kind: 'part', id })} /> : null}
       {tab === 'order' ? <OrderList ol={ol} open={id => setSel({ kind: 'part', id })} /> : null}
-      {tab === 'people' ? <KitPeople open={p => setSel({ kind: 'kit', id: p.id, name: p.full_name })} selected={sel?.kind === 'kit' ? sel.id : null} tick={kitTick} /> : null}
+      {tab === 'people' ? <KitPeople open={p => setSel({ kind: 'kit', id: p.id, p })} selected={sel?.kind === 'kit' ? sel.id : null} tick={kitTick} /> : null}
       {tab === 'workshop' ? <WorkshopList ws={ws} role="controller" open={id => setSel({ kind: 'ws', id })} onAdd={() => setSel({ kind: 'wsadd' })} /> : null}
       {tab === 'live' ? <LiveFeed items={room.ctl.activity ?? []} seen={room.ctl.seenActivityAt ?? null} invoices={room.ctl.invoices} /> : null}
       {tab === 'items' ? <NewItemList items={room.ctl.room.filter(i => i.needsReview)} open={id => setSel({ kind: 'item', id })} /> : null}
@@ -81,7 +81,7 @@ export function StockroomApp() {
       const it = room.ctl.room.find(x => x.id === sel.id);
       return it ? <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}><PartDetail key={it.id} it={it} done={close} reload={() => { room.load(); ol.load(); }} /></ScrollView> : null;
     }
-    if (sel.kind === 'kit') return <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}><Heading>{sel.name}</Heading><KitCard key={sel.id} userId={sel.id} name={sel.name} onChange={() => setKitTick(t => t + 1)} /></ScrollView>;
+    if (sel.kind === 'kit') return <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}><StockPersonView key={sel.id} p={sel.p} holdings={room.ctl.holdings ?? []} onChange={() => { setKitTick(t => t + 1); room.load(); }} /></ScrollView>;
     if (sel.kind === 'ws') return <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}><WorkshopItem key={sel.id} id={sel.id} ws={ws} role="controller" done={close} /></ScrollView>;
     if (sel.kind === 'wsadd') return <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}><WorkshopAdd ws={ws} done={() => { close(); room.load(); }} /></ScrollView>;
     return <Delivery room={room} done={close} />;
@@ -347,7 +347,7 @@ function RoomList({ items, holdings, onDelivery, onPart }: { items: RoomItem[]; 
       <Choice options={['stock', 'tool', 'ppe'] as const} value={cat} onChange={c => { setCat(c); if (c !== 'stock') setView('item'); }}
         labels={{ stock: `Stock (${count('stock')})`, tool: `Tools (${count('tool')})`, ppe: `PPE (${count('ppe')})` }} />
       {cat === 'stock' ? <Choice options={['item', 'tech'] as const} value={view} onChange={setView} labels={{ item: 'By item', tech: 'By technician' }} />
-        : <Text style={st.small}>{CATEGORY_LABEL[cat]} are issued to a person by name (Tools & PPE tab), not booked onto jobs.</Text>}
+        : <Text style={st.small}>{CATEGORY_LABEL[cat]} are issued to a person by name (People tab), not booked onto jobs.</Text>}
       <Field label="Search" value={q} onChangeText={setQ} placeholder={view === 'item' ? 'code or description' : 'technician, job or item'} autoCorrect={false} />
       {view === 'item' ? items.filter(i => catOf(i) === cat && hit(`${i.code} ${i.description}`)).map(i => {
         const out = holdings.filter(h => h.stockItemId === i.id);
