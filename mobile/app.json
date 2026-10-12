@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "Real Sandbox",
+    "slug": "real-sandbox",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#17191C",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "backgroundColor": "#17191C",
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "The camera scans the barcode in your vehicle."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "The camera takes job photos and slip photos. They stay inside the app.",
+          "photosPermission": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Your location is read only when you tap Arrived, Start or Dropped off, never in the background."
+        }
+      ]
+    ]
+  }
+}

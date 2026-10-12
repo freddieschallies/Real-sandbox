@@ -369,11 +369,14 @@ export async function cardView(c: Q, jobId: string) {
     if (!loaded) throw new Refused(404, ['no such job']);
     const head = await c.query(
       `SELECT j.job_number, j.job_type, j.priority, j.status, j.fault_reported, j.scheduled_date, j.client_order_ref,
-              j.manager_name, j.manager_unavailable_reason, s.id AS store_id, s.name AS store, u.full_name AS lead_technician
+              j.manager_name, j.manager_unavailable_reason, s.id AS store_id, s.name AS store, s.address AS store_address,
+              s.lat AS store_lat, s.lng AS store_lng, s.geofence_m, u.full_name AS lead_technician
          FROM jobs j JOIN stores s ON s.id = j.store_id JOIN users u ON u.id = j.lead_technician_id WHERE j.id = $1`,
       [jobId],
     );
     const checks = await c.query('SELECT id, step, done FROM planned_maintenance_checks WHERE job_id = $1 ORDER BY step', [jobId]);
+    const equipment = await c.query('SELECT id, brand, model, serial, description FROM equipment WHERE store_id = $1 ORDER BY description', [head.rows[0].store_id]);
+    const managers = await c.query('SELECT full_name FROM store_managers WHERE store_id = $1 ORDER BY full_name', [head.rows[0].store_id]);
     const { card } = loaded;
     return {
       id: jobId,
@@ -382,6 +385,8 @@ export async function cardView(c: Q, jobId: string) {
       currentState: card.visits.at(-1)?.state ?? 'not_started',
       jobMinutes: J.jobMinutes(card),
       checklist: checks.rows,
+      equipment: equipment.rows,
+      storeManagers: managers.rows.map(m => m.full_name),
       items: card.items.map(it => ({ ...it, status: J.itemStatus(it, card.jobType), missing: J.missingOnItem(it, card.jobType) })),
     };
   }
