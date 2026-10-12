@@ -12,13 +12,14 @@ import type { CardView } from '../types.ts';
 import { KitCard, StaffRecord } from '../staff/Staff.tsx';
 import { DepartmentCard, VanCard, VanLists } from '../vanstock/VanStock.tsx';
 import { TeamMap } from '../team/TeamMap.tsx';
+import { DepartmentsBoard } from '../hr/Departments.tsx';
 import { Avatar, ProfileDetails, ProfileTop, useProfile } from './Profile.tsx';
 import { Accounts, InvoiceDetail, InvoiceList, NewQuote, QuoteDetail, QuoteList, useBooks } from './Books.tsx';
 import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries.tsx';
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 
 const K = { band: '#121212', bandText: '#F7F3EC', stripe: '#E8701A' };
-type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'people' | 'stores';
+type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'people' | 'stores';
 type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
@@ -34,7 +35,7 @@ const day = (s: string) => {
   return new Date(`${s}T12:00:00+02:00`).toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short' });
 };
 const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-const OFFICE_LEVELS = ['admin', 'management', 'director', 'creator'];
+const OFFICE_LEVELS = ['admin', 'management', 'hr', 'director', 'creator'];
 export const isOffice = (level?: string) => OFFICE_LEVELS.includes(level ?? '');
 
 export function OfficeApp() {
@@ -44,7 +45,10 @@ export function OfficeApp() {
   const o = useOffice();
   const qs = useQueries();
   const books = useBooks();
-  const [tab, setTab] = useState<Tab>('today');
+  // Each person sees only the work the CEO switched on for them.
+  const work0 = s.session?.user.work ?? {};
+  const jobsSide = s.session?.user.level === 'creator' || !!work0.jobs;
+  const [tab, setTab] = useState<Tab>(jobsSide ? 'today' : 'departments');
   const [sel, setSel] = useState<Sel>(null);
   const ov = o.d.overview;
   const canPeople = !!o.d.people;
@@ -54,8 +58,10 @@ export function OfficeApp() {
   const does = (a: string) => s.session?.user.level === 'creator' || !!work[a];
 
   const tabs: { key: Tab; label: string; short?: string; count?: number }[] = [
-    { key: 'today', label: 'Today' },
-    { key: 'jobs', label: 'Jobs', count: ov ? ov.jobs.carried_over + ov.jobs.urgent : undefined },
+    ...(jobsSide ? [
+      { key: 'today' as Tab, label: 'Today' },
+      { key: 'jobs' as Tab, label: 'Jobs', count: ov ? ov.jobs.carried_over + ov.jobs.urgent : undefined },
+    ] : []),
     ...(does('jobs') ? [{ key: 'queries' as Tab, label: 'Queries', count: qs.unread }] : []),
     ...(does('documents') ? [
       { key: 'quotes' as Tab, label: 'Quotes', count: books.quotes.filter(q => q.status === 'draft').length || undefined },
@@ -68,8 +74,9 @@ export function OfficeApp() {
     ] : []),
     ...(does('flags') || s.session?.user.level === 'management' ? [{ key: 'map' as Tab, label: 'Team map', short: 'Map' }] : []),
     ...(does('vanstock') ? [{ key: 'vans' as Tab, label: 'Van stock', short: 'Vans' }] : []),
+    ...(does('hr') ? [{ key: 'departments' as Tab, label: 'Departments' }] : []),
     ...(canPeople ? [{ key: 'people' as Tab, label: 'People' }] : []),
-    { key: 'stores', label: 'Stores' },
+    ...(jobsSide ? [{ key: 'stores' as Tab, label: 'Stores' }] : []),
   ];
 
   const list = (
@@ -83,6 +90,7 @@ export function OfficeApp() {
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
       {tab === 'handovers' ? <HandoverList o={o} open={id => setSel({ kind: 'handover', id })} /> : null}
       {tab === 'map' ? <TeamMap openPerson={canPeople ? id => { setTab('people'); setSel({ kind: 'person', id }); } : undefined} /> : null}
+      {tab === 'departments' ? <DepartmentsBoard openPerson={canPeople ? id => { setTab('people'); setSel({ kind: 'person', id }); } : undefined} /> : null}
       {tab === 'vans' ? <VanLists openTech={id => setSel({ kind: 'van', id })} /> : null}
       {tab === 'people' ? <PeopleList o={o} open={id => setSel({ kind: 'person', id })} /> : null}
       {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
@@ -116,7 +124,7 @@ export function OfficeApp() {
         {!wide && sel ? <Pressable onPress={close} accessibilityRole="button" accessibilityLabel="Back" hitSlop={10}><Text style={{ color: K.bandText, fontSize: 34 }}>‹</Text></Pressable> : null}
         <View style={{ flex: 1 }}>
           <Text style={{ color: K.bandText, fontSize: 22, fontWeight: '800' }}>Office</Text>
-          <Text style={{ color: K.bandText, opacity: 0.75 }}>{s.session?.user.name} · {s.session?.user.level === 'creator' ? 'CEO' : s.session?.user.level === 'admin' ? 'Admin' : s.session?.user.level === 'director' ? 'Director' : 'Department manager'} · {s.session?.company.name}</Text>
+          <Text style={{ color: K.bandText, opacity: 0.75 }}>{s.session?.user.name} · {s.session?.user.level === 'creator' ? 'CEO' : s.session?.user.level === 'admin' ? 'Admin' : s.session?.user.level === 'director' ? 'Director' : s.session?.user.level === 'hr' ? 'HR' : 'Department manager'} · {s.session?.company.name}</Text>
         </View>
         <Pressable onPress={o.load} accessibilityRole="button" accessibilityLabel="Refresh" hitSlop={8}
           style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: K.bandText }}>
@@ -141,8 +149,8 @@ export function OfficeApp() {
               </Pressable>
             ))}
           </View>
-          <View style={{ width: tab === 'today' || tab === 'accounts' || tab === 'map' ? undefined : 460, flex: tab === 'today' || tab === 'accounts' || tab === 'map' ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
-          {tab !== 'today' && tab !== 'accounts' && tab !== 'map' ? <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}</View> : null}
+          <View style={{ width: tab === 'today' || tab === 'accounts' || tab === 'map' || tab === 'departments' ? undefined : 460, flex: tab === 'today' || tab === 'accounts' || tab === 'map' || tab === 'departments' ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
+          {tab !== 'today' && tab !== 'accounts' && tab !== 'map' && tab !== 'departments' ? <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}</View> : null}
         </View>
       </View>
     );

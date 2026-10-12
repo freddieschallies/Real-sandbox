@@ -46,6 +46,11 @@ const STEPS: [string, string[]][] = [
     'Van stock: his department\'s list of spares every technician must carry. Thabo and Nomvula are short (flagged); Sipho is complete. Add an item or raise a quantity and see who goes short; every change is kept.',
     'Flags: a van that is short of the list stays flagged until the stockroom tops it up, then closes by itself.',
   ]],
+  ['As HR (Precious)', [
+    'Departments: every department with its manager and the technicians under him. Move a technician to another department, or give Plumbing a manager. Each person is in one department; a manager runs one department, so moving Pieter takes him off Refrigeration.',
+    'Staff records: open anyone under People to add an issue or a warning, or delete one (a line keeps who deleted it and when).',
+    'She does not see jobs, quotes or the stockroom, cannot change positions, and does not see ID numbers or home addresses (those stay with the CEO).',
+  ]],
   ['As the office admin (Zanele)', [
     'She only sees the work the CEO switched on for her. By default: jobs, quotes and invoices, and stores.',
     'Invoices: two closed jobs are waiting. Make the invoice from the job card (labour from the job timers, call-out, parts), price the lines, send it, print it.',
@@ -60,9 +65,9 @@ const STEPS: [string, string[]][] = [
   ['As the CEO (Lilanie)', [
     'Everything: the office, plus Stockroom and Fleet tabs at the top to open those screens.',
     'People: open a person for their picture, the vehicle they are in, where they are, the job they are busy with and who with, contact details, and (CEO only) personal details. A dropdown sets their position and a technician\'s trade.',
-    'Staff record: on Ayanda\'s profile, add an issue or a warning (a warning needs the action taken and the reason). Delete one: it goes, but a line says who deleted a record and when. Give Zanele "Staff records (HR)" to let her do this too.',
+    'Staff record: on Ayanda\'s profile, add an issue or a warning (a warning needs the action taken and the reason). Delete one: it goes, but a line says who deleted a record and when. HR does this too; give Zanele "HR" work to let her as well.',
     'Tools and PPE: each profile shows what the stockroom has on that person\'s name.',
-    'Departments: on a technician\'s profile choose which department (and manager) he works under; Ayanda is in Plumbing, which has no manager yet. On Pieter\'s profile make him manager of a department, or start a new one.',
+    'Departments: the same screen HR has. Ayanda is in Plumbing, which has no manager yet.',
     'Today: jobs, flags, handovers to approve, daily checks, safety faults and stock on one screen. Flags and Handovers: resolve and approve.',
   ]],
 ];
@@ -71,7 +76,7 @@ export function TesterWelcome() {
   const s = useStore();
   const [busy, setBusy] = useState<string | null>(null);
   const [reset, setReset] = useState(false);
-  const go = async (who: 'demo' | 'stock' | 'mech' | 'office' | 'admin' | 'manager') => { setBusy(who); await s.signIn('demo', '', who, 'demo'); setBusy(null); };
+  const go = async (who: 'demo' | 'stock' | 'mech' | 'office' | 'admin' | 'manager' | 'hr') => { setBusy(who); await s.signIn('demo', '', who, 'demo'); setBusy(null); };
   return (
     <Screen title="Real Sandbox" sub="Test drive · ZSP job cards and stock">
       <View style={{ gap: 6 }}>
@@ -82,6 +87,7 @@ export function TesterWelcome() {
       <Button label="Open as stock controller" kind="secondary" onPress={() => go('stock')} busy={busy === 'stock'} />
       <Button label="Open as mechanic" kind="secondary" onPress={() => go('mech')} busy={busy === 'mech'} />
       <Button label="Open as department manager (Pieter)" kind="secondary" onPress={() => go('manager')} busy={busy === 'manager'} />
+      <Button label="Open as HR (Precious)" kind="secondary" onPress={() => go('hr')} busy={busy === 'hr'} />
       <Button label="Open as office admin (Zanele)" kind="secondary" onPress={() => go('admin')} busy={busy === 'admin'} />
       <Button label="Open as CEO (Lilanie)" kind="secondary" onPress={() => go('office')} busy={busy === 'office'} />
       {STEPS.map(([title, lines]) => (

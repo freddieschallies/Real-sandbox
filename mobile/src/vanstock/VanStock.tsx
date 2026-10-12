@@ -188,7 +188,6 @@ export function DepartmentCard({ userId, departmentId, level, name, canManage, t
 }) {
   const s = useStore();
   const [d, setD] = useState<{ departments: { id: string; name: string; manager_id: string | null; manager: string | null; technicians: number }[]; managers: { id: string; full_name: string }[] } | null>(null);
-  const [newName, setNewName] = useState('');
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; lines: string[] } | null>(null);
   const load = async () => { const x = await s.ask({ method: 'GET', path: '/departments' }); if (x?.status === 200) setD(x.body); };
   useEffect(() => { load(); }, [userId]);
@@ -211,19 +210,18 @@ export function DepartmentCard({ userId, departmentId, level, name, canManage, t
       ) : null}
       {isManager ? (
         <>
-          {managed.length ? managed.map(x => <Text key={x.id} style={st.body}>Manages {x.name} ({x.technicians} technician{x.technicians === 1 ? '' : 's'})</Text>) : <Body quiet>{first} does not manage a department yet.</Body>}
+          {managed.length ? managed.map(x => <Text key={x.id} style={st.body}>Runs {x.name} ({x.technicians} technician{x.technicians === 1 ? '' : 's'})</Text>) : <Body quiet>{first} does not run a department yet.</Body>}
           {team.length ? <Text style={st.small}>Technicians under {first}: {team.map(t => t.full_name).join(', ')}</Text> : null}
-          {canManage ? (
-            <>
-              <Select label="Make him manager of" value={undefined as string | undefined} placeholder="Choose a department"
-                options={d.departments.map(x => ({ value: x.id, label: `${x.name}${x.manager ? ` (now ${x.manager})` : ' (no manager)'}` }))}
-                onChange={async v => after(await s.ask({ method: 'PUT', path: `/departments/${v}`, json: { managerId: userId } }), `${first} now manages ${d.departments.find(x => x.id === v)?.name}`)} />
-              <Label>Or start a new department</Label>
-              <TextInput value={newName} onChangeText={setNewName} placeholder="e.g. Electrical" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="New department name" />
-              <Button label={`New department, managed by ${first}`} kind="secondary" disabled={newName.trim().length < 2}
-                onPress={async () => { await after(await s.ask({ method: 'POST', path: '/departments', json: { name: newName.trim(), managerId: userId } }), `${newName.trim()} department made, managed by ${first}`); setNewName(''); }} />
-            </>
+          {canManage && level === 'management' ? (
+            <Select label="Runs department" value={managed[0]?.id ?? ''} placeholder="None yet"
+              options={[...d.departments.map(x => ({ value: x.id, label: `${x.name}${x.manager && x.manager_id !== userId ? ` (now ${x.manager})` : ''}` })), { value: '', label: 'None' }]}
+              onChange={async v => {
+                const x = await s.ask({ method: 'PUT', path: `/access/users/${userId}/department`, json: { departmentId: v || null } });
+                const rep = (x?.body as { replaced?: string | null })?.replaced;
+                await after(x, v ? `${first} now runs ${d.departments.find(y => y.id === v)?.name}${rep ? `; ${rep} no longer does` : ''}` : `${first} runs no department now`);
+              }} />
           ) : null}
+          {canManage ? <Text style={st.small}>A department manager runs one department. Set up departments on the Departments tab.</Text> : null}
         </>
       ) : null}
       {msg ? <Notice tone={msg.tone} title={msg.tone === 'good' ? 'Saved' : 'Not saved'} lines={msg.lines} /> : null}

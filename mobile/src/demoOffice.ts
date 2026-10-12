@@ -25,6 +25,7 @@ function seedProfiles(): Record<string, DemoProfile> {
     p('office', '072 555 0101', 'lilanie@example.com', 'Demo contact', '072 555 0901', '2015-03-01', '1 Demo Street, Meerensee'),
     p('admin-1', '072 555 0102', 'zanele@example.com', 'Demo contact', '072 555 0902', '2019-07-15', '2 Demo Street, Arboretum'),
     p('mgr-1', '072 555 0103', 'pieter@example.com', 'Demo contact', '072 555 0903', '2017-02-01', '3 Demo Street, Birdswood'),
+    p('hr-1', '072 555 0110', 'precious@example.com', 'Demo contact', '072 555 0910', '2019-01-14', '10 Demo Street, Arboretum'),
     p('stock', '072 555 0104', 'lindiwe@example.com', 'Demo contact', '072 555 0904', '2020-05-04', '4 Demo Street, Brackenham'),
     p('mech', '072 555 0105', 'bongani@example.com', 'Demo contact', '072 555 0905', '2018-09-10', '5 Demo Street, Alton'),
     p('me', '072 555 0106', 'thabo@example.com', 'Demo contact', '072 555 0906', '2021-01-11', '6 Demo Street, Esikhawini'),
@@ -66,7 +67,7 @@ export interface DemoOfficeState {
 export const WORK_AREAS = {
   jobs: 'Jobs: open, assign and edit', documents: 'Quotes and invoices', stores: 'Clients, stores and equipment', stockroom: 'Stockroom (full access)',
   fleet: "Fleet (the mechanic's work)", flags: 'Flags and approvals', prices: 'Prices and rates', access: 'Positions and access (People)',
-  hr: 'Staff records (HR): issues and warnings', vanstock: 'Van stock lists (bill of quantities)',
+  hr: 'HR: staff records, and who works in which department', vanstock: 'Van stock lists (bill of quantities)',
 } as const;
 export const TRADES = { foodservice: 'Foodservice tech', plumber: 'Plumber', electrician: 'Electrician', assistant: 'Assistant' } as const;
 export type WorkArea = keyof typeof WORK_AREAS;
@@ -74,11 +75,11 @@ const ALL_WORK = Object.keys(WORK_AREAS) as WorkArea[];
 /** What each position does before the CEO changes anything (as on the server). */
 const DEFAULT_WORK: Record<string, WorkArea[]> = {
   technician: [], mechanic: ['fleet'], admin: ['jobs', 'documents', 'stores'], stockroom: ['jobs', 'documents', 'stores', 'stockroom'],
-  management: ['jobs', 'flags', 'vanstock'], director: ALL_WORK, creator: ALL_WORK,
+  management: ['jobs', 'flags', 'vanstock'], hr: ['hr'], director: ALL_WORK, creator: ALL_WORK,
 };
 
 export const POSITION_LABEL: Record<string, string> = {
-  technician: 'Technician', mechanic: 'Mechanic (fleet)', admin: 'Admin', stockroom: 'Stock controller', management: 'Department manager', director: 'Director', creator: 'Creator (CEO)',
+  technician: 'Technician', mechanic: 'Mechanic (fleet)', admin: 'Admin', stockroom: 'Stock controller', management: 'Department manager', hr: 'HR', director: 'Director', creator: 'Creator (CEO)',
 };
 
 const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
@@ -101,6 +102,7 @@ export function seedOffice(): DemoOfficeState {
       { id: 'office', full_name: 'Lilanie Schallies', login_level: 'creator', department: 'Office' },
       { id: 'admin-1', full_name: 'Zanele Khoza', login_level: 'admin', department: 'Office' },
       { id: 'mgr-1', full_name: 'Pieter van Wyk', login_level: 'management', department: 'Refrigeration' },
+      { id: 'hr-1', full_name: 'Precious Ngcobo', login_level: 'hr', department: 'Office' },
       { id: 'stock', full_name: 'Lindiwe Zulu', login_level: 'stockroom', department: 'Stores' },
       { id: 'mech', full_name: 'Bongani Khumalo', login_level: 'mechanic', department: 'Workshop' },
       ...DEMO_TECHS.map(t => ({ id: t.id, full_name: t.full_name, login_level: 'technician', department: 'Refrigeration',

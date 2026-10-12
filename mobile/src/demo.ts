@@ -155,6 +155,8 @@ export class DemoTransport implements Transport {
   }
 
   private office(): DemoOffice {
+    // Older saved demos: add HR.
+    if (this.state.office && !this.state.office.people.some(x => x.login_level === 'hr')) this.state.office.people.splice(2, 0, { id: 'hr-1', full_name: 'Precious Ngcobo', login_level: 'hr', department: 'Office' });
     if (!this.state.office) {
       this.state.office = seedOffice();
       const st = (id: string) => this.state.office!.stores.find(x => x.id === id)!;
@@ -209,9 +211,9 @@ export class DemoTransport implements Transport {
     let m: RegExpMatchArray | null;
     if (!(p.startsWith('/departments') || p.startsWith('/van-stock') || p === '/me/van' || p === '/team/map' || /^\/access\/users\/[^/]+\/department$/.test(p))) return null;
     const v = this.vans();
-    const office = ['admin', 'management', 'director', 'creator'].includes(this.who.level);
+    const office = ['admin', 'management', 'hr', 'director', 'creator'].includes(this.who.level);
     const stockroom = this.does('stockroom');
-    const manages = this.does('access');
+    const manages = this.does('hr');
     const save = (r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }) => { this.persist(this.state); return r.ok ? ok(r.body) : refuse(r.status, ...r.reasons); };
     const mine = this.who.level === 'management' ? [v.v.memberOf[this.who.id]].filter(Boolean) as string[] : null;
     const editable = (d: string) => this.does('vanstock') && (mine ? mine.includes(d) : true);
@@ -235,12 +237,10 @@ export class DemoTransport implements Transport {
     }
     if (p === '/departments' && req.method === 'GET') return office || stockroom ? ok(v.departments(manages)) : refuse(403, 'departments are not part of your work');
     if (p === '/departments' || (m = p.match(/^\/departments\/([^/]+)$/))) {
-      if (!manages) return refuse(403, 'only whoever manages access sets up departments');
-      const r = p === '/departments' ? v.createDept(b) : v.updateDept(m![1], b);
-      if (r.ok && b.managerId) { const d = p === '/departments' ? (r.body as { id: string }).id : m![1]; if (this.office().o.people.find(x => x.id === b.managerId)?.login_level === 'management') v.v.memberOf[b.managerId] = d; }
-      return save(r);
+      if (!manages) return refuse(403, 'only HR (or the CEO) sets up departments');
+      return save(p === '/departments' ? v.createDept(b) : v.updateDept(m![1], b));
     }
-    if ((m = p.match(/^\/access\/users\/([^/]+)\/department$/))) return manages ? save(v.setDepartment(m[1], b.departmentId ?? null, this.who.name)) : refuse(403, 'only whoever manages access');
+    if ((m = p.match(/^\/access\/users\/([^/]+)\/department$/))) return manages ? save(v.setDepartment(m[1], b.departmentId ?? null, this.who.name)) : refuse(403, 'only HR (or the CEO) puts people in departments');
     if (p === '/van-stock') {
       if (!office && !stockroom && !this.does('vanstock')) return refuse(403, 'van stock lists are not part of your work');
       return ok(v.lists(mine && !manages && !stockroom ? mine : 'all', editable));
@@ -258,11 +258,12 @@ export class DemoTransport implements Transport {
   /** The office's routes; only office positions get here. */
   private officeRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
-    const office = ['admin', 'management', 'director', 'creator'].includes(this.who.level);
+    const office = ['admin', 'management', 'hr', 'director', 'creator'].includes(this.who.level);
     const isOffice = p.startsWith('/office') || p === '/jobs' || p.startsWith('/flags') && !p.endsWith('/explain') || p.startsWith('/vehicles/inspections') || p === '/access/positions'
       || p === '/people' || /^\/people\/[^/]+(\/profile|\/record(\/[^/]+)?)?$/.test(p) || /^\/access\/users\/[^/]+\/(position|work|trade)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
     if (!isOffice) return null;
     if (!office) return refuse(403, 'office only');
+    if (!this.does('jobs') && (p === '/office/overview' || p === '/jobs' || p === '/office/stores' || p === '/office/technicians') && req.method === 'GET') return refuse(403, 'office only');
     const o = this.office();
     const done = (r: Parameters<DemoTransport['fleetResult']>[0]) => this.fleetResult(r);
     const q = new URLSearchParams(req.path.split('?')[1] ?? '');
@@ -609,6 +610,7 @@ export class DemoTransport implements Transport {
         : b.email === 'office' ? { id: 'office', name: 'Lilanie Schallies', level: 'creator' }
         : b.email === 'admin' ? { id: 'admin-1', name: 'Zanele Khoza', level: 'admin' }
         : b.email === 'manager' ? { id: 'mgr-1', name: 'Pieter van Wyk', level: 'management' }
+        : b.email === 'hr' ? { id: 'hr-1', name: 'Precious Ngcobo', level: 'hr' }
         : { id: 'me', name: 'Thabo Mkhize', level: 'technician' };
       this.who = who;
       return ok({
@@ -658,7 +660,7 @@ export class DemoTransport implements Transport {
     if (p === '/stock/catalogue') return ok(this.stock().catalogue());
     {
       const kitWrite = this.does('stockroom');
-      const office = ['admin', 'management', 'director', 'creator'].includes(this.who.level);
+      const office = ['admin', 'management', 'hr', 'director', 'creator'].includes(this.who.level);
       if (p === '/me/kit') { const k = this.stock().kitFor(this.who.id, false); this.persist(this.state); return ok(k); }
       if (p === '/kit/people') return kitWrite ? ok((() => { const v = this.vans(); return this.stock().kitPeople(this.office().stockroomPeople()).map(x => ({ ...x, van_short: v.shortCount(x.id) })); })()) : refuse(403, 'the stockroom keeps tools and PPE');
       if ((m = p.match(/^\/people\/([^/]+)\/kit$/))) {

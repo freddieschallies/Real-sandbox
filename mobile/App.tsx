@@ -117,7 +117,7 @@ function Frame({ children }: { children: React.ReactNode }) {
   const s = useStore();
   const { width } = useWindowDimensions();
   const fv = React.useContext(FleetView);
-  const narrow = Platform.OS === 'web' && width > 640 && !['stockroom', 'mechanic', 'admin', 'management', 'director', 'creator'].includes(s.session?.user.level ?? '') && fv.on === 'main';
+  const narrow = Platform.OS === 'web' && width > 640 && !['stockroom', 'mechanic', 'admin', 'management', 'hr', 'director', 'creator'].includes(s.session?.user.level ?? '') && fv.on === 'main';
   if (!narrow) return <>{children}</>;
   return (
     <View style={{ flex: 1, alignItems: 'center', backgroundColor: '#101214' }}>

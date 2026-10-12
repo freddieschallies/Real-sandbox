@@ -52,7 +52,11 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
          FROM departments d LEFT JOIN users m ON m.id = d.manager_id ORDER BY d.name`)).rows;
     const managers = (await req.db.query(
       `SELECT id, full_name, login_level FROM users WHERE login_level = ANY($1) AND status <> 'left' ORDER BY (login_level = 'management') DESC, full_name`, [MANAGER_LEVELS])).rows;
-    return { canManage: assigns(req.actor), departments, managers };
+    // Who works where: technicians and department managers, each in one department (or none yet).
+    const members = (await req.db.query(
+      `SELECT id, full_name, login_level, trade, department_id FROM users
+        WHERE login_level IN ('technician', 'management') AND status <> 'left' ORDER BY full_name`)).rows;
+    return { canManage: assigns(req.actor), departments, managers, members };
   });
 
   const Dept = z.object({ name: z.string().trim().min(2, 'the department name').max(60), managerId: Uuid.nullish() });

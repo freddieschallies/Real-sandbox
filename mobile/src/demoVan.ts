@@ -93,6 +93,8 @@ export class DemoVan {
       canManage,
       departments: this.v.departments.map(d => ({ id: d.id, name: d.name, manager_id: d.managerId, manager: this.name(d.managerId), technicians: this.techsIn(d.id).length, van_lines: Object.keys(this.v.lists[d.id] ?? {}).length })),
       managers: this.o.people.filter(p => ['management', 'director', 'creator'].includes(p.login_level)).map(p => ({ id: p.id, full_name: p.full_name, login_level: p.login_level })),
+      members: this.o.people.filter(p => ['technician', 'management'].includes(p.login_level)).sort((a, b) => a.full_name.localeCompare(b.full_name))
+        .map(p => ({ id: p.id, full_name: p.full_name, login_level: p.login_level, trade: p.trade ?? null, department_id: this.v.memberOf[p.id] ?? null })),
     };
   }
   private okManager(id: string | null | undefined): Res | null {
@@ -101,13 +103,25 @@ export class DemoVan {
     if (!p) return bad(404, 'no such person');
     return ['management', 'director', 'creator'].includes(p.login_level) ? null : bad(409, 'make the person a Department manager first');
   }
+  /** Managers run one department each: he leaves any other, and the previous manager is left without one. */
+  private makeManager(managerId: string, deptId: string): string | null {
+    const d = this.dept(deptId)!;
+    const prev = d.managerId && d.managerId !== managerId ? d.managerId : null;
+    for (const x of this.v.departments) if (x.managerId === managerId && x.id !== deptId) x.managerId = null;
+    d.managerId = managerId;
+    if (this.person(managerId)?.login_level === 'management') this.v.memberOf[managerId] = deptId;
+    if (prev && this.person(prev)?.login_level === 'management') this.v.memberOf[prev] = null;
+    return prev ? this.name(prev) : null;
+  }
+
   createDept(b: { name?: string; managerId?: string | null }): Res {
     const name = (b.name ?? '').trim();
     if (name.length < 2) return bad(400, 'the department name');
     if (this.v.departments.some(d => d.name.toLowerCase() === name.toLowerCase())) return bad(409, `there is already a ${name} department`);
     const m = this.okManager(b.managerId); if (m) return m;
     const id = `dep-${Date.now()}`;
-    this.v.departments.push({ id, name, managerId: b.managerId ?? null });
+    this.v.departments.push({ id, name, managerId: null });
+    if (b.managerId) this.makeManager(b.managerId, id);
     return good({ id });
   }
   updateDept(id: string, b: { name?: string; managerId?: string | null }): Res {
@@ -120,15 +134,23 @@ export class DemoVan {
       if (this.v.departments.some(x => x.id !== id && x.name.toLowerCase() === name.toLowerCase())) return bad(409, `there is already a ${name} department`);
       d.name = name;
     }
-    if (b.managerId !== undefined) d.managerId = b.managerId ?? null;
-    return good({ id });
+    let replaced: string | null = null;
+    if (b.managerId) replaced = this.makeManager(b.managerId, id);
+    else if (b.managerId === null && d.managerId) { if (this.person(d.managerId)?.login_level === 'management') this.v.memberOf[d.managerId] = null; d.managerId = null; }
+    return good({ id, replaced });
   }
   setDepartment(userId: string, departmentId: string | null, by: string): Res {
     if (!this.person(userId)) return bad(404, 'no such person');
     if (departmentId && !this.dept(departmentId)) return bad(404, 'no such department');
+    if (this.person(userId)!.login_level === 'management') {
+      let replaced: string | null = null;
+      if (departmentId) replaced = this.makeManager(userId, departmentId);
+      else { for (const x of this.v.departments) if (x.managerId === userId) x.managerId = null; this.v.memberOf[userId] = null; }
+      return good({ userId, departmentId, manages: departmentId, replaced, van: null });
+    }
     this.v.memberOf[userId] = departmentId;
     const r = this.check(userId, by);
-    return good({ userId, departmentId, van: { complete: r.complete, shortLines: r.shortLines } });
+    return good({ userId, departmentId, manages: null, replaced: null, van: { complete: r.complete, shortLines: r.shortLines } });
   }
   team(managerId: string) {
     return this.manages(managerId).flatMap(d => this.techsIn(d).map(t => ({ id: t.id, full_name: t.full_name, department: this.dept(d)!.name })));

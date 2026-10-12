@@ -48,7 +48,7 @@ export function useOffice() {
       ]);
       setD(x => ({
         overview: overview ?? x.overview, jobs: jobs ?? x.jobs, stores: stores ?? x.stores, techs: techs ?? x.techs, flags: flags ?? x.flags,
-        handovers: handovers ?? x.handovers, people: people ?? x.people, loadedAt: overview ? new Date().toISOString() : x.loadedAt,
+        handovers: handovers ?? x.handovers, people: people ?? x.people, loadedAt: overview || people ? new Date().toISOString() : x.loadedAt,
       }));
     } finally { setLoading(false); }
   }, [s]);
