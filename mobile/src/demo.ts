@@ -742,13 +742,21 @@ export class DemoTransport implements Transport {
 
     if (p === '/auth/login') {
       // The same pretend company seen as the technician or as the stock controller.
-      const who = b.email === 'stock' ? { id: 'stock', name: 'Lindiwe Zulu', level: 'stockroom' }
+      const pick = b.email === 'stock' ? { id: 'stock', name: 'Lindiwe Zulu', level: 'stockroom' }
         : b.email === 'mech' ? { id: 'mech', name: 'Bongani Khumalo', level: 'mechanic' }
         : b.email === 'office' ? { id: 'office', name: 'Lilanie Schallies', level: 'creator' }
         : b.email === 'admin' ? { id: 'admin-1', name: 'Zanele Khoza', level: 'admin' }
         : b.email === 'manager' ? { id: 'mgr-1', name: 'Pieter van Wyk', level: 'management' }
         : b.email === 'hr' ? { id: 'hr-1', name: 'Precious Ngcobo', level: 'hr' }
         : { id: 'me', name: 'Thabo Mkhize', level: 'technician' };
+      // Each "View as" button opens whoever holds that position now: if someone was given another
+      // position or left the company, the next person in that position stands in.
+      let who = pick;
+      if (this.state.office && this.office().levelOf(pick.id) !== pick.level) {
+        const now = this.state.office.people.find(x => x.login_level === pick.level);
+        if (!now) return refuse(409, `Nobody is ${pick.level === 'management' ? 'a department manager' : `in the ${pick.level} position`} now. Give someone that position under People (as HR or the CEO), or start over with fresh demo data.`);
+        who = { id: now.id, name: now.full_name, level: pick.level };
+      }
       this.who = who;
       return ok({
         token: `demo-${who.id}`,

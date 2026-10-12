@@ -5,6 +5,7 @@ import { Pressable, Text, View, useWindowDimensions } from 'react-native';
 import { useStore } from '../state.tsx';
 import { C } from '../theme.ts';
 import { realText as R } from '../demoReal.ts';
+import { setSwitchError } from './TesterWelcome.tsx';
 
 const ROLES = [
   { who: 'demo', level: 'technician', label: 'Technician', short: 'Tech' },
@@ -25,7 +26,8 @@ export function TesterBar() {
     if (busy || s.waiting) return;
     setBusy(true);
     await s.signOut();
-    await s.signIn('demo', '', who, 'demo');
+    const r = await s.signIn('demo', '', who, 'demo');
+    setSwitchError(r.ok ? null : r.reasons);
     setBusy(false);
   };
   const duty = !!s.session?.user.fleetDuty;

@@ -6,6 +6,11 @@ import { Body, Button, Card, Heading, Label, Notice, Screen, st } from '../ui.ts
 import { C } from '../theme.ts';
 import { REAL, realText as R } from '../demoReal.ts';
 
+/** Why the last switch in the bar at the top did not work, shown on this screen. */
+let switchError: string[] | null = null;
+const switchListeners = new Set<(e: string[] | null) => void>();
+export const setSwitchError = (e: string[] | null) => { switchError = e; switchListeners.forEach(f => f(e)); };
+
 const STEPS: [string, string[]][] = [
   ['As technician (Thabo)', [
     'Book stock for a job: "Book stock before you leave" on My day.',
@@ -87,7 +92,9 @@ export function TesterWelcome() {
   const s = useStore();
   const [busy, setBusy] = useState<string | null>(null);
   const [reset, setReset] = useState(false);
-  const go = async (who: 'demo' | 'stock' | 'mech' | 'office' | 'admin' | 'manager' | 'hr') => { setBusy(who); await s.signIn('demo', '', who, 'demo'); setBusy(null); };
+  const [why, setWhy] = useState<string[] | null>(() => switchError);
+  React.useEffect(() => { const f = (e: string[] | null) => setWhy(e); switchListeners.add(f); return () => { switchListeners.delete(f); }; }, []);
+  const go = async (who: 'demo' | 'stock' | 'mech' | 'office' | 'admin' | 'manager' | 'hr') => { setBusy(who); setWhy(null); const r = await s.signIn('demo', '', who, 'demo'); setBusy(null); if (!r.ok) setWhy(r.reasons); };
   return (
     <Screen title="Real Sandbox" sub={`Test drive · ${REAL ? REAL.company.name : 'ZSP'} job cards and stock`}>
       <View style={{ gap: 6 }}>
@@ -100,6 +107,7 @@ export function TesterWelcome() {
           ]} />
         ) : <Body quiet>Everything here is made up and stays in this browser. Once in, the bar at the top switches between them; what one does, the others see. (The real app only shows each person their own.)</Body>}
       </View>
+      {why ? <Notice tone="warn" title="Could not open that person" lines={why} /> : null}
       <Button label={R('Open as technician (Thabo)')} onPress={() => go('demo')} busy={busy === 'demo'} />
       <Button label={R('Open as stock controller (Lindiwe)')} kind="secondary" onPress={() => go('stock')} busy={busy === 'stock'} />
       <Button label={R('Open as mechanic (Bongani)')} kind="secondary" onPress={() => go('mech')} busy={busy === 'mech'} />
