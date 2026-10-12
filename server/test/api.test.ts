@@ -113,6 +113,7 @@ before(async () => {
   await user('admin', 'admin');
   await user('director', 'director');
   await user('manager', 'management');
+  await user('hr', 'hr');
   await user('tech', 'technician');
   await user('tech2', 'technician');
   await user('stock', 'stockroom');
@@ -138,7 +139,7 @@ after(async () => {
 
 test('login: wrong password refused, right password gives a token', async () => {
   assert.equal((await call('', 'POST', '/auth/login', { email: 'tech@zsp.test', password: 'nope' })).status, 401);
-  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2', 'stock', 'mech']) {
+  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2', 'stock', 'mech', 'hr']) {
     const r = await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW });
     assert.equal(r.status, 200);
     tokens[who] = r.body.token;
@@ -153,7 +154,7 @@ test('nothing works until the monitoring policy is acknowledged', async () => {
   assert.equal((await call('tech', 'GET', '/me')).body.policyAcknowledged, false);
   const pol = await call('tech', 'GET', '/policy/current');
   assert.equal(pol.body.version, '1.0');
-  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2', 'stock', 'mech']) {
+  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2', 'stock', 'mech', 'hr']) {
     assert.equal((await call(who, 'POST', '/policy/acknowledge', { policyVersionId: ids.policy })).status, 200);
   }
   assert.equal((await call('tech', 'GET', '/jobs')).status, 200);
@@ -1265,6 +1266,48 @@ test('department managers: techs under them, the van stock list they set, vans s
   assert.equal((await call('stock', 'GET', '/team/map')).status, 403);
   assert.equal((await call('tech', 'GET', '/team/map')).status, 403);
   await call('director', 'PUT', `/access/users/${ids.tech2}/department`, { departmentId: ids.dept });
+});
+
+test('HR: puts technicians and department managers in one department each, keeps staff records, and nothing else', async () => {
+  const me = (await call('hr', 'GET', '/me')).body;
+  assert.equal(me.work.hr, true);
+  assert.equal(me.work.jobs, false);
+  assert.equal((await call('hr', 'GET', '/people')).status, 200, 'HR sees people');
+  assert.equal((await call('hr', 'GET', `/people/${ids.tech}`)).body.personal, null, 'personal details stay with the CEO');
+  assert.equal((await call('hr', 'GET', `/people/${ids.tech}/record`)).status, 200, 'and the staff records');
+  assert.equal((await call('hr', 'GET', '/office/overview')).status, 403, 'not jobs');
+  assert.equal((await call('hr', 'PUT', `/access/users/${ids.tech}/position`, { position: 'admin' })).status, 403, 'positions stay with the CEO');
+
+  const mgr2 = (await db.query("INSERT INTO users (full_name, email, login_level, password_hash) VALUES ('mgr2', 'mgr2@zsp.test', 'management', 'x') RETURNING id")).rows[0].id;
+  const elec = await call('hr', 'POST', '/departments', { name: 'Electrical' });
+  assert.equal(elec.status, 200);
+  assert.equal((await call('admin', 'PUT', `/access/users/${mgr2}/department`, { departmentId: elec.body.id })).status, 403, 'not the admin');
+  const a = await call('hr', 'PUT', `/access/users/${mgr2}/department`, { departmentId: elec.body.id });
+  assert.equal(a.status, 200);
+  assert.equal(a.body.manages, elec.body.id, 'a department manager put in a department runs it');
+  const managerOf = async (deptId: string) => (await call('hr', 'GET', '/departments')).body.departments.find((x: { id: string }) => x.id === deptId).manager_id;
+  assert.equal(await managerOf(elec.body.id), mgr2);
+
+  // One department each: moving him to Refrigeration takes him off Electrical and replaces its manager.
+  const b = await call('hr', 'PUT', `/access/users/${mgr2}/department`, { departmentId: ids.dept });
+  assert.equal(b.body.replaced, 'manager');
+  assert.equal(await managerOf(ids.dept), mgr2);
+  assert.equal(await managerOf(elec.body.id), null);
+  assert.equal((await db.query('SELECT department_id FROM users WHERE id = $1', [ids.manager])).rows[0].department_id, null, 'the old manager has no department now');
+  const back = await call('hr', 'PUT', `/access/users/${ids.manager}/department`, { departmentId: ids.dept });
+  assert.equal(back.body.replaced, 'mgr2');
+  assert.equal(await managerOf(ids.dept), ids.manager);
+
+  // Technicians: one department, under its manager.
+  assert.equal((await call('hr', 'PUT', `/access/users/${ids.tech}/department`, { departmentId: elec.body.id })).status, 200);
+  assert.equal((await call('hr', 'GET', `/people/${ids.tech}`)).body.department, 'Electrical');
+  await call('hr', 'PUT', `/access/users/${ids.tech}/department`, { departmentId: ids.dept });
+  assert.equal((await call('hr', 'GET', `/people/${ids.tech}`)).body.manager, 'manager');
+
+  // The CEO can give an Admin the HR work too.
+  await call('director', 'PUT', `/access/users/${ids.admin}/work`, { area: 'hr', on: true });
+  assert.equal((await call('admin', 'PUT', `/access/users/${ids.tech2}/department`, { departmentId: ids.dept })).status, 200);
+  await call('director', 'PUT', `/access/users/${ids.admin}/work`, { area: 'hr', on: false });
 });
 
 test('fuel: slip required, logged against the vehicle, impossible litres flagged', async () => {

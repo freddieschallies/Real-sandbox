@@ -20,10 +20,23 @@ async function deptOfUser(c: Q, id: string) {
   if (!u) throw new Refused(404, ['no such person']);
   return u as { id: string; department_id: string | null };
 }
-/** A department manager's own department is the one he manages: his "own department" access covers it. */
-async function ownDepartment(c: Q, managerId: string, departmentId: string) {
+/**
+ * Makes him the manager of one department (managers run one department each): he leaves any other
+ * department he managed, the department's previous manager is left without one, and his own
+ * department becomes this one. Returns the name of the manager he replaced, if any.
+ */
+async function makeManager(c: Q, managerId: string, departmentId: string): Promise<string | null> {
+  const prev = (await c.query('SELECT d.manager_id, m.full_name, m.login_level FROM departments d LEFT JOIN users m ON m.id = d.manager_id WHERE d.id = $1', [departmentId])).rows[0];
+  await c.query('UPDATE departments SET manager_id = NULL WHERE manager_id = $1 AND id <> $2', [managerId, departmentId]);
+  await c.query('UPDATE departments SET manager_id = $1 WHERE id = $2', [managerId, departmentId]);
   await c.query("UPDATE users SET department_id = $2 WHERE id = $1 AND login_level = 'management'", [managerId, departmentId]);
+  if (prev?.manager_id && prev.manager_id !== managerId) {
+    if (prev.login_level === 'management') await c.query('UPDATE users SET department_id = NULL WHERE id = $1', [prev.manager_id]);
+    return prev.full_name;
+  }
+  return null;
 }
+const assigns = (a: Actor) => can(a, 'assign_departments');
 const editsList = (a: Actor, departmentId: string) => can(a, 'set_van_stock', { employeeDepartmentId: departmentId });
 const seesVan = (a: Actor, u: { id: string; department_id: string | null }) =>
   a.id === u.id || can(a, 'assign_stock') || seesPeople(a) || can(a, 'set_van_stock', { employeeId: u.id, employeeDepartmentId: u.department_id });
@@ -39,7 +52,7 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
          FROM departments d LEFT JOIN users m ON m.id = d.manager_id ORDER BY d.name`)).rows;
     const managers = (await req.db.query(
       `SELECT id, full_name, login_level FROM users WHERE login_level = ANY($1) AND status <> 'left' ORDER BY (login_level = 'management') DESC, full_name`, [MANAGER_LEVELS])).rows;
-    return { canManage: can(req.actor, 'manage_access'), departments, managers };
+    return { canManage: assigns(req.actor), departments, managers };
   });
 
   const Dept = z.object({ name: z.string().trim().min(2, 'the department name').max(60), managerId: Uuid.nullish() });
@@ -51,13 +64,13 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
   }
 
   app.post('/departments', async req => {
-    if (!can(req.actor, 'manage_access')) throw new Refused(403, ['only whoever manages access sets up departments']);
+    if (!assigns(req.actor)) throw new Refused(403, ['only HR (or the CEO) sets up departments']);
     const b = parse(Dept, req.body);
     return tx(req.db, async c => {
       await checkManager(c, b.managerId);
       if ((await c.query('SELECT 1 FROM departments WHERE lower(name) = lower($1)', [b.name])).rowCount) throw new Refused(409, [`there is already a ${b.name} department`]);
-      const d = (await c.query('INSERT INTO departments (name, manager_id) VALUES ($1, $2) RETURNING id', [b.name, b.managerId ?? null])).rows[0];
-      if (b.managerId) await ownDepartment(c, b.managerId, d.id);
+      const d = (await c.query('INSERT INTO departments (name) VALUES ($1) RETURNING id', [b.name])).rows[0];
+      if (b.managerId) await makeManager(c, b.managerId, d.id);
       await audit(c, req.actor.id, 'department_created', 'department', d.id, b);
       if (b.managerId) await notify(c, b.managerId, 'department', `You manage the ${b.name} department.`);
       return { id: d.id };
@@ -65,7 +78,7 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
   });
 
   app.put('/departments/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {
-    if (!can(req.actor, 'manage_access')) throw new Refused(403, ['only whoever manages access sets up departments']);
+    if (!assigns(req.actor)) throw new Refused(403, ['only HR (or the CEO) sets up departments']);
     const id = parse(Uuid, req.params.id);
     const b = parse(Dept.partial(), req.body);
     return tx(req.db, async c => {
@@ -73,32 +86,41 @@ export function registerDepartmentRoutes(app: FastifyInstance) {
       if (!d) throw new Refused(404, ['no such department']);
       await checkManager(c, b.managerId);
       if (b.name && (await c.query('SELECT 1 FROM departments WHERE lower(name) = lower($1) AND id <> $2', [b.name, id])).rowCount) throw new Refused(409, [`there is already a ${b.name} department`]);
-      await c.query('UPDATE departments SET name = COALESCE($2, name), manager_id = CASE WHEN $3 THEN $4::uuid ELSE manager_id END WHERE id = $1',
-        [id, b.name ?? null, b.managerId !== undefined, b.managerId ?? null]);
-      if (b.managerId) await ownDepartment(c, b.managerId, id);
+      if (b.name) await c.query('UPDATE departments SET name = $2 WHERE id = $1', [id, b.name]);
+      let replaced: string | null = null;
+      if (b.managerId) replaced = await makeManager(c, b.managerId, id);
+      else if (b.managerId === null && d.manager_id) {
+        await c.query('UPDATE departments SET manager_id = NULL WHERE id = $1', [id]);
+        await c.query("UPDATE users SET department_id = NULL WHERE id = $1 AND login_level = 'management'", [d.manager_id]);
+      }
       await audit(c, req.actor.id, 'department_changed', 'department', id, b);
       if (b.managerId && b.managerId !== d.manager_id) await notify(c, b.managerId, 'department', `You manage the ${b.name ?? d.name} department.`);
-      return { id };
+      return { id, replaced };
     });
   });
 
-  // Puts a person in a department, under its manager.
+  // Puts a person in one department: a technician works under its manager; a department manager
+  // becomes its manager (one department each).
   app.put('/access/users/:id/department', async (req: FastifyRequest<{ Params: { id: string } }>) => {
-    if (!can(req.actor, 'manage_access')) throw new Refused(403, ['only whoever manages access']);
+    if (!assigns(req.actor)) throw new Refused(403, ['only HR (or the CEO) puts people in departments']);
     const id = parse(Uuid, req.params.id);
     const b = parse(z.object({ departmentId: Uuid.nullable() }), req.body);
     return tx(req.db, async c => {
-      const u = (await c.query("SELECT u.full_name, d.name AS dept FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.id = $1 AND u.status <> 'left'", [id])).rows[0];
+      const u = (await c.query("SELECT u.full_name, u.login_level, d.name AS dept FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.id = $1 AND u.status <> 'left'", [id])).rows[0];
       if (!u) throw new Refused(404, ['no such person']);
       const d = b.departmentId ? (await c.query('SELECT d.name, m.full_name AS manager FROM departments d LEFT JOIN users m ON m.id = d.manager_id WHERE d.id = $1', [b.departmentId])).rows[0] : null;
       if (b.departmentId && !d) throw new Refused(404, ['no such department']);
-      await c.query('UPDATE users SET department_id = $2 WHERE id = $1', [id, b.departmentId]);
+      let replaced: string | null = null;
+      if (u.login_level === 'management') {
+        if (b.departmentId) replaced = await makeManager(c, id, b.departmentId);
+        else { await c.query('UPDATE departments SET manager_id = NULL WHERE manager_id = $1', [id]); await c.query('UPDATE users SET department_id = NULL WHERE id = $1', [id]); }
+      } else await c.query('UPDATE users SET department_id = $2 WHERE id = $1', [id, b.departmentId]);
       await c.query('INSERT INTO access_changes (changed_by, user_id, action, change) VALUES ($1, $2, $3, $4)',
         [req.actor.id, id, 'department', `Department: ${u.dept ?? 'none'} → ${d?.name ?? 'none'}`]);
       await audit(c, req.actor.id, 'department_set', 'user', id, b);
-      if (d) await notify(c, id, 'department', `You are now in the ${d.name} department${d.manager ? `, under ${d.manager}` : ''}.`);
-      const van = await checkVan(c, id, req.actor.id);
-      return { userId: id, departmentId: b.departmentId, van: van ? { complete: van.complete, shortLines: van.shortLines } : null };
+      if (d) await notify(c, id, 'department', u.login_level === 'management' ? `You manage the ${d.name} department.` : `You are now in the ${d.name} department${d.manager ? `, under ${d.manager}` : ''}.`);
+      const van = u.login_level === 'technician' ? await checkVan(c, id, req.actor.id) : null;
+      return { userId: id, departmentId: b.departmentId, manages: u.login_level === 'management' ? b.departmentId : null, replaced, van: van ? { complete: van.complete, shortLines: van.shortLines } : null };
     });
   });
 
