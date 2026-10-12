@@ -5,6 +5,8 @@
 
 export type LoginLevel = 'technician' | 'mechanic' | 'admin' | 'stockroom' | 'management' | 'hr' | 'director' | 'creator';
 
+/** The positions HR gives and takes; the others (mechanic, HR, director, CEO) stay with the CEO. */
+export const HR_POSITIONS: LoginLevel[] = ['technician', 'admin', 'management', 'stockroom'];
 export const LEVELS: LoginLevel[] = ['technician', 'mechanic', 'admin', 'stockroom', 'management', 'hr', 'director', 'creator'];
 
 /** What each position is called on screen. The CEO assigns one position to each person. */
@@ -61,6 +63,7 @@ export const CATALOGUE = {
   write_employee_log:         { group: 'People', label: 'Add and delete staff records', scoped: true },
   assign_departments:         { group: 'People', label: 'Put technicians and managers in departments', scoped: false },
   view_timesheets:            { group: 'People', label: 'See and export technicians\' timesheets', scoped: true },
+  set_positions:              { group: 'People', label: 'Set positions: technician, admin, department manager, stock controller (and trades)', scoped: false },
   edit_technician_settings:   { group: 'People', label: 'Technician settings (department, vehicle, home)', scoped: true },
   mark_technician_left:       { group: 'People', label: 'Start a leaver\'s exit checklist', scoped: true },
   view_former_technicians:    { group: 'People', label: 'See former technicians', scoped: true },
@@ -103,7 +106,7 @@ const management: Permissions = {
   edit_technician_settings: OWN, mark_technician_left: OWN, view_former_technicians: OWN,
 };
 // HR keeps the staff records and decides who works in which department, under which manager.
-const hr: Permissions = { view_employee_log: ALL, write_employee_log: ALL, assign_departments: true, view_former_technicians: ALL, view_timesheets: ALL };
+const hr: Permissions = { view_employee_log: ALL, write_employee_log: ALL, assign_departments: true, view_former_technicians: ALL, view_timesheets: ALL, set_positions: true };
 const director: Permissions = {
   ...stockroom, ...management, ...hr, set_van_stock: ALL,
   view_live_driving_markers: ALL, view_flags: ALL, resolve_flags: ALL, view_employee_log: ALL, write_employee_log: ALL,
@@ -186,7 +189,7 @@ export const WORK_AREAS = {
   flags:     { label: 'Flags and approvals', actions: ['view_flags', 'resolve_flags'] },
   prices:    { label: 'Prices and rates', actions: ['set_prices'] },
   access:    { label: 'Positions and access (People)', actions: ['manage_access'] },
-  hr:        { label: 'HR: staff records, timesheets, and who works in which department', actions: ['view_employee_log', 'write_employee_log', 'assign_departments', 'view_timesheets'] },
+  hr:        { label: 'HR: positions, departments, staff records and timesheets', actions: ['view_employee_log', 'write_employee_log', 'assign_departments', 'view_timesheets', 'set_positions'] },
   vanstock:  { label: 'Van stock lists (bill of quantities)', actions: ['set_van_stock'] },
 } as const satisfies Record<string, { label: string; actions: readonly Action[] }>;
 export type WorkArea = keyof typeof WORK_AREAS;

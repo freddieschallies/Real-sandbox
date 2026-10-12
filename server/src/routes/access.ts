@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Db, Q } from '../db.ts';
 import { audit, tx } from '../db.ts';
-import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, POSITION_LABEL, TRADES, WORK_AREAS, can, isScoped, workOf, type Action, type LoginLevel, type Trade, type WorkArea, seesPeople } from '../core/permissions.ts';
+import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, POSITION_LABEL, TRADES, WORK_AREAS, can, isScoped, workOf, type Action, type LoginLevel, type Trade, type WorkArea, seesPeople, HR_POSITIONS } from '../core/permissions.ts';
 import { Refused, Uuid, parse } from '../http.ts';
 import { loadActor } from '../auth.ts';
 import { notify } from './field.ts';
@@ -125,6 +125,8 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
     }
     return {
       canManage: manage,
+      canSetPositions: manage || can(req.actor, 'set_positions'),
+      settablePositions: manage ? LEVELS : can(req.actor, 'set_positions') ? HR_POSITIONS : [],
       positions: LEVELS.map(l => ({ level: l, label: POSITION_LABEL[l] })),
       trades: Object.entries(TRADES).map(([key, label]) => ({ key, label })),
       areas: Object.entries(WORK_AREAS).map(([key, a]) => ({ key, label: a.label })),
@@ -133,7 +135,7 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
   });
 
   app.put('/access/users/:id/trade', async (req: FastifyRequest<{ Params: { id: string } }>) => {
-    guard(req);
+    if (!can(req.actor, 'manage_access') && !can(req.actor, 'set_positions')) throw new Refused(403, ['only the CEO or HR sets trades']);
     const userId = parse(Uuid, req.params.id);
     const b = parse(z.object({ trade: z.enum(Object.keys(TRADES) as [Trade, ...Trade[]]).nullable() }), req.body);
     return tx(req.db, async c => {
@@ -171,17 +173,24 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
   });
 
   app.put('/access/users/:id/position', async (req: FastifyRequest<{ Params: { id: string } }>) => {
-    guard(req);
+    const full = can(req.actor, 'manage_access');
+    if (!full && !can(req.actor, 'set_positions')) throw new Refused(403, ['only the CEO or HR sets positions']);
     const userId = parse(Uuid, req.params.id);
     const b = parse(z.object({ position: z.enum(LEVELS as [LoginLevel, ...LoginLevel[]]) }), req.body);
     return tx(req.db, async c => {
       const u = (await c.query('SELECT full_name, login_level FROM users WHERE id = $1 FOR UPDATE', [userId])).rows[0];
       if (!u) throw new Refused(404, ['no such user']);
       if (u.login_level === b.position) return { userId, position: b.position, label: POSITION_LABEL[b.position] };
+      if (!full && (!HR_POSITIONS.includes(u.login_level) || !HR_POSITIONS.includes(b.position))) {
+        throw new Refused(403, ['HR sets technician, admin, department manager or stock controller; the other positions are the CEO\'s']);
+      }
+      if (userId === req.actor.id && !full) throw new Refused(403, ['you cannot change your own position']);
       if ((b.position === 'creator' || u.login_level === 'creator') && req.actor.level !== 'creator') {
         throw new Refused(403, ['only the Creator can give or take the Creator position']);
       }
       await c.query('UPDATE users SET login_level = $2 WHERE id = $1', [userId, b.position]);
+      // No longer a department manager: his department has no manager until HR gives it one.
+      if (u.login_level === 'management') await c.query('UPDATE departments SET manager_id = NULL WHERE manager_id = $1', [userId]);
       await ensureSomeoneCanManageAccess(c);
       const change = `${POSITION_LABEL[u.login_level as LoginLevel]} → ${POSITION_LABEL[b.position]}`;
       await c.query('INSERT INTO access_changes (changed_by, user_id, action, change) VALUES ($1, $2, $3, $4)', [req.actor.id, userId, 'position', change]);

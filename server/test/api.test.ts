@@ -1276,7 +1276,15 @@ test('HR: puts technicians and department managers in one department each, keeps
   assert.equal((await call('hr', 'GET', `/people/${ids.tech}`)).body.personal, null, 'personal details stay with the CEO');
   assert.equal((await call('hr', 'GET', `/people/${ids.tech}/record`)).status, 200, 'and the staff records');
   assert.equal((await call('hr', 'GET', '/office/overview')).status, 403, 'not jobs');
-  assert.equal((await call('hr', 'PUT', `/access/users/${ids.tech}/position`, { position: 'admin' })).status, 403, 'positions stay with the CEO');
+  // HR sets technician, admin, department manager and stock controller; the rest stay with the CEO.
+  assert.equal((await call('hr', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'stockroom' })).status, 200);
+  assert.equal((await call('hr', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'technician' })).status, 200);
+  assert.equal((await call('hr', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'director' })).status, 403, 'not a director');
+  assert.equal((await call('hr', 'PUT', `/access/users/${ids.mech}/position`, { position: 'technician' })).status, 403, 'not the mechanic');
+  assert.equal((await call('hr', 'PUT', `/access/users/${ids.hr}/position`, { position: 'admin' })).status, 403, 'not herself');
+  assert.equal((await call('hr', 'PUT', `/access/users/${ids.tech2}/trade`, { trade: 'plumber' })).status, 200, 'and trades');
+  assert.equal((await call('hr', 'GET', '/people')).body.settablePositions.length, 4);
+  assert.equal((await call('manager', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'admin' })).status, 403, 'not a manager');
 
   const mgr2 = (await db.query("INSERT INTO users (full_name, email, login_level, password_hash) VALUES ('mgr2', 'mgr2@zsp.test', 'management', 'x') RETURNING id")).rows[0].id;
   const elec = await call('hr', 'POST', '/departments', { name: 'Electrical' });
