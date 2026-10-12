@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Db, Q } from '../db.ts';
 import { audit, tx } from '../db.ts';
-import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, POSITION_LABEL, WORK_AREAS, can, isScoped, workOf, type Action, type LoginLevel, type WorkArea } from '../core/permissions.ts';
+import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, POSITION_LABEL, TRADES, WORK_AREAS, can, isScoped, workOf, type Action, type LoginLevel, type Trade, type WorkArea } from '../core/permissions.ts';
 import { Refused, Uuid, parse } from '../http.ts';
 import { loadActor } from '../auth.ts';
 import { notify } from './field.ts';
@@ -109,6 +109,44 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
     if (!u) throw new Refused(404, ['no such user']);
     const overrides = (await req.db.query('SELECT action, effect, scope, department_ids, set_by, set_at FROM access_overrides WHERE user_id = $1', [id])).rows;
     return { user: u, effective: target?.perms ?? {}, overrides };
+  });
+
+  /** Everyone, for the office. Only whoever manages access (the CEO, or someone given it) can change positions, trades and work. */
+  app.get('/people', async req => {
+    if (!can(req.actor, 'manage_access') && !can(req.actor, 'view_all_job_cards') && !can(req.actor, 'assign_jobs')) throw new Refused(403, ['people are not part of your work']);
+    const manage = can(req.actor, 'manage_access');
+    const { rows } = await req.db.query(
+      `SELECT u.id, u.full_name, u.login_level, u.trade, d.name AS department, u.status
+         FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.status <> 'left' ORDER BY u.full_name`);
+    const people = [];
+    for (const r of rows) {
+      const a = await loadActor(req.db, r.id);
+      people.push({ ...r, position: POSITION_LABEL[r.login_level as LoginLevel], tradeLabel: r.trade ? TRADES[r.trade as Trade] : null, work: workOf(a?.perms ?? {}) });
+    }
+    return {
+      canManage: manage,
+      positions: LEVELS.map(l => ({ level: l, label: POSITION_LABEL[l] })),
+      trades: Object.entries(TRADES).map(([key, label]) => ({ key, label })),
+      areas: Object.entries(WORK_AREAS).map(([key, a]) => ({ key, label: a.label })),
+      people,
+    };
+  });
+
+  app.put('/access/users/:id/trade', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    guard(req);
+    const userId = parse(Uuid, req.params.id);
+    const b = parse(z.object({ trade: z.enum(Object.keys(TRADES) as [Trade, ...Trade[]]).nullable() }), req.body);
+    return tx(req.db, async c => {
+      const u = (await c.query("SELECT full_name, login_level, trade FROM users WHERE id = $1 AND status <> 'left'", [userId])).rows[0];
+      if (!u) throw new Refused(404, ['no such user']);
+      if (u.login_level !== 'technician') throw new Refused(409, ['only technicians have a trade']);
+      if (u.trade === b.trade) return { userId, trade: b.trade };
+      await c.query('UPDATE users SET trade = $2 WHERE id = $1', [userId, b.trade]);
+      const change = `Trade: ${u.trade ? TRADES[u.trade as Trade] : 'none'} → ${b.trade ? TRADES[b.trade] : 'none'}`;
+      await c.query('INSERT INTO access_changes (changed_by, user_id, action, change) VALUES ($1, $2, $3, $4)', [req.actor.id, userId, 'trade', change]);
+      await audit(c, req.actor.id, 'trade_changed', 'user', userId, { from: u.trade, to: b.trade });
+      return { userId, trade: b.trade };
+    });
   });
 
   // The CEO gives each person their position: technician, mechanic, stock controller, manager...

@@ -1074,6 +1074,21 @@ test('the CEO assigns each person a position; it takes effect at once and is log
   assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/stock-duty`, { on: false })).status, 200);
   assert.equal((await call('admin', 'GET', '/stock/issues')).status, 403, 'taken away at once');
 
+  // People: the Admin sees everyone; only someone given positions and access changes them.
+  const pp = (await call('admin', 'GET', '/people')).body;
+  assert.equal(pp.canManage, false);
+  assert.ok(pp.trades.some((t: { label: string }) => t.label === 'Foodservice tech'));
+  assert.equal((await call('admin', 'PUT', `/access/users/${ids.tech}/trade`, { trade: 'electrician' })).status, 403);
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.tech}/trade`, { trade: 'electrician' })).status, 200);
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/trade`, { trade: 'plumber' })).status, 409, 'only technicians');
+  assert.equal((await call('admin', 'GET', '/people')).body.people.find((x: { id: string }) => x.id === ids.tech).tradeLabel, 'Electrician');
+  assert.equal((await call('tech', 'GET', '/people')).status, 403);
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/work`, { area: 'access', on: true })).status, 200);
+  assert.equal((await call('admin', 'GET', '/people')).body.canManage, true, 'given positions and access by the CEO');
+  assert.equal((await call('admin', 'PUT', `/access/users/${ids.tech}/trade`, { trade: 'foodservice' })).status, 200);
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/work`, { area: 'access', on: false })).status, 200);
+  assert.equal((await call('admin', 'PUT', `/access/users/${ids.tech}/trade`, { trade: 'plumber' })).status, 403, 'taken away again');
+
   // The CEO decides which Admin does which work.
   const before = (await call('admin', 'GET', '/me')).body.work;
   assert.deepEqual([before.jobs, before.documents, before.stockroom, before.fleet], [true, true, false, false], 'an Admin by default: jobs, quotes and invoices');
@@ -1185,7 +1200,7 @@ test('the CEO decides access: changes apply at once, are logged, and nobody can 
   assert.equal(lock.status, 409);
   assert.equal((await call('creator', 'PUT', '/access/levels/director/manage_access', { effect: 'default' })).status, 200);
   assert.equal((await call('director', 'GET', '/access/catalogue')).status, 200);
-  const log = { body: (await call('director', 'GET', '/access/changes')).body.filter((c: { action: string }) => !c.action.startsWith('work:') && !['position', 'fleet_duty', 'stock_duty'].includes(c.action)) };
+  const log = { body: (await call('director', 'GET', '/access/changes')).body.filter((c: { action: string }) => !c.action.startsWith('work:') && !['position', 'fleet_duty', 'stock_duty', 'trade'].includes(c.action)) };
   assert.equal(log.body.length, 3, 'every change is in the history');
   assert.equal(log.body[2].change, 'granted (all departments)');
 });

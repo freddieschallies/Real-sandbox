@@ -176,8 +176,13 @@ export const WORK_AREAS = {
   fleet:     { label: "Fleet (the mechanic's work)", actions: ['view_fleet', 'manage_fleet'] },
   flags:     { label: 'Flags and approvals', actions: ['view_flags', 'resolve_flags'] },
   prices:    { label: 'Prices and rates', actions: ['set_prices'] },
+  access:    { label: 'Positions and access (People)', actions: ['manage_access'] },
 } as const satisfies Record<string, { label: string; actions: readonly Action[] }>;
 export type WorkArea = keyof typeof WORK_AREAS;
+
+/** What kind of technician someone is. */
+export const TRADES = { foodservice: 'Foodservice tech', plumber: 'Plumber', electrician: 'Electrician', assistant: 'Assistant' } as const;
+export type Trade = keyof typeof TRADES;
 
 /** Which kinds of work a set of permissions covers (all of an area's permissions, for any department). */
 export function workOf(p: Permissions): Record<WorkArea, boolean> {

@@ -43,12 +43,13 @@ const STEPS: [string, string[]][] = [
     'Accounts (Pastel): give each client its Pastel customer code and set the line codes, then make a Pastel batch to import into Sage Pastel Partner.',
     'Jobs: open a job for any technician (Thabo sees it on his phone at once), edit anything on it (every change is written on the job and the technician is told), move it, or cancel it.',
     'Queries: send any technician a question (switch to Tech to see it on Thabo\'s My day and answer it).',
+    'People: she can see everyone, but cannot change positions unless the CEO switches on "Positions and access" for her.',
     'Stores: add a store by pasting its point from Google Maps.',
     'Ask the CEO to give her the stockroom: a Stockroom tab appears at the top and she has the stock controller\'s full screens.',
   ]],
   ['As the CEO (Lilanie)', [
     'Everything: the office, plus Stockroom and Fleet tabs at the top to open those screens.',
-    'People: set each person\'s position and switch their work on or off: jobs, quotes and invoices, stores, stockroom, fleet, flags and approvals, prices.',
+    'People: open a person; a dropdown sets their position, and a technician\'s trade (foodservice tech, plumber, electrician, assistant). Switch their work on or off, or send a technician a query.',
     'Today: jobs, flags, handovers to approve, daily checks, safety faults and stock on one screen. Flags and Handovers: resolve and approve.',
   ]],
 ];

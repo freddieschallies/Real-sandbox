@@ -93,8 +93,8 @@ export function QueryThread({ q, id }: { q: QueriesHook; id: string }) {
   );
 }
 
-export function NewQuery({ q, done, jobs }: { q: QueriesHook; done: (id?: string) => void; jobs?: { id: string; label: string }[] }) {
-  const [to, setTo] = useState<string>();
+export function NewQuery({ q, done, jobs, toId }: { q: QueriesHook; done: (id?: string) => void; jobs?: { id: string; label: string }[]; toId?: string }) {
+  const [to, setTo] = useState<string | undefined>(toId);
   const [jobId, setJobId] = useState<string>();
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');

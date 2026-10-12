@@ -5,7 +5,7 @@ import { Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } fro
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useStore } from '../state.tsx';
 import * as J from '../../../server/src/core/jobCard.ts';
-import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, st } from '../ui.tsx';
+import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, Select, st } from '../ui.tsx';
 import { C, S } from '../theme.ts';
 import { TITLE as FLAG_TITLE } from '../screens/Flags.tsx';
 import type { CardView } from '../types.ts';
@@ -15,7 +15,7 @@ import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob
 
 const K = { band: '#121212', bandText: '#F7F3EC', stripe: '#E8701A' };
 type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'people' | 'stores';
-type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery' } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | null;
+type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
   cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
@@ -90,14 +90,14 @@ export function OfficeApp() {
     if (sel.kind === 'job') return wrap(<JobDetail key={sel.id} id={sel.id} o={o} canEdit={does('jobs')} />);
     if (sel.kind === 'newjob') return wrap(<NewJob o={o} done={id => setSel(id ? { kind: 'job', id } : null)} />);
     if (sel.kind === 'query') return wrap(<QueryThread key={sel.id} q={qs} id={sel.id} />);
-    if (sel.kind === 'newquery') return wrap(<NewQuery q={qs} jobs={o.d.jobs.filter(j => j.status !== 'closed' && j.status !== 'cancelled').map(j => ({ id: j.id, label: `#${j.job_number} ${j.store}` }))} done={() => setSel(null)} />);
+    if (sel.kind === 'newquery') return wrap(<NewQuery key={sel.toId ?? 'new'} q={qs} toId={sel.toId} jobs={o.d.jobs.filter(j => j.status !== 'closed' && j.status !== 'cancelled').map(j => ({ id: j.id, label: `#${j.job_number} ${j.store}` }))} done={() => setSel(null)} />);
     if (sel.kind === 'quote') return wrap(<QuoteDetail key={sel.id} b={books} id={sel.id} techs={o.d.techs} />);
     if (sel.kind === 'newquote') return wrap(<NewQuote b={books} stores={o.d.stores} jobs={o.d.jobs.filter(j => j.status !== 'closed' && j.status !== 'cancelled').map(j => ({ id: j.id, label: `#${j.job_number} ${j.store}` }))}
       done={id => setSel(id ? { kind: 'quote', id } : null)} />);
     if (sel.kind === 'invoice') return wrap(<InvoiceDetail key={sel.id} b={books} id={sel.id} />);
     if (sel.kind === 'flag') return wrap(<FlagDetail key={sel.id} id={sel.id} o={o} done={close} />);
     if (sel.kind === 'handover') return wrap(<HandoverDetail key={sel.id} id={sel.id} o={o} done={close} />);
-    if (sel.kind === 'person') return wrap(<PersonDetail key={sel.id} id={sel.id} o={o} />);
+    if (sel.kind === 'person') return wrap(<PersonDetail key={sel.id} id={sel.id} o={o} ask={does('jobs') ? toId => setSel({ kind: 'newquery', toId }) : undefined} />);
     return wrap(<NewStore o={o} done={close} />);
   })();
 
@@ -630,47 +630,67 @@ function HandoverDetail({ id, o, done }: { id: string; o: OfficeHook; done: () =
 
 function PeopleList({ o, open }: { o: OfficeHook; open: (id: string) => void }) {
   const p = o.d.people;
-  if (!p) return <Body quiet>Only whoever manages access (the CEO) sets positions.</Body>;
+  const [q, setQ] = useState('');
+  if (!p) return <Body quiet>Loading…</Body>;
+  const shown = p.people.filter(x => !q.trim() || `${x.full_name} ${x.position} ${x.tradeLabel ?? ''}`.toLowerCase().includes(q.trim().toLowerCase()));
+  const groups = p.positions.map(pos => ({ pos, people: shown.filter(x => x.login_level === pos.level) })).filter(g => g.people.length);
   return (
     <>
-      <Notice tone="info" title="Positions" lines={["The position decides which app opens on the person's phone and what they may do. Changes apply the next time their app refreshes."]} />
-      {p.people.map(x => (
-        <Card key={x.id} onPress={() => open(x.id)} accessibilityLabel={`Person ${x.full_name}`}>
-          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-            <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>{x.full_name}</Text>
-            <Pill text={x.position} tone="quiet" />
-          </View>
-          {x.work && x.login_level !== 'creator' ? <Text style={st.small}>{(o.d.people?.areas ?? []).filter(a => x.work![a.key]).map(a => a.label.split(':')[0].split(' (')[0]).join(' · ') || 'Own work only'}</Text> : null}
-        </Card>
+      <TextInput value={q} onChangeText={setQ} placeholder="Search name, position or trade" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Search people" />
+      {groups.map(g => (
+        <View key={g.pos.level} style={{ gap: 6 }}>
+          <Label>{g.pos.label} ({g.people.length})</Label>
+          {g.people.map(x => (
+            <Pressable key={x.id} onPress={() => open(x.id)} accessibilityRole="button" accessibilityLabel={`Person ${x.full_name}`}
+              style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, minHeight: 52, borderRadius: 8, backgroundColor: pressed ? C.panel2 : C.panel, borderWidth: 1, borderColor: C.line })}>
+              <Text style={[st.body, { fontWeight: '700', flex: 1 }]}>{x.full_name}</Text>
+              {x.tradeLabel ? <Text style={st.small}>{x.tradeLabel}</Text> : null}
+            </Pressable>
+          ))}
+        </View>
       ))}
     </>
   );
 }
 
-function PersonDetail({ id, o }: { id: string; o: OfficeHook }) {
-  const x = o.d.people?.people.find(p => p.id === id);
-  const [pos, setPos] = useState(x?.login_level);
+function PersonDetail({ id, o, ask }: { id: string; o: OfficeHook; ask?: (toId: string) => void }) {
+  const p = o.d.people;
+  const x = p?.people.find(y => y.id === id);
   const [ans, setAns] = useState<Answer | null>(null);
-  useEffect(() => { setPos(x?.login_level); }, [x?.login_level]);
-  if (!x || !o.d.people) return <Body quiet>Not found.</Body>;
-  const labels = Object.fromEntries(o.d.people.positions.map(p => [p.level, p.label]));
+  const [saved, setSaved] = useState<string | null>(null);
+  const [extra, setExtra] = useState(false);
+  if (!x || !p) return <Body quiet>Not found.</Body>;
+  const manage = !!p.canManage;
+  const first = x.full_name.split(' ')[0];
+  const isTech = x.login_level === 'technician';
+  const put = async (path: string, body: object, what: string) => { const r = await o.send('PUT', path, body); setAns(r.ok ? null : r); setSaved(r.ok ? what : null); };
   return (
     <>
       <Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>{x.full_name}</Text>
-      <Text style={st.small}>Now: {x.position}</Text>
-      <Label>Position</Label>
-      <Choice options={o.d.people.positions.map(p => p.level)} value={pos} onChange={setPos} labels={labels} />
-      <Button label="Save position" disabled={!pos || pos === x.login_level} onPress={async () => { const r = await o.send('PUT', `/access/users/${x.id}/position`, { position: pos }); setAns(r.ok ? { ok: true, body: r.body } : r); }} />
-      {ans?.ok ? <Notice tone="good" title="Saved" lines={[`${x.full_name} is now ${labels[pos!]}. It is logged and they are told.`]} /> : <Reasons a={ans} />}
-      <Heading>Work {x.full_name.split(' ')[0]} does</Heading>
-      {x.login_level === 'creator' ? <Body quiet>The CEO always has full access to everything.</Body> : (
+      <Text style={st.small}>{[x.position, x.tradeLabel, x.department].filter(Boolean).join(' · ')}</Text>
+      {isTech && ask ? <Button label={`Send ${first} a query`} kind="secondary" onPress={() => ask(x.id)} /> : null}
+      <Card>
+        <Select label="Position" value={x.login_level} disabled={!manage || x.login_level === 'creator'}
+          options={p.positions.map(pos => ({ value: pos.level, label: pos.label }))} onChange={v => put(`/access/users/${x.id}/position`, { position: v }, `${first} is now ${p.positions.find(pos => pos.level === v)?.label}`)} />
+        {isTech ? (
+          <Select label="Trade" value={x.trade ?? null} disabled={!manage} placeholder="Not set"
+            options={(p.trades ?? []).map(t => ({ value: t.key, label: t.label }))} onChange={v => put(`/access/users/${x.id}/trade`, { trade: v }, `${first} is now ${(p.trades ?? []).find(t => t.key === v)?.label}`)} />
+        ) : null}
+        {!manage ? <Text style={st.small}>Only the CEO, or someone the CEO gives "Positions and access", can change these.</Text> : null}
+      </Card>
+      {saved ? <Notice tone="good" title="Saved" lines={[`${saved}. It is logged and applies at once.`]} /> : null}
+      <Reasons a={ans} />
+      {isTech && !extra && !(p.areas ?? []).some(a => x.work?.[a.key]) ? (
+        manage ? <Button label={`Give ${first} extra work (stockroom, fleet…)`} kind="quiet" onPress={() => setExtra(true)} /> : null
+      ) : <Heading>Work {first} does</Heading>}
+      {isTech && !extra && !(p.areas ?? []).some(a => x.work?.[a.key]) ? null : x.login_level === 'creator' ? <Body quiet>The CEO always has full access to everything.</Body> : (
         <Card>
-          {(o.d.people.areas ?? []).map(a => {
+          {(p.areas ?? []).map(a => {
             const on = !!x.work?.[a.key];
             return (
-              <Pressable key={a.key} onPress={async () => { const r = await o.send('PUT', `/access/users/${x.id}/work`, { area: a.key, on: !on }); setAns(r.ok ? null : r); }}
-                accessibilityRole="switch" accessibilityState={{ checked: on }} accessibilityLabel={a.label}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 52, borderBottomWidth: 1, borderBottomColor: C.line }}>
+              <Pressable key={a.key} disabled={!manage} onPress={() => put(`/access/users/${x.id}/work`, { area: a.key, on: !on }, `${a.label}: ${on ? 'off' : 'on'} for ${first}`)}
+                accessibilityRole="switch" accessibilityState={{ checked: on, disabled: !manage }} accessibilityLabel={a.label}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 50, borderBottomWidth: 1, borderBottomColor: C.line, opacity: manage ? 1 : 0.7 }}>
                 <Text style={[st.body, { flex: 1 }]}>{a.label}</Text>
                 <View style={{ width: 46, height: 26, borderRadius: 13, backgroundColor: on ? C.good : C.panel2, justifyContent: 'center', paddingHorizontal: 3 }}>
                   <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#FFF', alignSelf: on ? 'flex-end' : 'flex-start' }} />
@@ -678,7 +698,6 @@ function PersonDetail({ id, o }: { id: string; o: OfficeHook }) {
               </Pressable>
             );
           })}
-          <Text style={[st.small, { marginTop: 8 }]}>Changes apply at once, are logged, and {x.full_name.split(' ')[0]} is told.</Text>
         </Card>
       )}
     </>

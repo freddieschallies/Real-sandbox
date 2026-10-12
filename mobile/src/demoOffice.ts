@@ -11,7 +11,7 @@ export interface DemoInspection {
   odometer_km: number; fuel_level: string; problems: string[]; new_problems: string[]; handover_by: string; handed_over_by_name: string | null;
   remote_reason: string | null; status: 'signed' | 'awaiting_approval' | 'approved' | 'rejected'; decided_at: string | null; decision_note: string | null;
 }
-export interface DemoPerson { id: string; full_name: string; login_level: string; department: string }
+export interface DemoPerson { id: string; full_name: string; login_level: string; department: string; trade?: keyof typeof TRADES | null }
 export interface DemoOfficeState {
   stores: DemoStore[];
   inspections: DemoInspection[];
@@ -24,8 +24,9 @@ export interface DemoOfficeState {
 
 export const WORK_AREAS = {
   jobs: 'Jobs: open, assign and edit', documents: 'Quotes and invoices', stores: 'Clients, stores and equipment', stockroom: 'Stockroom (full access)',
-  fleet: "Fleet (the mechanic's work)", flags: 'Flags and approvals', prices: 'Prices and rates',
+  fleet: "Fleet (the mechanic's work)", flags: 'Flags and approvals', prices: 'Prices and rates', access: 'Positions and access (People)',
 } as const;
+export const TRADES = { foodservice: 'Foodservice tech', plumber: 'Plumber', electrician: 'Electrician', assistant: 'Assistant' } as const;
 export type WorkArea = keyof typeof WORK_AREAS;
 const ALL_WORK = Object.keys(WORK_AREAS) as WorkArea[];
 /** What each position does before the CEO changes anything (as on the server). */
@@ -60,7 +61,8 @@ export function seedOffice(): DemoOfficeState {
       { id: 'mgr-1', full_name: 'Pieter van Wyk', login_level: 'management', department: 'Refrigeration' },
       { id: 'stock', full_name: 'Lindiwe Zulu', login_level: 'stockroom', department: 'Stores' },
       { id: 'mech', full_name: 'Bongani Khumalo', login_level: 'mechanic', department: 'Workshop' },
-      ...DEMO_TECHS.map(t => ({ id: t.id, full_name: t.full_name, login_level: 'technician', department: 'Refrigeration' })),
+      ...DEMO_TECHS.map(t => ({ id: t.id, full_name: t.full_name, login_level: 'technician', department: 'Refrigeration',
+        trade: ({ me: 'foodservice', 'tech-2': 'electrician', 'tech-3': 'plumber', 'tech-4': 'assistant' } as const)[t.id as 'me'] ?? null })),
     ],
     changes: [],
   };
@@ -190,6 +192,28 @@ export class DemoOffice {
     p.login_level = position;
     this.o.changes.unshift({ at: new Date().toISOString(), by: this.name('office'), person: p.full_name, action: 'position', change });
     return good({ userId: id, position, label: POSITION_LABEL[position] });
+  }
+
+  people(canManage: boolean) {
+    return {
+      canManage,
+      positions: Object.entries(POSITION_LABEL).map(([level, label]) => ({ level, label })),
+      trades: Object.entries(TRADES).map(([key, label]) => ({ key, label })),
+      areas: Object.entries(WORK_AREAS).map(([key, label]) => ({ key, label })),
+      people: this.o.people.map(p => ({ ...p, position: POSITION_LABEL[p.login_level], tradeLabel: p.trade ? TRADES[p.trade] : null, work: this.workOf(p.id) }))
+        .sort((a, b) => a.full_name.localeCompare(b.full_name)),
+    };
+  }
+
+  setTrade(id: string, trade: keyof typeof TRADES | null): Res {
+    const p = this.o.people.find(x => x.id === id);
+    if (!p) return bad(404, 'no such user');
+    if (p.login_level !== 'technician') return bad(409, 'only technicians have a trade');
+    if (trade && !TRADES[trade]) return bad(400, 'no such trade');
+    const change = `Trade: ${p.trade ? TRADES[p.trade] : 'none'} → ${trade ? TRADES[trade] : 'none'}`;
+    p.trade = trade;
+    this.o.changes.unshift({ at: new Date().toISOString(), by: this.name('office'), person: p.full_name, action: 'trade', change });
+    return good({ userId: id, trade });
   }
 
   levelOf(id: string) { return this.o.people.find(p => p.id === id)?.login_level; }

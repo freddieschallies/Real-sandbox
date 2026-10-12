@@ -97,7 +97,7 @@ export function registerControlRoutes(app: FastifyInstance) {
     office(req);
     const t = today();
     const { rows } = await req.db.query(
-      `SELECT u.id, u.full_name, d.name AS department,
+      `SELECT u.id, u.full_name, u.trade, d.name AS department,
               (SELECT count(*)::int FROM jobs j WHERE j.status NOT IN ('closed', 'cancelled') AND j.scheduled_date <= $1
                  AND (j.lead_technician_id = u.id OR EXISTS (SELECT 1 FROM job_helpers h WHERE h.job_id = j.id AND h.user_id = u.id))) AS open_jobs,
               (SELECT count(*)::int FROM jobs j WHERE j.status = 'in_progress' AND j.lead_technician_id = u.id) AS working_now,

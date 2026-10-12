@@ -16,7 +16,7 @@ export function registerQueryRoutes(app: FastifyInstance) {
   app.get('/queries/people', async req => {
     if (!mayAsk(req)) throw new Refused(403, ['you cannot send queries']);
     const { rows } = await req.db.query(
-      "SELECT id, full_name FROM users WHERE login_level = 'technician' AND status = 'active' AND id <> $1 ORDER BY full_name", [req.actor.id]);
+      "SELECT id, full_name, trade FROM users WHERE login_level = 'technician' AND status = 'active' AND id <> $1 ORDER BY full_name", [req.actor.id]);
     return rows;
   });
 

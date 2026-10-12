@@ -22,12 +22,12 @@ export interface Inspection {
   id: string; registration: string; driver: string; previous_driver: string | null; inspected_at: string; odometer_km: number; fuel_level: string;
   problems: string[]; new_problems: string[]; handover_by: string; handed_over_by_name: string | null; remote_reason: string | null; status: string;
 }
-export interface Person { id: string; full_name: string; login_level: string; position: string; does_fleet: boolean; work?: Record<string, boolean> }
+export interface Person { id: string; full_name: string; login_level: string; position: string; does_fleet?: boolean; work?: Record<string, boolean>; trade?: string | null; tradeLabel?: string | null; department?: string | null }
 export interface JobChange { changed_at: string; by: string; field: string; old_value: string | null; new_value: string | null; reason: string | null }
 
 export interface OfficeData {
   overview: Overview | null; jobs: OfficeJob[]; stores: Store[]; techs: Tech[]; flags: OfficeFlag[]; handovers: Inspection[];
-  people: { positions: { level: string; label: string }[]; areas?: { key: string; label: string }[]; people: Person[] } | null; loadedAt: string | null;
+  people: { canManage?: boolean; positions: { level: string; label: string }[]; trades?: { key: string; label: string }[]; areas?: { key: string; label: string }[]; people: Person[] } | null; loadedAt: string | null;
 }
 const EMPTY: OfficeData = { overview: null, jobs: [], stores: [], techs: [], flags: [], handovers: [], people: null, loadedAt: null };
 
@@ -44,7 +44,7 @@ export function useOffice() {
     try {
       const [overview, jobs, stores, techs, flags, handovers, people] = await Promise.all([
         get<Overview>('/office/overview'), get<OfficeJob[]>('/jobs'), get<Store[]>('/office/stores'), get<Tech[]>('/office/technicians'),
-        get<OfficeFlag[]>('/flags'), get<Inspection[]>('/vehicles/inspections?status=awaiting_approval'), get<OfficeData['people']>('/access/positions'),
+        get<OfficeFlag[]>('/flags'), get<Inspection[]>('/vehicles/inspections?status=awaiting_approval'), get<OfficeData['people']>('/people'),
       ]);
       setD(x => ({
         overview: overview ?? x.overview, jobs: jobs ?? x.jobs, stores: stores ?? x.stores, techs: techs ?? x.techs, flags: flags ?? x.flags,

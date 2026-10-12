@@ -179,3 +179,31 @@ export const st = StyleSheet.create({
   pillText: { fontSize: 13, fontWeight: '700' },
   notice: { borderRadius: S.radius, padding: 14, gap: 4, borderLeftWidth: 4 },
 });
+
+/** A simple dropdown: shows the choice; tap to open the list underneath. */
+export function Select<T extends string>({ label, value, options, onChange, placeholder = 'Choose…', disabled }: {
+  label: string; value: T | null | undefined; options: readonly { value: T; label: string }[]; onChange: (v: T) => void; placeholder?: string; disabled?: boolean;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const cur = options.find(o => o.value === value);
+  return (
+    <View style={{ gap: 6 }}>
+      <Label>{label}</Label>
+      <Pressable onPress={() => !disabled && setOpen(o => !o)} accessibilityRole="combobox" accessibilityLabel={label} accessibilityState={{ expanded: open, disabled }}
+        style={[st.input, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', opacity: disabled ? 0.6 : 1 }]}>
+        <Text style={{ color: cur ? C.text : C.quiet, fontSize: S.body }}>{cur?.label ?? placeholder}</Text>
+        {!disabled ? <Text style={{ color: C.quiet, fontSize: 16 }}>{open ? '▴' : '▾'}</Text> : null}
+      </Pressable>
+      {open ? (
+        <View style={{ borderWidth: 1, borderColor: C.line, borderRadius: S.radius, backgroundColor: C.panel, overflow: 'hidden' }}>
+          {options.map(o => (
+            <Pressable key={o.value} onPress={() => { setOpen(false); if (o.value !== value) onChange(o.value); }} accessibilityRole="menuitem" accessibilityLabel={o.label}
+              style={({ pressed }) => ({ paddingHorizontal: 14, minHeight: 48, justifyContent: 'center', backgroundColor: o.value === value ? C.panel2 : pressed ? C.panel2 : 'transparent', borderBottomWidth: 1, borderBottomColor: C.line })}>
+              <Text style={{ color: C.text, fontSize: S.body, fontWeight: o.value === value ? '800' : '400' }}>{o.value === value ? '✓ ' : ''}{o.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}

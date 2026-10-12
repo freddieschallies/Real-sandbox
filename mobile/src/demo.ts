@@ -196,7 +196,7 @@ export class DemoTransport implements Transport {
   }
 
   /** Whether the signed-in person does this kind of work (their position, or switched on by the CEO). */
-  private does(area: 'jobs' | 'documents' | 'stores' | 'stockroom' | 'fleet' | 'flags' | 'prices') {
+  private does(area: 'jobs' | 'documents' | 'stores' | 'stockroom' | 'fleet' | 'flags' | 'prices' | 'access') {
     if (area === 'fleet' && this.who.level === 'mechanic') return true;
     if (area === 'stockroom' && this.who.level === 'stockroom') return true;
     return this.office().workOf(this.who.id, this.who.level)[area];
@@ -207,7 +207,7 @@ export class DemoTransport implements Transport {
     let m: RegExpMatchArray | null;
     const office = ['admin', 'management', 'director', 'creator'].includes(this.who.level);
     const isOffice = p.startsWith('/office') || p === '/jobs' || p.startsWith('/flags') && !p.endsWith('/explain') || p.startsWith('/vehicles/inspections') || p === '/access/positions'
-      || /^\/access\/users\/[^/]+\/(position|work)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
+      || p === '/people' || /^\/access\/users\/[^/]+\/(position|work|trade)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
     if (!isOffice) return null;
     if (!office) return refuse(403, 'office only');
     const o = this.office();
@@ -218,10 +218,10 @@ export class DemoTransport implements Transport {
     if ((p === '/jobs' && req.method === 'POST') || /\/(assign|cancel)$/.test(p) || req.method === 'PATCH') { const n = need('jobs', 'opening and editing jobs is not part of your work'); if (n) return n; }
     if (p.startsWith('/flags') || p.startsWith('/vehicles/inspections')) { const n = need('flags', 'flags and approvals are not part of your work'); if (n) return n; }
     if (p === '/office/stores' && req.method === 'POST') { const n = need('stores', 'adding stores is not part of your work'); if (n) return n; }
-    if ((m = p.match(/^\/access\/users\/([^/]+)\/work$/))) {
-      if (!['creator', 'director'].includes(this.who.level)) return refuse(403, 'only whoever manages access');
-      return done(o.setWork(m[1], b.area, !!b.on));
-    }
+    const manages = this.does('access');
+    if (p === '/people') return ok(o.people(manages));
+    if ((m = p.match(/^\/access\/users\/([^/]+)\/work$/))) return manages ? done(o.setWork(m[1], b.area, !!b.on)) : refuse(403, 'only whoever manages access');
+    if ((m = p.match(/^\/access\/users\/([^/]+)\/trade$/))) return manages ? done(o.setTrade(m[1], b.trade)) : refuse(403, 'only whoever manages access');
     if ((m = p.match(/^\/jobs\/([^/]+)\/changes$/))) return ok((this.state.office!.jobChanges ?? []).filter(x => x.jobId === m![1]).sort((a, c) => c.changed_at.localeCompare(a.changed_at)));
     if ((m = p.match(/^\/jobs\/([^/]+)\/cancel$/))) {
       const j = this.findJob(m[1]);
@@ -311,11 +311,8 @@ export class DemoTransport implements Transport {
       this.persist(this.state);
       return ok({ id: m[1], status });
     }
-    if (p === '/access/positions') return ['creator', 'director'].includes(this.who.level) ? ok(o.positions()) : refuse(403, 'only whoever manages access');
-    if ((m = p.match(/^\/access\/users\/([^/]+)\/position$/))) {
-      if (!['creator', 'director'].includes(this.who.level)) return refuse(403, 'only whoever manages access');
-      return done(o.setPosition(m[1], b.position, this.who.level));
-    }
+    if (p === '/access/positions') return manages ? ok(o.positions()) : refuse(403, 'only whoever manages access');
+    if ((m = p.match(/^\/access\/users\/([^/]+)\/position$/))) return manages ? done(o.setPosition(m[1], b.position, this.who.level)) : refuse(403, 'only whoever manages access');
     return null;
   }
 
