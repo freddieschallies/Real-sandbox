@@ -81,6 +81,9 @@ export interface Flag {
   explanation: string | null;
   status: string;
   details: Record<string, unknown>;
+  /** Demo only: whose flag it is (Thabo when missing). */
+  tech?: string;
+  resolution_note?: string | null;
 }
 
 export interface Policy { id: string; version: string; body: string }

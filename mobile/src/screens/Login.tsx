@@ -9,10 +9,10 @@ export function Login() {
   const [server, setServer] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [busy, setBusy] = useState<'demo' | 'stock' | 'mech' | 'server' | null>(null);
+  const [busy, setBusy] = useState<'demo' | 'stock' | 'mech' | 'office' | 'server' | null>(null);
   const [error, setError] = useState<string[] | null>(null);
 
-  const go = async (mode: 'demo' | 'stock' | 'mech' | 'server') => {
+  const go = async (mode: 'demo' | 'stock' | 'mech' | 'office' | 'server') => {
     setBusy(mode); setError(null);
     const url = server.trim().replace(/\/+$/, '');
     const r = mode === 'server' ? await s.signIn('server', url, email.trim(), password) : await s.signIn('demo', '', mode === 'demo' ? 'demo' : mode, 'demo');
@@ -37,6 +37,7 @@ export function Login() {
       <Button label="Try the demo as technician" kind="secondary" onPress={() => go('demo')} busy={busy === 'demo'} />
       <Button label="Try the demo as stock controller" kind="secondary" onPress={() => go('stock')} busy={busy === 'stock'} />
       <Button label="Try the demo as mechanic" kind="secondary" onPress={() => go('mech')} busy={busy === 'mech'} />
+      <Button label="Try the demo as the office" kind="secondary" onPress={() => go('office')} busy={busy === 'office'} />
     </Screen>
   );
 }

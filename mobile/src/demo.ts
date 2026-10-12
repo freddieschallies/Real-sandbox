@@ -2,6 +2,7 @@
 // It answers the same requests as the real one and uses the same rules engine, so what you
 // feel in demo mode is what the technicians will get. Data is invented.
 import { DemoWorkshop, seedWorkshop, type DemoWorkshopState } from './demoWorkshop.ts';
+import { DemoOffice, seedOffice, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
 import { normReg, registrationCandidates } from '../../server/src/core/vehicleCode.ts';
@@ -11,7 +12,7 @@ import { Offline, type Request, type Response, type Transport } from './transpor
 import type { CardView, Flag, StockLine, Today, TodayJob } from './types.ts';
 
 interface DemoJob {
-  meta: Omit<CardView, 'visits' | 'currentState' | 'jobMinutes' | 'items' | 'status'> & { i_am_lead: boolean };
+  meta: Omit<CardView, 'visits' | 'currentState' | 'jobMinutes' | 'items' | 'status'> & { i_am_lead: boolean; lead_id?: string; helper_ids?: string[] };
   card: J.JobCard;
   checklistIds: string[];
 }
@@ -32,6 +33,7 @@ export interface DemoState {
   /** People given the mechanic's work on top of their own position (by the CEO). */
   fleetDuty?: Record<string, boolean>;
   workshop?: DemoWorkshopState;
+  office?: DemoOfficeState;
 }
 
 const STORES = {
@@ -57,6 +59,21 @@ function job(n: number, type: J.JobType, priority: string, storeKey: keyof typeo
     card: {
       jobType: type, status: 'assigned', store: { lat: s.lat, lng: s.lng, geofenceM: 150 }, visits: [],
       items: [{ id: `item-${n}-1`, title: fault, origin: 'reported', beforePhotos: 0, afterPhotos: 0, vanStockLines: 0, boughtOutLines: 0, noMaterials: false }],
+    },
+    checklistIds: [],
+  };
+}
+
+function officeJob(n: number, type: J.JobType, priority: string, s: DemoStore, fault: string, lead: { id: string; name: string }, date: string, helpers: string[] = [], ref?: string): DemoJob {
+  return {
+    meta: {
+      id: `job-${n}`, job_number: n, job_type: type, priority, fault_reported: fault, scheduled_date: date, client_order_ref: ref ?? null,
+      store_id: s.id, store: s.name, store_address: s.address, store_lat: s.lat, store_lng: s.lng, geofence_m: s.geofence_m,
+      lead_technician: lead.name, manager_name: null, checklist: [], equipment: [], storeManagers: [], i_am_lead: lead.id === 'me', lead_id: lead.id, helper_ids: helpers,
+    },
+    card: {
+      jobType: type, status: 'assigned', store: { lat: s.lat, lng: s.lng, geofenceM: s.geofence_m }, visits: [],
+      items: [{ id: `item-${n}-1`, title: fault.slice(0, 200), origin: 'reported', beforePhotos: 0, afterPhotos: 0, vanStockLines: 0, boughtOutLines: 0, noMaterials: false }],
     },
     checklistIds: [],
   };
@@ -130,6 +147,98 @@ export class DemoTransport implements Transport {
       jobMinutes: J.jobMinutes(c),
       items: c.items.map(it => ({ ...it, status: J.itemStatus(it, c.jobType), missing: J.missingOnItem(it, c.jobType) })),
     };
+  }
+
+  private office(): DemoOffice {
+    if (!this.state.office) {
+      this.state.office = seedOffice();
+      const st = (id: string) => this.state.office!.stores.find(x => x.id === id)!;
+      const tomorrow = new Date(Date.now() + 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+      if (!this.findJob('job-10220')) {
+        const sipho = officeJob(10220, 'breakdown', 'normal', st('esikhawini'), 'Condenser fan not running on the bakery display', { id: 'tech-2', name: 'Sipho Ndlovu' }, today());
+        sipho.card.status = 'in_progress';
+        this.state.jobs.push(sipho);
+        this.state.jobs.push(officeJob(10236, 'installation', 'scheduled', st('arboretum'), 'Install new 3-door display fridge and connect to the existing circuit', { id: 'tech-3', name: 'Ayanda Mthembu' }, tomorrow));
+      }
+      const y = new Date(Date.now() - 20 * 3600_000).toISOString();
+      this.state.flags.push(
+        { id: 'flag-sipho', flag_type: 'stock_return_short', severity: 'normal', raised_at: y, status: 'explained', tech: 'tech-2',
+          question: 'You sent back 1 of 2 contactors booked out for job 10220. Where is the other one?', explanation: 'Fitted the second one on the same unit, forgot to put it on the job card.', details: {} },
+        { id: 'flag-oil', flag_type: 'workshop_stock_short', severity: 'normal', raised_at: y, status: 'open', tech: 'mech',
+          question: 'Workshop Engine oil 15W-40 counted 2 L short (allowance 0.25 L). What happened?', explanation: null, details: {} },
+      );
+    }
+    const myHandover: DemoInspection | null = this.state.vehicle?.handover_status === 'awaiting_approval' ? {
+      id: 'insp-me', vehicle_id: this.state.vehicle.id, registration: this.state.vehicle.registration, driver_id: 'me', driver: 'Thabo Mkhize', previous_driver: 'Sipho Ndlovu',
+      inspected_at: new Date().toISOString(), odometer_km: this.van().odometerKm, fuel_level: 'half', problems: this.van().problems, new_problems: [],
+      handover_by: 'remote_approval', handed_over_by_name: null, remote_reason: 'Nobody at the yard to sign', status: 'awaiting_approval', decided_at: null, decision_note: null,
+    } : null;
+    return new DemoOffice(this.state.office, {
+      jobs: this.state.jobs, flags: this.state.flags, fleet: this.fleet(), workshop: this.workshop(), stock: this.state.stockControl!,
+      fleetDuty: this.state.fleetDuty ?? {}, myHandover,
+    });
+  }
+
+  /** The office's routes; only office positions get here. */
+  private officeRoute(p: string, req: Request, b: any): Response | null {
+    let m: RegExpMatchArray | null;
+    const office = ['admin', 'management', 'director', 'creator'].includes(this.who.level);
+    const isOffice = p.startsWith('/office') || p === '/jobs' || p.startsWith('/flags') && !p.endsWith('/explain') || p.startsWith('/vehicles/inspections') || p === '/access/positions'
+      || /^\/access\/users\/[^/]+\/position$/.test(p) || /^\/jobs\/[^/]+\/assign$/.test(p);
+    if (!isOffice) return null;
+    if (!office) return refuse(403, 'office only');
+    const o = this.office();
+    const done = (r: Parameters<DemoTransport['fleetResult']>[0]) => this.fleetResult(r);
+    const q = new URLSearchParams(req.path.split('?')[1] ?? '');
+    if (p === '/office/overview') return ok(o.overview());
+    if (p === '/office/stores' && req.method === 'GET') return ok(o.stores());
+    if (p === '/office/stores') return done(o.addStore(b));
+    if (p === '/office/technicians') return ok(o.technicians(id => (id === 'me' ? this.state.vehicle?.registration ?? null : this.fleet().technicians(null).find(t => t.id === id)?.registration ?? null)));
+    if (p === '/jobs' && req.method === 'GET') return ok(o.jobs(q.get('status')));
+    if (p === '/jobs') {
+      const store = o.store(b.storeId);
+      const missing = [!store ? 'which store' : null, !b.faultReported || b.faultReported.trim().length < 3 ? 'what the fault is' : null, !b.scheduledDate ? 'the date' : null,
+        !b.leadTechnicianId ? 'the lead technician' : null].filter(Boolean) as string[];
+      if (missing.length) return refuse(400, ...missing);
+      if (b.jobType === 'planned_maintenance' && !(b.maintenanceSteps ?? []).length) return refuse(400, 'planned maintenance needs its checklist steps');
+      const n = Math.max(...this.state.jobs.map(j => j.meta.job_number)) + 1;
+      const j = officeJob(n, b.jobType, b.priority ?? 'normal', store!, b.faultReported.trim(), { id: b.leadTechnicianId, name: o.name(b.leadTechnicianId) }, b.scheduledDate, b.helperIds ?? [], b.clientOrderRef);
+      j.meta.checklist = (b.maintenanceSteps ?? []).map((step: string, i: number) => ({ id: `chk-${n}-${i}`, step, done: false }));
+      this.state.jobs.push(j);
+      this.persist(this.state);
+      return ok(this.view(j), 201);
+    }
+    if ((m = p.match(/^\/jobs\/([^/]+)\/assign$/))) {
+      const j = this.findJob(m[1]);
+      if (!j) return refuse(404, 'no such job');
+      if (!b.reason || b.reason.trim().length < 5) return refuse(400, 'say why it moves');
+      if (j.card.status === 'closed') return refuse(409, 'the job is closed');
+      if (j.card.status === 'in_progress' && b.leadTechnicianId !== (j.meta.lead_id ?? 'me')) return refuse(409, 'the technician is busy on this job: he must Continue later before it can move');
+      if ((b.helperIds ?? []).includes(b.leadTechnicianId)) return refuse(400, 'every helper must be another active technician');
+      Object.assign(j.meta, { lead_id: b.leadTechnicianId, lead_technician: o.name(b.leadTechnicianId), helper_ids: b.helperIds ?? [], i_am_lead: b.leadTechnicianId === 'me', scheduled_date: b.scheduledDate ?? j.meta.scheduled_date });
+      this.persist(this.state);
+      return ok({ jobId: j.meta.id, leadTechnicianId: b.leadTechnicianId });
+    }
+    if (p === '/flags') return ok(o.flags(q.get('status') ?? 'unresolved'));
+    if ((m = p.match(/^\/flags\/([^/]+)\/resolve$/))) return done(o.resolve(m[1], b.note));
+    if (p === '/vehicles/inspections') return ok(o.inspections(q.get('status')));
+    if ((m = p.match(/^\/vehicles\/inspections\/([^/]+)\/decide$/))) {
+      if (!b.approve && !(b.note && b.note.trim().length >= 5)) return refuse(400, 'say why the handover is rejected');
+      const status = b.approve ? 'approved' : 'rejected';
+      if (m[1] === 'insp-me' && this.state.vehicle) { this.state.vehicle.handover_status = status; this.persist(this.state); return ok({ id: m[1], status }); }
+      const i = this.state.office!.inspections.find(x => x.id === m![1]);
+      if (!i) return refuse(404, 'no such inspection');
+      if (i.status !== 'awaiting_approval') return refuse(409, 'this handover is not waiting for approval');
+      Object.assign(i, { status, decided_at: new Date().toISOString(), decision_note: b.note ?? null });
+      this.persist(this.state);
+      return ok({ id: m[1], status });
+    }
+    if (p === '/access/positions') return ['creator', 'director'].includes(this.who.level) ? ok(o.positions()) : refuse(403, 'only whoever manages access');
+    if ((m = p.match(/^\/access\/users\/([^/]+)\/position$/))) {
+      if (!['creator', 'director'].includes(this.who.level)) return refuse(403, 'only whoever manages access');
+      return done(o.setPosition(m[1], b.position, this.who.level));
+    }
+    return null;
   }
 
   private workshop(): DemoWorkshop {
@@ -207,6 +316,7 @@ export class DemoTransport implements Transport {
       // The same pretend company seen as the technician or as the stock controller.
       const who = b.email === 'stock' ? { id: 'stock', name: 'Lindiwe Zulu', level: 'stockroom' }
         : b.email === 'mech' ? { id: 'mech', name: 'Bongani Khumalo', level: 'mechanic' }
+        : b.email === 'office' ? { id: 'office', name: 'Musa Ntuli', level: 'creator' }
         : { id: 'me', name: 'Thabo Mkhize', level: 'technician' };
       this.who = who;
       return ok({
@@ -218,8 +328,10 @@ export class DemoTransport implements Transport {
     if (p === '/policy/current') return ok({ id: 'policy-1', version: '1.0', body: DEMO_POLICY });
     if (p === '/policy/acknowledge') { this.state.acknowledged = true; this.persist(this.state); return ok({ ok: true }); }
     if (!this.state.acknowledged) return { status: 403, body: { error: 'acknowledge the monitoring policy first', code: 'policy_required' } };
+    const off = this.officeRoute(p, req, b);
+    if (off) return off;
 
-    if (p === '/me') return ok({ id: this.who.id, full_name: this.who.name, login_level: this.who.level, fleetDuty: !!this.state.fleetDuty?.[this.who.id] });
+    if (p === '/me') return ok({ id: this.who.id, full_name: this.who.name, login_level: this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level, fleetDuty: !!this.state.fleetDuty?.[this.who.id] });
     if ((m = p.match(/^\/access\/users\/([^/]+)\/fleet-duty$/))) {
       // The CEO's switch; in the test build anyone may flip it.
       this.state.fleetDuty = { ...this.state.fleetDuty, [m[1]]: !!b.on };
@@ -227,7 +339,7 @@ export class DemoTransport implements Transport {
       return ok({ userId: m[1], fleetDuty: !!b.on });
     }
     if (p === '/me/today') {
-      const jobs: TodayJob[] = this.state.jobs.map(j => ({
+      const jobs: TodayJob[] = this.state.jobs.filter(j => (j.meta.lead_id ?? 'me') === 'me' || (j.meta.helper_ids ?? []).includes('me')).map(j => ({
         id: j.meta.id, job_number: j.meta.job_number, job_type: j.meta.job_type, priority: j.meta.priority as TodayJob['priority'],
         status: j.card.status, scheduled_date: j.meta.scheduled_date, fault_reported: j.meta.fault_reported, store: j.meta.store,
         address: j.meta.store_address, i_am_lead: true,
@@ -235,7 +347,7 @@ export class DemoTransport implements Transport {
         carried_over: j.meta.scheduled_date < today() && j.card.status !== 'closed',
       }));
       const vehicle = this.state.vehicle ? { ...this.state.vehicle, booking: this.fleet().nextBooking(this.state.vehicle.id) } : null;
-      return ok({ date: today(), jobs, vehicle, flagsToAnswer: this.state.flags.filter(f => f.status === 'open').length, unreadNotices: 0 });
+      return ok({ date: today(), jobs, vehicle, flagsToAnswer: this.state.flags.filter(f => f.status === 'open' && (f.tech ?? 'me') === 'me').length, unreadNotices: 0 });
     }
     if (p === '/me/stock') return ok(this.stock().totals());
     if (p === '/me/inventory') { const r = this.stock().inventory(); this.persist(this.state); return ok(r); }
@@ -269,7 +381,7 @@ export class DemoTransport implements Transport {
     if ((m = p.match(/^\/stock\/items\/([^/]+)$/)) && req.method === 'PATCH') return this.stockResult(this.stock().nameItem(m[1], b));
     if (p === '/stock/deliveries') return this.stockResult(this.stock().delivery(b), 201);
     if (p === '/stock/invoices') return ok(this.stock().s.invoices.filter(i => i.status === 'confirmed'));
-    if (p === '/me/flags') return ok(this.state.flags.filter(f => f.status === 'open' || f.status === 'explained'));
+    if (p === '/me/flags') return ok(this.state.flags.filter(f => (f.status === 'open' || f.status === 'explained') && (f.tech ?? 'me') === 'me'));
     if ((m = p.match(/^\/flags\/([^/]+)\/explain$/))) {
       const f = this.state.flags.find(x => x.id === m![1]);
       if (!f || f.status !== 'open') return refuse(404, 'no open flag of yours with that id');

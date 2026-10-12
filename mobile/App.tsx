@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StoreProvider, useStore } from './src/state.tsx';
 import { NavProvider, useNav } from './src/nav.tsx';
+import { OfficeApp, isOffice } from './src/office/OfficeApp.tsx';
 import { Login } from './src/screens/Login.tsx';
 import { Policy } from './src/screens/Policy.tsx';
 import { Day } from './src/screens/Day.tsx';
@@ -57,6 +58,8 @@ function Root() {
   if (s.session.user.level === 'stockroom') return <NavProvider key={s.session.user.id}><StockroomApp /></NavProvider>;
   // Mechanics get the fleet app.
   if (s.session.user.level === 'mechanic') return <NavProvider key={s.session.user.id}><FleetApp /></NavProvider>;
+  // Admin, Management, Directors and the CEO get the office screen.
+  if (isOffice(s.session.user.level)) return <NavProvider key={s.session.user.id}><OfficeApp /></NavProvider>;
   return <NavProvider key={s.session.user.id}><Current /></NavProvider>;
 }
 
@@ -98,7 +101,7 @@ function Frame({ children }: { children: React.ReactNode }) {
   const s = useStore();
   const { width } = useWindowDimensions();
   const fv = React.useContext(FleetView);
-  const narrow = Platform.OS === 'web' && width > 640 && !['stockroom', 'mechanic'].includes(s.session?.user.level ?? '') && !(fv.on && s.session?.user.fleetDuty);
+  const narrow = Platform.OS === 'web' && width > 640 && !['stockroom', 'mechanic', 'admin', 'management', 'director', 'creator'].includes(s.session?.user.level ?? '') && !(fv.on && s.session?.user.fleetDuty);
   if (!narrow) return <>{children}</>;
   return (
     <View style={{ flex: 1, alignItems: 'center', backgroundColor: '#101214' }}>

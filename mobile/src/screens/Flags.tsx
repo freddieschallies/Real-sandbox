@@ -7,12 +7,14 @@ import { Body, Button, Card, Field, Pill, Screen, st } from '../ui.tsx';
 import { SyncPill } from './SyncPill.tsx';
 import type { Flag } from '../types.ts';
 
-const TITLE: Record<string, string> = {
+export const TITLE: Record<string, string> = {
   slow_to_site: 'Took long to reach site', not_started_on_site: 'On site but job not started', driving_without_job: 'Driving with no job open',
   off_route: 'Stop not on the route', open_card_24h: 'Job card open over 24 hours', timesheet_mismatch: 'Timesheet does not match',
   fuel_mismatch: 'Fuel entry looks wrong', arrived_outside_geofence: 'Arrived away from the store', manager_unavailable: 'Closed without signature',
   open_supply_run: 'Supply run', new_supplier: 'New supplier',
   vehicle_new_damage: 'New damage found on a vehicle you handed over', handover_not_signed: 'Vehicle handover not signed',
+  stock_return_short: 'Stock sent back short', workshop_stock_short: 'Workshop stock counted short', duplicate_supplier_invoice: 'Supplier invoice scanned twice',
+  supplier_invoice_changed: 'Supplier invoice lines changed by hand',
 };
 
 export function Flags() {
