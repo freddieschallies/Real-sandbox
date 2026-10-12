@@ -40,7 +40,7 @@ export function seedOffice(): DemoOfficeState {
       remote_reason: 'Picked it up at 05:40 from the yard, nobody there to sign', status: 'awaiting_approval', decided_at: null, decision_note: null,
     }],
     people: [
-      { id: 'office', full_name: 'Musa Ntuli', login_level: 'creator', department: 'Office' },
+      { id: 'office', full_name: 'Lilanie Schallies', login_level: 'creator', department: 'Office' },
       { id: 'admin-1', full_name: 'Zanele Khoza', login_level: 'admin', department: 'Office' },
       { id: 'mgr-1', full_name: 'Pieter van Wyk', login_level: 'management', department: 'Refrigeration' },
       { id: 'stock', full_name: 'Lindiwe Zulu', login_level: 'stockroom', department: 'Stores' },

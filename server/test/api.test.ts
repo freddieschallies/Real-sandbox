@@ -882,6 +882,70 @@ test('the office screen: what needs attention, stores, technicians, and moving a
   assert.equal((await call('tech', 'POST', `/jobs/${J}/assign`, { leadTechnicianId: ids.tech, reason: 'I want it back' })).status, 403);
 });
 
+test('the office edits jobs (every change on the job), cancels them, and makes quotes and invoices', async () => {
+  // Editing a job that has not started.
+  const j = await call('admin', 'POST', '/jobs', { jobType: 'breakdown', priority: 'normal', storeId: ids.store, faultReported: 'Combi oven error 34', scheduledDate: '2026-10-22', leadTechnicianId: ids.tech });
+  const J = j.body.id;
+  assert.equal((await call('tech', 'PATCH', `/jobs/${J}`, { priority: 'urgent' })).status, 403);
+  const e1 = await call('admin', 'PATCH', `/jobs/${J}`, { priority: 'urgent', faultReported: 'Combi oven error 34, steam generator', clientOrderRef: 'PO-7781', scheduledDate: '2026-10-21' });
+  assert.equal(e1.status, 200, JSON.stringify(e1.body));
+  assert.deepEqual(e1.body.changes.map((c: { field: string }) => c.field), ['priority', 'fault reported', 'client order number', 'date']);
+  const card = (await call('tech', 'GET', `/jobs/${J}`)).body;
+  assert.equal(card.items[0].title, 'Combi oven error 34, steam generator', 'the reported work item follows');
+  assert.ok((await call('tech', 'GET', '/me/notifications')).body.some((n: { message: string }) => /changed by the office: priority: urgent/.test(n.message)));
+  const hist = (await call('admin', 'GET', `/jobs/${J}/changes`)).body;
+  assert.equal(hist.length, 4);
+  assert.ok(hist.some((h: { field: string; old_value: string; new_value: string }) => h.field === 'date' && h.old_value === '2026-10-22' && h.new_value === '2026-10-21'));
+  // Cancelling it: off the technician's day, kept on record.
+  assert.equal((await call('admin', 'POST', `/jobs/${J}/cancel`, {})).status, 400);
+  assert.equal((await call('admin', 'POST', `/jobs/${J}/cancel`, { note: 'Client fixed it themselves' })).status, 200);
+  assert.equal((await call('admin', 'PATCH', `/jobs/${J}`, { priority: 'normal' })).status, 409);
+  assert.equal((await call('tech', 'POST', `/jobs/${J}/go`, { at: '2026-10-21T08:00:00+02:00' })).body.reasons[0], 'the office cancelled this job');
+  assert.ok(!(await call('tech', 'GET', '/me/today?date=2026-10-21')).body.jobs.some((x: { id: string }) => x.id === J));
+
+  // Company details and rates come from the CEO.
+  assert.equal((await call('admin', 'PUT', '/office/company', { legalName: 'Zululand Service Providers' })).status, 403);
+  assert.equal((await call('director', 'PUT', '/office/company', { legalName: 'Zululand Service Providers (Pty) Ltd', vatNo: '4123456789', address: 'Alton, Richards Bay', vatPct: 15, invoiceDueDays: 30 })).status, 200);
+  assert.equal((await call('director', 'PUT', '/office/rates', { labour_per_hour: 65000, call_out: 45000, bought_out_markup_pct: 20 })).status, 200);
+
+  // A quote for a store, sent, accepted, and the job it opens.
+  assert.equal((await call('tech', 'POST', '/quotes', { storeId: ids.store, title: 'Replace door seals' })).status, 403);
+  const q = await call('admin', 'POST', '/quotes', { storeId: ids.store, title: 'Replace both oven door seals', lines: [{ kind: 'stock', description: 'Oven door seal 1/1', qty: 2, unitPriceCents: 0 }, { kind: 'labour', description: 'Labour', qty: 1.5, unitPriceCents: 65000 }] });
+  assert.equal(q.status, 201, JSON.stringify(q.body));
+  assert.equal(q.body.quoteNumber, 5001);
+  assert.match((await call('admin', 'POST', `/quotes/${q.body.id}/send`, {})).body.reasons[0], /line 1 \(Oven door seal 1\/1\): a price/);
+  assert.equal((await call('admin', 'PUT', `/quotes/${q.body.id}`, { title: 'Replace both oven door seals', lines: [{ kind: 'stock', description: 'Oven door seal 1/1', qty: 2, unitPriceCents: 85000 }, { kind: 'labour', description: 'Labour', qty: 1.5, unitPriceCents: 65000 }] })).status, 200);
+  assert.equal((await call('admin', 'POST', `/quotes/${q.body.id}/send`, {})).status, 200);
+  const qv = (await call('admin', 'GET', `/quotes/${q.body.id}`)).body;
+  assert.deepEqual(qv.totals, { exVatCents: 267500, vatCents: 40125, totalCents: 307625 });
+  assert.equal(qv.company.legal_name, 'Zululand Service Providers (Pty) Ltd');
+  assert.equal((await call('admin', 'PUT', `/quotes/${q.body.id}`, { title: 'Changed', lines: [] })).status, 409, 'sent quotes are locked');
+  await assert.rejects(db.query('UPDATE document_lines SET qty = 1 WHERE quote_id = $1', [q.body.id]), /cannot be changed/);
+  const acc = await call('admin', 'POST', `/quotes/${q.body.id}/accept`, { clientRef: 'PO-9001', newJob: { scheduledDate: '2026-10-23', leadTechnicianId: ids.tech } });
+  assert.equal(acc.status, 200, JSON.stringify(acc.body));
+  assert.ok(acc.body.jobNumber > 0, 'the work is opened as a job');
+  assert.equal((await call('admin', 'GET', '/quotes')).body[0].status, 'accepted');
+
+  // An invoice for a closed job, drafted from the job card.
+  const closed = (await db.query("SELECT id FROM jobs WHERE status = 'closed' ORDER BY closed_at LIMIT 1")).rows[0].id;
+  assert.ok((await call('admin', 'GET', '/office/to-invoice')).body.some((x: { id: string }) => x.id === closed));
+  assert.equal((await call('admin', 'POST', '/invoices', { jobId: J })).status, 409, 'only closed jobs');
+  const inv = await call('admin', 'POST', '/invoices', { jobId: closed });
+  assert.equal(inv.status, 201, JSON.stringify(inv.body));
+  assert.equal(inv.body.invoiceNumber, 7001);
+  assert.equal((await call('admin', 'POST', '/invoices', { jobId: closed })).status, 409, 'one invoice per job');
+  const iv = (await call('admin', 'GET', `/invoices/${inv.body.id}`)).body;
+  assert.equal(iv.lines[0].kind, 'labour', 'labour from the job timers');
+  assert.equal(iv.lines[0].unitPriceCents, 65000);
+  const priced = iv.lines.map((l: { unitPriceCents: number }) => ({ ...l, unitPriceCents: l.unitPriceCents || 12000 }));
+  assert.equal((await call('admin', 'PUT', `/invoices/${inv.body.id}`, { lines: priced, notes: 'Thank you' })).status, 200);
+  assert.equal((await call('admin', 'POST', `/invoices/${inv.body.id}/send`, {})).status, 200);
+  assert.equal((await call('admin', 'POST', `/invoices/${inv.body.id}/paid`, { ref: 'EFT 22831' })).status, 200);
+  assert.equal((await call('admin', 'GET', '/invoices')).body.find((x: { id: string }) => x.id === inv.body.id).status, 'paid');
+  assert.ok(!(await call('admin', 'GET', '/office/to-invoice')).body.some((x: { id: string }) => x.id === closed));
+  assert.equal((await call('tech', 'GET', '/invoices')).status, 403);
+});
+
 test('the CEO assigns each person a position; it takes effect at once and is logged', async () => {
   assert.equal((await call('manager', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'mechanic' })).status, 403, 'only whoever manages access');
   const list = (await call('director', 'GET', '/access/positions')).body;

@@ -1,0 +1,392 @@
+// Quotes and invoices, the company's details for its letterhead, and the rates. Prepared by the
+// office (whoever the CEO gave quotes and invoices), priced from the CEO's rates and the price list.
+// A draft can be changed freely; once sent it is locked and only its status moves on.
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { z } from 'zod';
+import type { Q } from '../db.ts';
+import { audit, tx } from '../db.ts';
+import { can } from '../core/permissions.ts';
+import * as D from '../core/documents.ts';
+import * as Jc from '../core/jobCard.ts';
+import { DateOnly, Refused, Uuid, parse } from '../http.ts';
+import { loadCard } from '../jobsRepo.ts';
+import { notify } from './field.ts';
+
+const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+
+const Line = z.object({
+  kind: z.enum(['labour', 'call_out', 'travel', 'stock', 'bought_out', 'other']),
+  description: z.string().trim().max(300),
+  qty: z.number().min(0).max(100000),
+  unitPriceCents: z.number().int().min(0).max(1_000_000_000),
+  stockItemId: Uuid.nullish(),
+  workItemId: Uuid.nullish(),
+});
+type LineT = z.infer<typeof Line>;
+
+async function rates(c: Q): Promise<Record<string, number>> {
+  const { rows } = await c.query('SELECT key, amount_cents FROM rates');
+  return Object.fromEntries(rows.map(r => [r.key, Number(r.amount_cents)]));
+}
+
+async function profile(c: Q) {
+  return (await c.query('SELECT * FROM company_profile')).rows[0] ?? null;
+}
+
+async function linesOf(c: Q, col: 'quote_id' | 'invoice_id', id: string) {
+  const { rows } = await c.query(
+    `SELECT id, kind, description, qty::float AS qty, unit_price_cents AS "unitPriceCents", stock_item_id AS "stockItemId", work_item_id AS "workItemId"
+       FROM document_lines WHERE ${col} = $1 ORDER BY position, id`, [id]);
+  return rows as (D.DocLine & { id: string })[];
+}
+
+async function writeLines(c: Q, col: 'quote_id' | 'invoice_id', id: string, lines: LineT[]) {
+  await c.query(`DELETE FROM document_lines WHERE ${col} = $1`, [id]);
+  let pos = 0;
+  for (const l of lines) {
+    if (!(l.qty > 0)) continue;
+    await c.query(
+      `INSERT INTO document_lines (${col}, kind, description, qty, unit_price_cents, stock_item_id, work_item_id, position) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [id, l.kind, l.description, l.qty, l.unitPriceCents, l.stockItemId ?? null, l.workItemId ?? null, pos++]);
+  }
+}
+
+/** Who the document is for: the store and its client, from the job or the store itself. */
+const WHO = `s.name AS store, s.address AS store_address, c.name AS client, s.email AS store_email`;
+
+export function registerDocumentRoutes(app: FastifyInstance) {
+  const see = (req: FastifyRequest) => { if (!can(req.actor, 'view_quotes_invoices_stock') && !can(req.actor, 'prepare_quotes_invoices')) throw new Refused(403, ['quotes and invoices are not part of your work']); };
+  const prep = (req: FastifyRequest) => { if (!can(req.actor, 'prepare_quotes_invoices')) throw new Refused(403, ['you cannot prepare quotes and invoices']); };
+
+  // ---- The company's details and rates (the CEO) ----------------------------------------------
+
+  app.get('/office/company', async req => {
+    see(req);
+    return { profile: await profile(req.db), rates: await rates(req.db), rateKeys: D.RATE_KEYS.map(k => ({ key: k, label: D.RATE_LABEL[k] })) };
+  });
+
+  app.put('/office/company', async req => {
+    if (!can(req.actor, 'set_prices')) throw new Refused(403, ['only the CEO (prices and rates) sets the company details']);
+    const b = parse(z.object({
+      legalName: z.string().trim().min(2).max(200), tradingName: z.string().trim().max(200).nullish(), regNo: z.string().trim().max(50).nullish(),
+      vatNo: z.string().trim().max(50).nullish(), address: z.string().trim().max(500).nullish(), phone: z.string().trim().max(50).nullish(),
+      email: z.string().trim().email().max(200).nullish().or(z.literal('')), bankDetails: z.string().trim().max(500).nullish(),
+      quoteTerms: z.string().trim().max(2000).nullish(), invoiceTerms: z.string().trim().max(2000).nullish(),
+      vatPct: z.number().min(0).max(30).default(15), quoteValidDays: z.number().int().min(1).max(365).default(30), invoiceDueDays: z.number().int().min(0).max(365).default(30),
+      logoPhotoId: Uuid.nullish(),
+    }), req.body);
+    await req.db.query(
+      `INSERT INTO company_profile (legal_name, trading_name, reg_no, vat_no, address, phone, email, bank_details, quote_terms, invoice_terms, vat_pct, quote_valid_days, invoice_due_days, logo_photo_id, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       ON CONFLICT (company_id) DO UPDATE SET legal_name = EXCLUDED.legal_name, trading_name = EXCLUDED.trading_name, reg_no = EXCLUDED.reg_no, vat_no = EXCLUDED.vat_no,
+         address = EXCLUDED.address, phone = EXCLUDED.phone, email = EXCLUDED.email, bank_details = EXCLUDED.bank_details, quote_terms = EXCLUDED.quote_terms,
+         invoice_terms = EXCLUDED.invoice_terms, vat_pct = EXCLUDED.vat_pct, quote_valid_days = EXCLUDED.quote_valid_days, invoice_due_days = EXCLUDED.invoice_due_days,
+         logo_photo_id = COALESCE(EXCLUDED.logo_photo_id, company_profile.logo_photo_id), updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [b.legalName, b.tradingName ?? null, b.regNo ?? null, b.vatNo ?? null, b.address ?? null, b.phone ?? null, b.email || null, b.bankDetails ?? null,
+       b.quoteTerms ?? null, b.invoiceTerms ?? null, b.vatPct, b.quoteValidDays, b.invoiceDueDays, b.logoPhotoId ?? null, req.actor.id]);
+    await audit(req.db, req.actor.id, 'company_profile', 'company', null, b);
+    return { profile: await profile(req.db) };
+  });
+
+  app.put('/office/rates', async req => {
+    if (!can(req.actor, 'set_prices')) throw new Refused(403, ['only the CEO sets rates']);
+    const b = parse(z.record(z.enum(D.RATE_KEYS as unknown as [string, ...string[]]), z.number().int().min(0).max(100_000_000)), req.body);
+    return tx(req.db, async c => {
+      const old = await rates(c);
+      for (const [key, cents] of Object.entries(b)) {
+        if (old[key] === cents) continue;
+        await c.query(`INSERT INTO rates (key, amount_cents, updated_by) VALUES ($1, $2, $3)
+                       ON CONFLICT (company_id, key) DO UPDATE SET amount_cents = EXCLUDED.amount_cents, updated_by = EXCLUDED.updated_by, updated_at = now()`, [key, cents, req.actor.id]);
+        await c.query('INSERT INTO price_changes (what, old_cents, new_cents, changed_by) VALUES ($1, $2, $3, $4)', [`rate:${key}`, old[key] ?? null, cents, req.actor.id]);
+      }
+      return { rates: await rates(c) };
+    });
+  });
+
+  // ---- Quotes ----------------------------------------------------------------------------
+
+  app.get('/quotes', async (req: FastifyRequest<{ Querystring: { status?: string } }>) => {
+    see(req);
+    const { rows } = await req.db.query(
+      `SELECT q.id, q.quote_number, q.status, q.title, q.created_at, q.sent_at, to_char(q.valid_until, 'YYYY-MM-DD') AS valid_until, q.accepted_at, q.declined_at,
+              q.vat_pct::float AS vat_pct, j.job_number, j.id AS job_id, ${WHO}, u.full_name AS created_by,
+              (SELECT coalesce(sum(round(l.qty * l.unit_price_cents)), 0)::bigint FROM document_lines l WHERE l.quote_id = q.id) AS ex_vat_cents
+         FROM quotes q LEFT JOIN jobs j ON j.id = q.job_id JOIN stores s ON s.id = coalesce(q.store_id, j.store_id) JOIN clients c ON c.id = s.client_id
+         JOIN users u ON u.id = q.created_by
+        WHERE ($1::text IS NULL OR q.status::text = $1) ORDER BY (q.status = 'draft') DESC, q.quote_number DESC LIMIT 500`, [req.query.status ?? null]);
+    return rows.map(r => ({ ...r, ex_vat_cents: Number(r.ex_vat_cents), total_cents: D.totals([{ qty: 1, unitPriceCents: Number(r.ex_vat_cents) }], r.vat_pct).totalCents }));
+  });
+
+  app.get('/quotes/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    see(req);
+    const id = parse(Uuid, req.params.id);
+    const q = (await req.db.query(
+      `SELECT q.*, to_char(q.valid_until, 'YYYY-MM-DD') AS valid_until, q.vat_pct::float AS vat_pct, j.job_number, ${WHO}, u.full_name AS created_by_name, rj.job_number AS resulting_job_number
+         FROM quotes q LEFT JOIN jobs j ON j.id = q.job_id JOIN stores s ON s.id = coalesce(q.store_id, j.store_id) JOIN clients c ON c.id = s.client_id
+         JOIN users u ON u.id = q.created_by LEFT JOIN jobs rj ON rj.id = q.resulting_job_id WHERE q.id = $1`, [id])).rows[0];
+    if (!q) throw new Refused(404, ['no such quote']);
+    const lines = await linesOf(req.db, 'quote_id', id);
+    return { quote: q, lines, totals: D.totals(lines, q.vat_pct), company: await profile(req.db) };
+  });
+
+  app.post('/quotes', async (req, reply) => {
+    prep(req);
+    const b = parse(z.object({
+      jobId: Uuid.optional(), storeId: Uuid.optional(), title: z.string().trim().min(3, 'what the quote is for').max(300),
+      clientRef: z.string().trim().max(100).optional(), notes: z.string().trim().max(2000).optional(), fromEstimateId: Uuid.optional(), lines: z.array(Line).max(200).default([]),
+    }).refine(x => x.jobId || x.storeId, 'a job or a store'), req.body);
+    const out = await tx(req.db, async c => {
+      if (b.jobId && !(await c.query('SELECT 1 FROM jobs WHERE id = $1', [b.jobId])).rowCount) throw new Refused(400, ['unknown job']);
+      if (b.storeId && !(await c.query('SELECT 1 FROM stores WHERE id = $1', [b.storeId])).rowCount) throw new Refused(400, ['unknown store']);
+      const p = await profile(c);
+      const q = (await c.query(
+        `INSERT INTO quotes (job_id, store_id, title, client_ref, notes, from_estimate_id, created_by, vat_pct) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, quote_number`,
+        [b.jobId ?? null, b.jobId ? null : b.storeId, b.title, b.clientRef ?? null, b.notes ?? null, b.fromEstimateId ?? null, req.actor.id, p?.vat_pct ?? 15])).rows[0];
+      let lines = b.lines;
+      // Start from the technician's on-site estimate: same items and quantities, office prices.
+      if (b.fromEstimateId && !lines.length) {
+        const e = (await c.query('SELECT labour_hours::float AS h, lines FROM estimates WHERE id = $1', [b.fromEstimateId])).rows[0];
+        if (!e) throw new Refused(400, ['unknown estimate']);
+        const r = await rates(c);
+        lines = [
+          ...(e.h > 0 ? [{ kind: 'labour' as const, description: 'Labour', qty: e.h, unitPriceCents: r.labour_per_hour ?? 0 }] : []),
+          ...(e.lines as { description?: string; code?: string; qty: number; unitPriceCents: number; boughtOut?: boolean; stockItemId?: string }[]).map(l => ({
+            kind: (l.boughtOut ? 'bought_out' : 'stock') as LineT['kind'], description: l.description ?? l.code ?? 'Item', qty: l.qty, unitPriceCents: l.unitPriceCents, stockItemId: l.stockItemId ?? null,
+          })),
+        ];
+      }
+      await writeLines(c, 'quote_id', q.id, lines);
+      await audit(c, req.actor.id, 'quote_created', 'quote', q.id, { number: q.quote_number });
+      return { id: q.id, quoteNumber: q.quote_number };
+    });
+    return reply.code(201).send(out);
+  });
+
+  app.put('/quotes/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    prep(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ title: z.string().trim().min(3).max(300), clientRef: z.string().trim().max(100).nullish(), notes: z.string().trim().max(2000).nullish(), lines: z.array(Line).max(200) }), req.body);
+    return tx(req.db, async c => {
+      const q = (await c.query('SELECT status FROM quotes WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!q) throw new Refused(404, ['no such quote']);
+      if (q.status !== 'draft') throw new Refused(409, ['a sent quote cannot be changed: make a new one']);
+      await c.query('UPDATE quotes SET title = $2, client_ref = $3, notes = $4, updated_at = now() WHERE id = $1', [id, b.title, b.clientRef ?? null, b.notes ?? null]);
+      await writeLines(c, 'quote_id', id, b.lines);
+      return { id };
+    });
+  });
+
+  app.post('/quotes/:id/send', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    prep(req);
+    const id = parse(Uuid, req.params.id);
+    return tx(req.db, async c => {
+      const q = (await c.query('SELECT status, quote_number FROM quotes WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!q) throw new Refused(404, ['no such quote']);
+      if (q.status !== 'draft') throw new Refused(409, ['already sent']);
+      const missing = D.missingToSend({ lines: await linesOf(c, 'quote_id', id) });
+      if (!(await profile(c))) missing.push("the company's details (CEO: Company and rates)");
+      if (missing.length) throw new Refused(409, missing);
+      const days = (await profile(c)).quote_valid_days;
+      await c.query("UPDATE quotes SET status = 'sent', sent_at = now(), valid_until = $2, updated_at = now() WHERE id = $1", [id, addDays(today(), days)]);
+      await audit(c, req.actor.id, 'quote_sent', 'quote', id);
+      return { id, status: 'sent' };
+    });
+  });
+
+  /** The client said yes: optionally open the job to do the work straight away. */
+  app.post('/quotes/:id/accept', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    prep(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({
+      note: z.string().trim().max(500).optional(), clientRef: z.string().trim().max(100).optional(),
+      newJob: z.object({ scheduledDate: DateOnly, leadTechnicianId: Uuid, priority: z.enum(['urgent', 'normal', 'scheduled']).default('scheduled') }).optional(),
+    }), req.body);
+    return tx(req.db, async c => {
+      const q = (await c.query(
+        'SELECT q.status, q.quote_number, q.title, q.client_ref, coalesce(q.store_id, j.store_id) AS store_id FROM quotes q LEFT JOIN jobs j ON j.id = q.job_id WHERE q.id = $1 FOR UPDATE OF q', [id])).rows[0];
+      if (!q) throw new Refused(404, ['no such quote']);
+      if (q.status !== 'sent') throw new Refused(409, ['only a sent quote can be accepted']);
+      let jobId: string | null = null;
+      let jobNumber: number | null = null;
+      if (b.newJob) {
+        if (!can(req.actor, 'assign_jobs')) throw new Refused(403, ['you cannot open jobs: accept it without a job and ask whoever does']);
+        const t = (await c.query("SELECT 1 FROM users WHERE id = $1 AND login_level = 'technician' AND status = 'active'", [b.newJob.leadTechnicianId])).rowCount;
+        if (!t) throw new Refused(400, ['lead technician must be an active technician']);
+        const j = (await c.query(
+          `INSERT INTO jobs (job_type, priority, store_id, client_order_ref, fault_reported, scheduled_date, lead_technician_id, created_by)
+           VALUES ('follow_up', $1, $2, $3, $4, $5, $6, $7) RETURNING id, job_number`,
+          [b.newJob.priority, q.store_id, b.clientRef ?? q.client_ref ?? null, `Quote ${q.quote_number} accepted: ${q.title}`, b.newJob.scheduledDate, b.newJob.leadTechnicianId, req.actor.id])).rows[0];
+        await c.query("INSERT INTO work_items (job_id, title, origin) VALUES ($1, $2, 'reported')", [j.id, `Quote ${q.quote_number}: ${q.title}`.slice(0, 200)]);
+        await notify(c, b.newJob.leadTechnicianId, 'job_assigned', `New job ${j.job_number}: quote ${q.quote_number} accepted (${q.title})`, { jobId: j.id });
+        jobId = j.id; jobNumber = j.job_number;
+      }
+      await c.query("UPDATE quotes SET status = 'accepted', accepted_at = now(), decision_note = $2, resulting_job_id = $3, updated_at = now() WHERE id = $1", [id, b.note ?? null, jobId]);
+      await audit(c, req.actor.id, 'quote_accepted', 'quote', id, { jobId });
+      return { id, status: 'accepted', jobId, jobNumber };
+    });
+  });
+
+  app.post('/quotes/:id/decline', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    prep(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ note: z.string().trim().min(3, 'what the client said').max(500) }), req.body);
+    const r = await req.db.query("UPDATE quotes SET status = 'declined', declined_at = now(), decision_note = $2, updated_at = now() WHERE id = $1 AND status = 'sent' RETURNING id", [id, b.note]);
+    if (!r.rowCount) throw new Refused(409, ['only a sent quote can be declined']);
+    return { id, status: 'declined' };
+  });
+
+  /** A draft is thrown away; a sent quote is marked cancelled. */
+  app.post('/quotes/:id/cancel', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    prep(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ note: z.string().trim().min(3).max(500) }), req.body);
+    return tx(req.db, async c => {
+      const q = (await c.query('SELECT status FROM quotes WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!q) throw new Refused(404, ['no such quote']);
+      if (q.status === 'draft') {
+        await c.query('DELETE FROM document_lines WHERE quote_id = $1', [id]);
+        await c.query('DELETE FROM quotes WHERE id = $1', [id]);
+        await audit(c, req.actor.id, 'quote_deleted', 'quote', id, b);
+        return { id, status: 'deleted' };
+      }
+      if (q.status !== 'sent') throw new Refused(409, [`the quote is ${q.status}`]);
+      await c.query("UPDATE quotes SET status = 'cancelled', decision_note = $2, updated_at = now() WHERE id = $1", [id, b.note]);
+      return { id, status: 'cancelled' };
+    });
+  });
+
+  // ---- Invoices ------------------------------------------------------------------------------
+
+  /** Closed jobs with no invoice yet. */
+  app.get('/office/to-invoice', async req => {
+    see(req);
+    const { rows } = await req.db.query(
+      `SELECT j.id, j.job_number, j.job_type, j.closed_at, j.fault_reported, j.client_order_ref, ${WHO}, u.full_name AS lead_technician
+         FROM jobs j JOIN stores s ON s.id = j.store_id JOIN clients c ON c.id = s.client_id JOIN users u ON u.id = j.lead_technician_id
+        WHERE j.status = 'closed' AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.job_id = j.id AND i.status <> 'cancelled')
+        ORDER BY j.closed_at`);
+    return rows;
+  });
+
+  app.get('/invoices', async (req: FastifyRequest<{ Querystring: { status?: string } }>) => {
+    see(req);
+    const { rows } = await req.db.query(
+      `SELECT i.id, i.invoice_number, i.status, i.created_at, i.sent_at, to_char(i.due_date, 'YYYY-MM-DD') AS due_date, i.paid_at, i.vat_pct::float AS vat_pct,
+              j.job_number, j.id AS job_id, ${WHO}, u.full_name AS created_by,
+              (SELECT coalesce(sum(round(l.qty * l.unit_price_cents)), 0)::bigint FROM document_lines l WHERE l.invoice_id = i.id) AS ex_vat_cents
+         FROM invoices i JOIN jobs j ON j.id = i.job_id JOIN stores s ON s.id = j.store_id JOIN clients c ON c.id = s.client_id JOIN users u ON u.id = i.created_by
+        WHERE ($1::text IS NULL OR i.status::text = $1) ORDER BY (i.status = 'draft') DESC, i.invoice_number DESC LIMIT 500`, [req.query.status ?? null]);
+    return rows.map(r => {
+      const ex = Number(r.ex_vat_cents);
+      return { ...r, ex_vat_cents: ex, total_cents: D.totals([{ qty: 1, unitPriceCents: ex }], r.vat_pct).totalCents, overdue: r.status === 'sent' && r.due_date && r.due_date < today() };
+    });
+  });
+
+  app.get('/invoices/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    see(req);
+    const id = parse(Uuid, req.params.id);
+    const i = (await req.db.query(
+      `SELECT i.*, to_char(i.due_date, 'YYYY-MM-DD') AS due_date, i.vat_pct::float AS vat_pct, j.job_number, j.client_order_ref AS job_order_ref, j.fault_reported,
+              to_char(j.closed_at AT TIME ZONE 'Africa/Johannesburg', 'YYYY-MM-DD') AS job_closed, ${WHO}, u.full_name AS created_by_name
+         FROM invoices i JOIN jobs j ON j.id = i.job_id JOIN stores s ON s.id = j.store_id JOIN clients c ON c.id = s.client_id JOIN users u ON u.id = i.created_by
+        WHERE i.id = $1`, [id])).rows[0];
+    if (!i) throw new Refused(404, ['no such invoice']);
+    const lines = await linesOf(req.db, 'invoice_id', id);
+    return { invoice: i, lines, totals: D.totals(lines, i.vat_pct), company: await profile(req.db) };
+  });
+
+  /** A draft invoice for a closed job, worked out from the job card: time on site, call-outs, parts used, items bought. */
+  app.post('/invoices', async (req, reply) => {
+    prep(req);
+    const b = parse(z.object({ jobId: Uuid }), req.body);
+    const out = await tx(req.db, async c => {
+      const loaded = await loadCard(c, b.jobId, true);
+      if (!loaded) throw new Refused(404, ['no such job']);
+      const j = (await c.query('SELECT job_number, job_type, status, client_order_ref FROM jobs WHERE id = $1', [b.jobId])).rows[0];
+      if (j.status !== 'closed') throw new Refused(409, ['only a closed job can be invoiced']);
+      if ((await c.query("SELECT 1 FROM invoices WHERE job_id = $1 AND status <> 'cancelled'", [b.jobId])).rowCount) throw new Refused(409, ['this job already has an invoice']);
+      const helpers = (await c.query('SELECT count(*)::int AS n FROM job_helpers WHERE job_id = $1', [b.jobId])).rows[0].n;
+      const stockUsed = (await c.query(
+        `SELECT m.stock_item_id AS "stockItemId", i.description, sum(m.qty)::float AS qty, i.selling_price_cents AS "sellingPriceCents"
+           FROM stock_movements m JOIN stock_items i ON i.id = m.stock_item_id
+          WHERE m.job_id = $1 AND m.kind = 'use_on_job' GROUP BY m.stock_item_id, i.description, i.selling_price_cents ORDER BY i.description`, [b.jobId])).rows;
+      const boughtOut = (await c.query('SELECT description, qty::float AS qty, price_cents AS "costCents" FROM bought_out_items WHERE job_id = $1 ORDER BY description', [b.jobId])).rows;
+      const lines = D.invoiceDraft({
+        jobType: j.job_type, jobNumber: j.job_number, minutesOnSite: Jc.jobMinutes(loaded.card), technicians: 1 + helpers,
+        visits: loaded.card.visits.length, stockUsed, boughtOut,
+      }, await rates(c));
+      const p = await profile(c);
+      const inv = (await c.query(
+        'INSERT INTO invoices (job_id, created_by, client_ref, vat_pct, due_date) VALUES ($1, $2, $3, $4, NULL) RETURNING id, invoice_number',
+        [b.jobId, req.actor.id, j.client_order_ref ?? null, p?.vat_pct ?? 15])).rows[0];
+      await writeLines(c, 'invoice_id', inv.id, lines);
+      await audit(c, req.actor.id, 'invoice_drafted', 'invoice', inv.id, { jobId: b.jobId });
+      return { id: inv.id, invoiceNumber: inv.invoice_number, missing: D.missingToSend({ lines }) };
+    });
+    return reply.code(201).send(out);
+  });
+
+  app.put('/invoices/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    prep(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ clientRef: z.string().trim().max(100).nullish(), notes: z.string().trim().max(2000).nullish(), lines: z.array(Line).max(200) }), req.body);
+    return tx(req.db, async c => {
+      const i = (await c.query('SELECT status FROM invoices WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!i) throw new Refused(404, ['no such invoice']);
+      if (i.status !== 'draft') throw new Refused(409, ['a sent invoice cannot be changed: cancel it and make a new one']);
+      await c.query('UPDATE invoices SET client_ref = $2, notes = $3, updated_at = now() WHERE id = $1', [id, b.clientRef ?? null, b.notes ?? null]);
+      await writeLines(c, 'invoice_id', id, b.lines);
+      return { id };
+    });
+  });
+
+  app.post('/invoices/:id/send', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    prep(req);
+    const id = parse(Uuid, req.params.id);
+    return tx(req.db, async c => {
+      const i = (await c.query('SELECT status FROM invoices WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!i) throw new Refused(404, ['no such invoice']);
+      if (i.status !== 'draft') throw new Refused(409, ['already sent']);
+      const p = await profile(c);
+      const missing = D.missingToSend({ lines: await linesOf(c, 'invoice_id', id) });
+      if (!p) missing.push("the company's details (CEO: Company and rates)");
+      if (missing.length) throw new Refused(409, missing);
+      await c.query("UPDATE invoices SET status = 'sent', sent_at = now(), due_date = $2, updated_at = now() WHERE id = $1", [id, addDays(today(), p.invoice_due_days)]);
+      await audit(c, req.actor.id, 'invoice_sent', 'invoice', id);
+      return { id, status: 'sent' };
+    });
+  });
+
+  app.post('/invoices/:id/paid', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    prep(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ ref: z.string().trim().min(2, 'the payment reference').max(100), paidOn: DateOnly.optional() }), req.body);
+    const r = await req.db.query("UPDATE invoices SET status = 'paid', paid_at = $3::date, paid_ref = $2, updated_at = now() WHERE id = $1 AND status = 'sent' RETURNING id",
+      [id, b.ref, b.paidOn ?? today()]);
+    if (!r.rowCount) throw new Refused(409, ['only a sent invoice can be marked paid']);
+    await audit(req.db, req.actor.id, 'invoice_paid', 'invoice', id, b);
+    return { id, status: 'paid' };
+  });
+
+  /** A draft is thrown away; a sent invoice is cancelled (kept on record) so a corrected one can be made. */
+  app.post('/invoices/:id/cancel', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    prep(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ note: z.string().trim().min(5, 'say why it is cancelled').max(500) }), req.body);
+    return tx(req.db, async c => {
+      const i = (await c.query('SELECT status FROM invoices WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!i) throw new Refused(404, ['no such invoice']);
+      if (i.status === 'draft') {
+        await c.query('DELETE FROM document_lines WHERE invoice_id = $1', [id]);
+        await c.query('DELETE FROM invoices WHERE id = $1', [id]);
+        await audit(c, req.actor.id, 'invoice_deleted', 'invoice', id, b);
+        return { id, status: 'deleted' };
+      }
+      if (i.status !== 'sent') throw new Refused(409, [`the invoice is ${i.status}`]);
+      await c.query("UPDATE invoices SET status = 'cancelled', cancelled_at = now(), cancel_note = $2, updated_at = now() WHERE id = $1", [id, b.note]);
+      await audit(c, req.actor.id, 'invoice_cancelled', 'invoice', id, b);
+      return { id, status: 'cancelled' };
+    });
+  });
+}

@@ -33,7 +33,7 @@ const STEPS: [string, string[]][] = [
     'Stock: his own workshop stock (oil, coolant, filters, pads). Dip the oil drum: a little short is allowed and recorded; a lot short goes to the office. Note a spill straight away. Parts on a job card can come from it.',
     'Techs: Thabo\'s phone is broken, so put him in a vehicle yourself (or take it off his name). Switch to Tech to see it on his My day.',
   ]],
-  ['As the office (Musa, the CEO)', [
+  ['As the office (Lilanie, the CEO)', [
     'Today: jobs, flags, handovers to approve, daily checks, safety faults and stock on one screen. Best on a computer.',
     'Jobs: create a job for any technician (Thabo sees it on his phone at once), open a job card to follow it, move it to someone else.',
     'Flags: read the explanation and resolve it with a note. Handovers: approve or reject a vehicle taken with nobody to sign.',

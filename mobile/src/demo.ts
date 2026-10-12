@@ -316,7 +316,7 @@ export class DemoTransport implements Transport {
       // The same pretend company seen as the technician or as the stock controller.
       const who = b.email === 'stock' ? { id: 'stock', name: 'Lindiwe Zulu', level: 'stockroom' }
         : b.email === 'mech' ? { id: 'mech', name: 'Bongani Khumalo', level: 'mechanic' }
-        : b.email === 'office' ? { id: 'office', name: 'Musa Ntuli', level: 'creator' }
+        : b.email === 'office' ? { id: 'office', name: 'Lilanie Schallies', level: 'creator' }
         : { id: 'me', name: 'Thabo Mkhize', level: 'technician' };
       this.who = who;
       return ok({
