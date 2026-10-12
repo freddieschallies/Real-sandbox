@@ -57,7 +57,6 @@ export function WorkshopList({ ws, role, open, onAdd }: { ws: WorkshopHook; role
     <>
       <Card style={{ borderColor: d.belowMin ? C.warn : C.line }}>
         <Text style={[st.body, { fontWeight: '800' }]}>{role === 'mechanic' ? 'My workshop stock' : "Mechanic's workshop"}</Text>
-        <Text style={st.small}>Set and issued by the stock controller. Oil and coolant are poured, so small losses are allowed ({d.lossPct} % of what was used, at least {d.lossMin} L) but always recorded.</Text>
         {d.belowMin ? <Pill text={`${d.belowMin} below minimum`} tone="warn" /> : <Pill text="All at or above minimum" tone="good" />}
       </Card>
       {role === 'controller' && onAdd ? <Button label="Add an item to the workshop" kind="secondary" onPress={onAdd} /> : null}
@@ -70,7 +69,6 @@ export function WorkshopList({ ws, role, open, onAdd }: { ws: WorkshopHook; role
           <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
             {l.min_qty ? <Pill text={`Min ${n(l.min_qty)} ${l.unit}`} tone={l.belowMin ? 'warn' : 'quiet'} /> : null}
             {l.daily_check_use ? <Pill text={l.daily_check_use === 'oil' ? 'Daily-check oil' : 'Daily-check coolant'} tone="info" /> : null}
-            {l.measured ? <Pill text="Poured" tone="quiet" /> : null}
           </View>
           <Text style={st.small}>Used {n(l.used_30d)} · lost {n(l.lost_30d)} {l.unit} in 30 days{l.last_count ? ` · last counted ${when(l.last_count.at)}` : ' · never counted'}</Text>
         </Card>
@@ -101,12 +99,12 @@ export function WorkshopItem({ id, ws, role, done }: { id: string; ws: WorkshopH
         <Text style={{ color: C.text, fontSize: 24, fontWeight: '800', flex: 1 }}>{l.description}</Text>
         {l.belowMin ? <Pill text="Below minimum" tone="warn" /> : null}
       </View>
-      <Text style={st.small}>{l.code}{l.measured ? ' · poured stock: small losses allowed' : ' · counted stock: must match'}</Text>
+      <Text style={st.small}>{l.code}</Text>
       <View style={{ flexDirection: 'row', gap: 10 }}>
         <Card style={{ flex: 1 }}><Label>In the workshop</Label><Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>{n(l.qty)} {l.unit}</Text></Card>
         <Card style={{ flex: 1 }}><Label>Minimum</Label><Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>{n(l.min_qty)} {l.unit}</Text></Card>
       </View>
-      <Text style={st.small}>Used since the last count: {n(l.usedSince)} {l.unit}{l.measured ? ` · allowance now ${n(W.allowance(l.usedSince, true))} ${l.unit}` : ''}</Text>
+      <Text style={st.small}>Used since the last count: {n(l.usedSince)} {l.unit}{l.last_count ? ` · last count ${when(l.last_count.at)} by ${l.last_count.by}` : ' · never counted'}</Text>
       {reply ? <Notice tone={reply.tone} title={reply.title} lines={reply.lines} /> : null}
 
       <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>

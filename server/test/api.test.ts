@@ -946,6 +946,34 @@ test('the office edits jobs (every change on the job), cancels them, and makes q
   assert.equal((await call('tech', 'GET', '/invoices')).status, 403);
 });
 
+test('queries: the office or a technician asks any technician at any time; both see the conversation', async () => {
+  assert.equal((await call('mech', 'POST', '/queries', { toUserId: ids.tech, subject: 'Hello there', body: 'Hello' })).status, 403, 'the mechanic does not send queries');
+  assert.equal((await call('admin', 'POST', '/queries', { toUserId: ids.stock, subject: 'Keys', body: 'Where are the keys?' })).status, 400, 'only to technicians');
+  assert.equal((await call('tech', 'POST', '/queries', { toUserId: ids.tech, subject: 'Me', body: 'Myself' })).status, 400);
+  const people = (await call('tech', 'GET', '/queries/people')).body;
+  assert.ok(people.some((p: { id: string }) => p.id === ids.tech2) && !people.some((p: { id: string }) => p.id === ids.tech));
+  const q = await call('admin', 'POST', '/queries', { toUserId: ids.tech, subject: 'Harbour Deli access card', body: 'Did you get the access card from the store manager?' });
+  assert.equal(q.status, 201, JSON.stringify(q.body));
+  assert.ok((await call('tech', 'GET', '/me/notifications')).body.some((n: { message: string }) => /Query from .*Harbour Deli access card/.test(n.message)));
+  let mine = (await call('tech', 'GET', '/me/queries')).body;
+  assert.equal(mine.unread, 1);
+  assert.equal(mine.queries[0].messages[0].body, 'Did you get the access card from the store manager?');
+  assert.equal((await call('tech2', 'POST', `/queries/${q.body.id}/messages`, { body: 'Not mine' })).status, 403, 'only the two people in it');
+  assert.equal((await call('tech', 'POST', `/queries/${q.body.id}/messages`, { body: 'Yes, it is in the van.' })).status, 201);
+  mine = (await call('tech', 'GET', '/me/queries')).body;
+  assert.equal(mine.unread, 0, 'answering marks it read');
+  const office = (await call('admin', 'GET', '/me/queries')).body;
+  assert.equal(office.unread, 1);
+  assert.equal(office.queries[0].messages.length, 2);
+  assert.equal((await call('admin', 'POST', `/queries/${q.body.id}/read`, {})).status, 200);
+  assert.equal((await call('admin', 'GET', '/me/queries')).body.unread, 0);
+  // Technician to technician, about a job.
+  const job = (await db.query('SELECT id FROM jobs ORDER BY job_number LIMIT 1')).rows[0].id;
+  assert.equal((await call('tech', 'POST', '/queries', { toUserId: ids.tech2, jobId: job, subject: 'Spare contactor', body: 'Do you have a 25A contactor in your van?' })).status, 201);
+  assert.equal((await call('tech2', 'GET', '/me/queries')).body.queries[0].job_number > 0, true);
+  await assert.rejects(db.query('UPDATE query_messages SET body = $1', ['changed']), /cannot be edited/);
+});
+
 test('the CEO assigns each person a position; it takes effect at once and is logged', async () => {
   assert.equal((await call('manager', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'mechanic' })).status, 403, 'only whoever manages access');
   const list = (await call('director', 'GET', '/access/positions')).body;
@@ -1080,7 +1108,7 @@ test('estimates: prices only from the price list, always marked not official', a
   const body = { at: '2026-10-15T09:00:00+02:00', labourHours: 2, stockLines: [{ stockItemId: ids.seal, qty: 1 }], boughtOutLines: [{ description: 'Element 3kW', qty: 1, estimatedPriceCents: 85000 }] };
   const noPrices = await call('tech', 'POST', `${J}/items/${item}/estimate`, body);
   assert.equal(noPrices.status, 409);
-  await db.query("INSERT INTO rates (key, amount_cents, updated_by) VALUES ('labour_per_hour', 55000, $1)", [ids.creator]);
+  await db.query("INSERT INTO rates (key, amount_cents, updated_by) VALUES ('labour_per_hour', 55000, $1) ON CONFLICT (company_id, key) DO UPDATE SET amount_cents = 55000", [ids.creator]);
   await db.query('UPDATE stock_items SET selling_price_cents = 32000 WHERE id = $1', [ids.seal]);
   const est = await call('tech', 'POST', `${J}/items/${item}/estimate`, body);
   assert.equal(est.status, 200);

@@ -91,11 +91,11 @@ export function registerDocumentRoutes(app: FastifyInstance) {
 
   app.put('/office/rates', async req => {
     if (!can(req.actor, 'set_prices')) throw new Refused(403, ['only the CEO sets rates']);
-    const b = parse(z.record(z.enum(D.RATE_KEYS as unknown as [string, ...string[]]), z.number().int().min(0).max(100_000_000)), req.body);
+    const b = parse(z.object(Object.fromEntries(D.RATE_KEYS.map(k => [k, z.number().int().min(0).max(100_000_000).optional()]))), req.body) as Record<string, number | undefined>;
     return tx(req.db, async c => {
       const old = await rates(c);
       for (const [key, cents] of Object.entries(b)) {
-        if (old[key] === cents) continue;
+        if (cents === undefined || old[key] === cents) continue;
         await c.query(`INSERT INTO rates (key, amount_cents, updated_by) VALUES ($1, $2, $3)
                        ON CONFLICT (company_id, key) DO UPDATE SET amount_cents = EXCLUDED.amount_cents, updated_by = EXCLUDED.updated_by, updated_at = now()`, [key, cents, req.actor.id]);
         await c.query('INSERT INTO price_changes (what, old_cents, new_cents, changed_by) VALUES ($1, $2, $3, $4)', [`rate:${key}`, old[key] ?? null, cents, req.actor.id]);

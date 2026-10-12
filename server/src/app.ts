@@ -11,6 +11,7 @@ import { registerJobRoutes } from './routes/jobs.ts';
 import { registerFieldRoutes } from './routes/field.ts';
 import { registerOfficeRoutes } from './routes/office.ts';
 import { registerControlRoutes } from './routes/control.ts';
+import { registerQueryRoutes } from './routes/queries.ts';
 import { registerDocumentRoutes } from './routes/documents.ts';
 import { registerAccessRoutes } from './routes/access.ts';
 import { registerPlatformRoutes } from './routes/platform.ts';
@@ -35,6 +36,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerFieldRoutes(app, db);
   registerOfficeRoutes(app, db);
   registerControlRoutes(app);
+  registerQueryRoutes(app);
   registerDocumentRoutes(app);
   registerAccessRoutes(app, db);
   registerPlatformRoutes(app, db);
