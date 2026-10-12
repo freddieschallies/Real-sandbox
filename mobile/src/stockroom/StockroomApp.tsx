@@ -1,5 +1,6 @@
 // The stock controller's app. Phone: tabs at the bottom, list then detail. Desktop (wide screen):
 // menu, list and the open request side by side. Nothing leaves or enters the stockroom without this.
+import { WorkshopAdd, WorkshopItem, WorkshopList, useWorkshop } from '../fleet/Workshop.tsx';
 import React, { useState } from 'react';
 import { Image, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,8 +15,8 @@ import type { StockRequest, StockReturn } from '../types.ts';
 // The stockroom's own colour, so nobody confuses it with the technician app.
 const K = { band: '#1E6F6A', bandText: '#E8FFFB', tick: '#3FB57A' };
 
-type Tab = 'issue' | 'receive' | 'room' | 'live' | 'items';
-type Sel = { kind: 'issue'; id: string } | { kind: 'return'; id: string } | { kind: 'item'; id: string } | { kind: 'delivery' } | null;
+type Tab = 'issue' | 'receive' | 'room' | 'workshop' | 'live' | 'items';
+type Sel = { kind: 'issue'; id: string } | { kind: 'return'; id: string } | { kind: 'item'; id: string } | { kind: 'delivery' } | { kind: 'ws'; id: string } | { kind: 'wsadd' } | null;
 type Photo = { id: string; uri: string; mime: string };
 
 const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
@@ -26,6 +27,7 @@ export function StockroomApp() {
   const { width } = useWindowDimensions();
   const wide = width >= 900;
   const room = useStockroom();
+  const ws = useWorkshop();
   const [tab, setTab] = useState<Tab>('issue');
   const [sel, setSel] = useState<Sel>(null);
   const o = room.ctl.overview;
@@ -34,6 +36,7 @@ export function StockroomApp() {
     { key: 'issue', label: 'To issue', count: room.ctl.issues.length },
     { key: 'receive', label: 'To receive', count: room.ctl.returns.length },
     { key: 'room', label: 'Stock' },
+    { key: 'workshop', label: 'Workshop', count: ws.data?.belowMin },
     { key: 'live', label: 'Live', count: (room.ctl.activity ?? []).filter(a => !room.ctl.seenActivityAt || a.at > room.ctl.seenActivityAt).length },
     { key: 'items', label: 'New items', count: o?.newItems ?? room.ctl.room.filter(i => i.needsReview).length },
   ];
@@ -43,6 +46,7 @@ export function StockroomApp() {
       {tab === 'issue' ? <IssueTab waiting={room.ctl.issues} issued={room.ctl.issued ?? []} open={id => setSel({ kind: 'issue', id })} selected={sel?.kind === 'issue' ? sel.id : null} /> : null}
       {tab === 'receive' ? <ReturnList items={room.ctl.returns} open={id => setSel({ kind: 'return', id })} selected={sel?.kind === 'return' ? sel.id : null} /> : null}
       {tab === 'room' ? <RoomList items={room.ctl.room} holdings={room.ctl.holdings ?? []} onDelivery={() => setSel({ kind: 'delivery' })} /> : null}
+      {tab === 'workshop' ? <WorkshopList ws={ws} role="controller" open={id => setSel({ kind: 'ws', id })} onAdd={() => setSel({ kind: 'wsadd' })} /> : null}
       {tab === 'live' ? <LiveFeed items={room.ctl.activity ?? []} seen={room.ctl.seenActivityAt ?? null} invoices={room.ctl.invoices} /> : null}
       {tab === 'items' ? <NewItemList items={room.ctl.room.filter(i => i.needsReview)} open={id => setSel({ kind: 'item', id })} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} disabled={s.waiting > 0} /> : null}
@@ -65,6 +69,8 @@ export function StockroomApp() {
       const it = room.ctl.room.find(x => x.id === sel.id);
       return it ? <NameItem key={it.id} it={it} room={room} done={close} /> : null;
     }
+    if (sel.kind === 'ws') return <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}><WorkshopItem key={sel.id} id={sel.id} ws={ws} role="controller" done={close} /></ScrollView>;
+    if (sel.kind === 'wsadd') return <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}><WorkshopAdd ws={ws} done={() => { close(); room.load(); }} /></ScrollView>;
     return <Delivery room={room} done={close} />;
   })();
 

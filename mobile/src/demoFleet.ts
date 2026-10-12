@@ -11,7 +11,7 @@ export interface DemoFleetState {
   km: { vehicle_id: string; km: number; read_at: string; source: string; by: string }[];
   faults: Fault[];
   jobs: Job[];
-  parts: { job_id: string; id: string; description: string; qty: number; unitCostCents: number | null; source: 'stockroom' | 'bought' | 'other' }[];
+  parts: { job_id: string; id: string; description: string; qty: number; unitCostCents: number | null; source: 'stockroom' | 'bought' | 'other' | 'workshop' }[];
   nextJob: number;
   bookings?: Omit<Booking, 'registration' | 'driver'>[];
   /** Where each vehicle was last seen by the tracker, and whether it is moving. */
@@ -258,7 +258,7 @@ export class DemoFleet {
     return good({ id });
   }
 
-  addPart(id: string, b: { id?: string; description: string; qty: number; unitCostCents?: number | null; source: 'stockroom' | 'bought' | 'other'; slipPhotoId?: string }): Res {
+  addPart(id: string, b: { id?: string; description: string; qty: number; unitCostCents?: number | null; source: 'stockroom' | 'bought' | 'other' | 'workshop'; slipPhotoId?: string }): Res {
     const j = this.job(id);
     if (!j) return bad(404, 'no such job card');
     if (j.status !== 'open') return bad(409, 'this job card is completed and locked');

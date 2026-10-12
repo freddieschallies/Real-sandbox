@@ -1,6 +1,7 @@
 // A pretend server inside the app, so the app can be tried without the office server.
 // It answers the same requests as the real one and uses the same rules engine, so what you
 // feel in demo mode is what the technicians will get. Data is invented.
+import { DemoWorkshop, seedWorkshop, type DemoWorkshopState } from './demoWorkshop.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
 import { normReg, registrationCandidates } from '../../server/src/core/vehicleCode.ts';
@@ -30,6 +31,7 @@ export interface DemoState {
   fuel: { litres: number; at: string }[];
   /** People given the mechanic's work on top of their own position (by the CEO). */
   fleetDuty?: Record<string, boolean>;
+  workshop?: DemoWorkshopState;
 }
 
 const STORES = {
@@ -128,6 +130,12 @@ export class DemoTransport implements Transport {
       jobMinutes: J.jobMinutes(c),
       items: c.items.map(it => ({ ...it, status: J.itemStatus(it, c.jobType), missing: J.missingOnItem(it, c.jobType) })),
     };
+  }
+
+  private workshop(): DemoWorkshop {
+    this.stock();
+    const st = this.state.stockControl!;
+    return new DemoWorkshop(this.state.workshop ?? (this.state.workshop = seedWorkshop(st)), st);
   }
 
   private stock(): DemoStock {
@@ -330,9 +338,32 @@ export class DemoTransport implements Transport {
 
     // Fleet (mechanic). Technicians may report faults; the rest is the mechanic's.
     if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/faults$/))) return this.fleetResult(this.fleet().reportFault(m[1], b, this.who.name, this.who.level === 'mechanic'));
+    // The workshop's stock: the mechanic uses and counts it; the stock controller sets and issues it.
+    if (p.startsWith('/fleet/workshop')) {
+      const mech = this.who.level === 'mechanic' || !!this.state.fleetDuty?.[this.who.id];
+      const ctl = this.who.level === 'stockroom';
+      if (!mech && !ctl) return refuse(403, 'fleet or stock controller only');
+      const ws = this.workshop();
+      const done = (r: Parameters<DemoTransport['fleetResult']>[0]) => this.fleetResult(r);
+      if (p === '/fleet/workshop') { const r = ws.list(); this.persist(this.state); return ok(r); }
+      if (p === '/fleet/workshop/movements') return ok(ws.movements(new URLSearchParams(req.path.split('?')[1] ?? '').get('itemId')));
+      if ((m = p.match(/^\/fleet\/workshop\/items\/([^/]+)$/))) return ctl ? done(ws.setItem(m[1], b)) : refuse(403, 'stock controller or office only');
+      if (p === '/fleet/workshop/issue') return ctl ? done(ws.issue(b)) : refuse(403, 'stock controller or office only');
+      if (p === '/fleet/workshop/return') return ctl ? done(ws.sendBack(b)) : refuse(403, 'stock controller or office only');
+      if (p === '/fleet/workshop/loss') return mech ? done(ws.loss(b)) : refuse(403, 'mechanic only');
+      if (p === '/fleet/workshop/count') return done(ws.count(b, this.who.name));
+    }
     if (p.startsWith('/fleet') && this.who.level !== 'mechanic' && !this.state.fleetDuty?.[this.who.id]) return refuse(403, 'mechanic only');
     if (p === '/fleet/daily-checks') return ok(this.fleet().checksFor());
-    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/daily-check$/))) return this.fleetResult(this.fleet().dailyCheck(m[1], b));
+    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/daily-check$/))) {
+      const r = this.fleet().dailyCheck(m[1], b);
+      if (r.ok) {
+        const reg = this.fleet().s.vehicles.find(v => v.id === m![1])!.registration;
+        const notes = [b.oil === 'topped_up' ? this.workshop().pourForCheck('oil', b.oilLitres, reg) : null, b.water === 'topped_up' && b.waterLitres ? this.workshop().pourForCheck('water', b.waterLitres, reg) : null].filter(Boolean);
+        (r.body as Record<string, unknown>).stockNotes = notes;
+      }
+      return this.fleetResult(r);
+    }
     if (p === '/fleet/bookings') return ok(this.fleet().bookings());
     if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/bookings$/))) return this.fleetResult(this.fleet().book(m[1], b));
     if ((m = p.match(/^\/fleet\/bookings\/([^/]+)\/move$/))) return this.fleetResult(this.fleet().move(m[1], b));
@@ -365,7 +396,18 @@ export class DemoTransport implements Transport {
     if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/jobs$/))) return this.fleetResult(this.fleet().openJob(m[1], b));
     if ((m = p.match(/^\/fleet\/faults\/([^/]+)\/defer$/))) return this.fleetResult(this.fleet().defer(m[1], b.note));
     if ((m = p.match(/^\/fleet\/jobs\/([^/]+)$/)) && req.method === 'PATCH') return this.fleetResult(this.fleet().patchJob(m[1], b));
-    if ((m = p.match(/^\/fleet\/jobs\/([^/]+)\/parts$/))) return this.fleetResult(this.fleet().addPart(m[1], b));
+    if ((m = p.match(/^\/fleet\/jobs\/([^/]+)\/parts$/))) {
+      if (b.source === 'workshop') {
+        if (!b.stockItemId) return refuse(400, 'which workshop stock item');
+        const j = this.fleet().s.jobs.find(x => x.id === m![1]);
+        if (!j) return refuse(404, 'no such job card');
+        if (j.status !== 'open') return refuse(409, 'this job card is completed and locked');
+        const reg = this.fleet().s.vehicles.find(v => v.id === j.vehicle_id)!.registration;
+        const err = this.workshop().useOnJob(b.stockItemId, b.qty, reg, j.number);
+        if (err) return this.fleetResult(err);
+      }
+      return this.fleetResult(this.fleet().addPart(m[1], b));
+    }
     if ((m = p.match(/^\/fleet\/jobs\/([^/]+)\/complete$/))) return this.fleetResult(this.fleet().complete(m[1], b));
 
     if ((m = p.match(/^\/jobs\/([^/]+)$/)) && req.method === 'GET') {

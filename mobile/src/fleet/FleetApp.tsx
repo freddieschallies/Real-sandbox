@@ -12,11 +12,12 @@ import { C, S } from '../theme.ts';
 import { useFleet, type Shot } from './useFleet.ts';
 import type { Fault, FleetJob, FleetVehicle } from './types.ts';
 import { DUE, K, SEV, STATUS, TYPE_LABEL, dayName, km, today, when, SLOT_LABEL } from './common.ts';
+import { WorkshopItem, WorkshopList, useWorkshop } from './Workshop.tsx';
 import { AssignScreen, BookingScreen, BookingsList, DailyCheckHistory, DailyCheckScreen, DailyChecksCard, FleetMap, NewBooking, TechList } from './FleetExtra.tsx';
 
-type Tab = 'vehicles' | 'map' | 'bookings' | 'faults' | 'jobs' | 'techs';
+type Tab = 'vehicles' | 'map' | 'bookings' | 'faults' | 'jobs' | 'stock' | 'techs';
 export type Sel = { kind: 'vehicle'; id: string } | { kind: 'job'; id: string } | { kind: 'newjob'; vehicleId: string; bookingId?: string } | { kind: 'report'; vehicleId: string }
-  | { kind: 'booking'; id: string } | { kind: 'check'; vehicleId: string } | { kind: 'newbooking'; vehicleId?: string } | { kind: 'assign'; techId?: string; vehicleId?: string };
+  | { kind: 'booking'; id: string } | { kind: 'check'; vehicleId: string } | { kind: 'wsitem'; id: string } | { kind: 'newbooking'; vehicleId?: string } | { kind: 'assign'; techId?: string; vehicleId?: string };
 
 export function FleetApp() {
   const s = useStore();
@@ -24,10 +25,12 @@ export function FleetApp() {
   const { width } = useWindowDimensions();
   const wide = width >= 900;
   const f = useFleet();
+  const ws = useWorkshop();
   const [tab, setTab] = useState<Tab>('vehicles');
+  useEffect(() => { if (tab === 'stock') ws.load(); }, [tab]);
   const [stack, setStack] = useState<Sel[]>([]);
   const sel = stack.at(-1) ?? null;
-  const open = (x: Sel) => setStack(st0 => (wide && (x.kind === 'vehicle' || x.kind === 'booking' || (x.kind === 'assign' && !!x.techId && tab === 'techs')) ? [x] : [...st0, x]));
+  const open = (x: Sel) => setStack(st0 => (wide && (x.kind === 'vehicle' || x.kind === 'booking' || x.kind === 'wsitem' || (x.kind === 'assign' && !!x.techId && tab === 'techs')) ? [x] : [...st0, x]));
   const back = () => setStack(st0 => st0.slice(0, -1));
   const v = f.d.vehicles;
   const due = v.filter(x => x.serviceDue.state === 'overdue' || x.serviceDue.state === 'soon' || x.licenceDue.state === 'overdue' || x.licenceDue.state === 'soon');
@@ -36,9 +39,10 @@ export function FleetApp() {
   const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: 'vehicles', label: 'Vehicles' },
     { key: 'map', label: 'Map' },
-    { key: 'bookings', label: 'Bookings', count: due.filter(x => !booked.has(x.id)).length },
+    { key: 'bookings', label: 'Booked', count: due.filter(x => !booked.has(x.id)).length },
     { key: 'faults', label: 'Faults', count: f.d.faults.filter(x => x.status === 'open').length },
     { key: 'jobs', label: 'Jobs', count: f.d.jobs.length },
+    { key: 'stock', label: 'Stock', count: ws.data?.belowMin },
     { key: 'techs', label: 'Techs' },
   ];
 
@@ -50,6 +54,7 @@ export function FleetApp() {
       {tab === 'map' ? <FleetMap f={f} open={open} /> : null}
       {tab === 'bookings' ? <BookingsList f={f} due={due.filter(x => !booked.has(x.id))} open={open} /> : null}
       {tab === 'techs' ? <TechList f={f} open={open} /> : null}
+      {tab === 'stock' ? <WorkshopList ws={ws} role="mechanic" open={id => open({ kind: 'wsitem', id })} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} disabled={s.waiting > 0} /> : null}
       <Text style={st.small}>{f.d.loadedAt ? `Updated ${when(f.d.loadedAt)}` : f.loading ? 'Loading…' : 'Needs signal to load.'}</Text>
     </ScrollView>
@@ -58,9 +63,10 @@ export function FleetApp() {
   const detail = (() => {
     if (!sel) return null;
     if (sel.kind === 'vehicle') return <VehicleScreen key={sel.id} id={sel.id} f={f} open={open} />;
-    if (sel.kind === 'job') { const j = f.d.jobs.find(x => x.id === sel.id); return j ? <JobScreen key={j.id} j={j} f={f} done={back} /> : <Body quiet>Job card completed.</Body>; }
+    if (sel.kind === 'job') { const j = f.d.jobs.find(x => x.id === sel.id); return j ? <JobScreen key={j.id} j={j} f={f} ws={ws} done={back} /> : <Body quiet>Job card completed.</Body>; }
     if (sel.kind === 'newjob') return <NewJob key={sel.vehicleId} vehicleId={sel.vehicleId} bookingId={sel.bookingId} f={f} done={back} />;
-    if (sel.kind === 'check') return <DailyCheckScreen key={sel.vehicleId} vehicleId={sel.vehicleId} f={f} open={open} done={back} />;
+    if (sel.kind === 'wsitem') return <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}><WorkshopItem key={sel.id} id={sel.id} ws={ws} role="mechanic" done={back} /></ScrollView>;
+    if (sel.kind === 'check') return <DailyCheckScreen key={sel.vehicleId} vehicleId={sel.vehicleId} f={f} ws={ws.data} open={open} done={back} />;
     if (sel.kind === 'booking') return <BookingScreen key={sel.id} id={sel.id} f={f} open={open} done={back} />;
     if (sel.kind === 'newbooking') return <NewBooking key={sel.vehicleId ?? 'any'} vehicleId={sel.vehicleId} f={f} done={back} />;
     if (sel.kind === 'assign') return <AssignScreen key={`${sel.techId}-${sel.vehicleId}`} techId={sel.techId} vehicleId={sel.vehicleId} f={f} done={back} />;
@@ -428,7 +434,7 @@ function NewJob({ vehicleId, bookingId, f, done }: { vehicleId: string; bookingI
   );
 }
 
-function JobScreen({ j, f, done }: { j: FleetJob; f: FleetHook; done: () => void }) {
+function JobScreen({ j, f, ws, done }: { j: FleetJob; f: FleetHook; ws: ReturnType<typeof useWorkshop>; done: () => void }) {
   const v = f.d.vehicles.find(x => x.id === j.vehicle_id);
   const det = f.d.details[j.vehicle_id]?.vehicle;
   const [found, setFound] = useState(j.found_text ?? '');
@@ -436,7 +442,8 @@ function JobScreen({ j, f, done }: { j: FleetJob; f: FleetHook; done: () => void
   const [hours, setHours] = useState(j.labour_hours != null ? String(j.labour_hours) : '');
   const [after, setAfter] = useState<Shot[]>([]);
   const [before, setBefore] = useState<Shot[]>([]);
-  const [part, setPart] = useState<{ desc: string; qty: string; cost: string; source: 'stockroom' | 'bought' | 'other'; slip: Shot | null } | null>(null);
+  const [part, setPart] = useState<{ desc: string; qty: string; cost: string; source: 'workshop' | 'stockroom' | 'bought' | 'other'; slip: Shot | null; itemId?: string } | null>(null);
+  const wsLine = part?.itemId ? ws.data?.lines.find(l => l.id === part.itemId) : undefined;
   const [odoOut, setOdoOut] = useState(String(Math.max(j.odometer_in, v?.km ?? 0)));
   const ns = F.nextService(Number(odoOut) || j.odometer_in, det?.service_interval_km ?? 15000, det?.service_interval_months ?? 12, today());
   const [nextKm, setNextKm] = useState(j.job_type === 'service' ? String(ns.km) : '');
@@ -501,21 +508,30 @@ function JobScreen({ j, f, done }: { j: FleetJob; f: FleetHook; done: () => void
       {!j.parts.length ? <Body quiet>No parts yet.</Body> : null}
       {part ? (
         <Card>
+          <Choice options={['workshop', 'stockroom', 'bought', 'other'] as const} value={part.source} onChange={x => setPart({ ...part, source: x })} labels={{ workshop: 'My workshop stock', stockroom: 'From stockroom', bought: 'Bought', other: 'Other' }} />
+          {part.source === 'workshop' ? (
+            <>
+              <Label>Which item</Label>
+              <Choice options={(ws.data?.lines ?? []).filter(l => l.qty > 0).map(l => l.id)} value={part.itemId}
+                onChange={id => { const l = ws.data!.lines.find(x => x.id === id)!; setPart({ ...part, itemId: id, desc: l.description }); }}
+                labels={Object.fromEntries((ws.data?.lines ?? []).map(l => [l.id, `${l.description} (${l.qty} ${l.unit})`]))} />
+            </>
+          ) : null}
           <Field label="Part" value={part.desc} onChangeText={t => setPart({ ...part, desc: t })} />
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <View style={{ flex: 1 }}><Field label="Qty" value={part.qty} onChangeText={t => setPart({ ...part, qty: t })} keyboardType="decimal-pad" /></View>
             <View style={{ flex: 1 }}><Field label="Cost each (R)" value={part.cost} onChangeText={t => setPart({ ...part, cost: t })} keyboardType="decimal-pad" /></View>
           </View>
-          <Choice options={['stockroom', 'bought', 'other'] as const} value={part.source} onChange={x => setPart({ ...part, source: x })} labels={{ stockroom: 'From stockroom', bought: 'Bought', other: 'Other' }} />
+          {wsLine && !wsLine.measured && Number(part.qty) > wsLine.qty ? <Notice tone="bad" title={`Only ${wsLine.qty} ${wsLine.unit} in the workshop`} lines={['Ask the stock controller to issue more.']} /> : null}
           {part.source === 'bought' ? <Button label={part.slip ? 'Slip photo ✓ (retake)' : 'Photo of the slip'} kind="quiet" onPress={async () => { const p = await f.shoot(); if (p) setPart({ ...part, slip: p }); }} /> : null}
-          <Button label="Add part" disabled={part.desc.trim().length < 2 || !(Number(part.qty) > 0) || (part.source === 'bought' && !part.slip)} onPress={() => {
+          <Button label="Add part" disabled={part.desc.trim().length < 2 || !(Number(part.qty) > 0) || (part.source === 'bought' && !part.slip) || (part.source === 'workshop' && (!wsLine || (!wsLine.measured && Number(part.qty) > wsLine.qty)))} onPress={() => {
             if (part.slip) f.upload('Parts slip', 'fleet_slip', part.slip);
             f.act(`Part on job card ${j.number}`, 'POST', `/fleet/jobs/${j.id}/parts`, {
-              description: part.desc.trim(), qty: Number(part.qty), unitCostCents: part.cost ? Math.round(Number(part.cost.replace(',', '.')) * 100) : null, source: part.source, slipPhotoId: part.slip?.id,
-            }, () => setPart(null));
+              description: part.desc.trim(), qty: Number(part.qty), unitCostCents: part.cost ? Math.round(Number(part.cost.replace(',', '.')) * 100) : null, source: part.source, slipPhotoId: part.slip?.id, stockItemId: part.source === 'workshop' ? part.itemId : undefined,
+            }, () => { setPart(null); setTimeout(ws.load, 800); });
           }} />
         </Card>
-      ) : <Button label="+ Add part" kind="secondary" onPress={() => setPart({ desc: '', qty: '1', cost: '', source: 'bought', slip: null })} />}
+      ) : <Button label="+ Add part" kind="secondary" onPress={() => setPart({ desc: '', qty: '1', cost: '', source: 'workshop', slip: null })} />}
 
       <Heading>Complete</Heading>
       {reasons ? <Notice tone="bad" title="Not yet. Still needed:" lines={reasons} /> : null}

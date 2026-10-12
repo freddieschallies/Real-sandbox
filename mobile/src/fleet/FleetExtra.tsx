@@ -480,7 +480,9 @@ export function DailyChecksCard({ f, open }: { f: FleetHook; open: Open }) {
   );
 }
 
-export function DailyCheckScreen({ vehicleId, f, open, done }: { vehicleId: string; f: FleetHook; open: Open; done: () => void }) {
+export function DailyCheckScreen({ vehicleId, f, ws, open, done }: { vehicleId: string; f: FleetHook; ws?: import('./Workshop.tsx').WorkshopData | null; open: Open; done: () => void }) {
+  const oilStock = ws?.lines.find(l => l.daily_check_use === 'oil');
+  const waterStock = ws?.lines.find(l => l.daily_check_use === 'water');
   const s = useStore();
   const v = f.d.vehicles.find(x => x.id === vehicleId);
   const hist = f.d.details[vehicleId]?.dailyChecks ?? [];
@@ -533,13 +535,14 @@ export function DailyCheckScreen({ vehicleId, f, open, done }: { vehicleId: stri
           <Label>How much oil did you add? (must be noted)</Label>
           <Choice options={OIL_CHIPS} value={OIL_CHIPS.find(c => c === oilL)} onChange={setOilL} labels={{ '0.25': '¼ L', '0.5': '½ L', '1': '1 L', '2': '2 L' }} />
           <Field label="Litres" value={oilL} onChangeText={setOilL} keyboardType="decimal-pad" placeholder="e.g. 0.5" />
+          {oilStock ? <Text style={st.small}>Comes off the workshop: {oilStock.description}, {oilStock.qty} L there.</Text> : null}
         </Card>
       ) : null}
       {watch?.flag ? <Notice tone="bad" title="This engine is using oil" lines={[watch.text, 'Saving raises it as a fault and tells the driver\'s manager.']} /> : null}
 
       <Heading>Water / coolant</Heading>
       <Choice options={['ok', 'topped_up', 'problem'] as const} value={water} onChange={setWater} labels={FLUID} />
-      {water === 'topped_up' ? <Field label="Litres added (if you know)" value={waterL} onChangeText={setWaterL} keyboardType="decimal-pad" /> : null}
+      {water === 'topped_up' ? <Field label="Litres added (if you know)" value={waterL} onChangeText={setWaterL} keyboardType="decimal-pad" hint={waterStock ? `Comes off the workshop: ${waterStock.description}, ${waterStock.qty} L there` : undefined} /> : null}
 
       <Heading>Tyres</Heading>
       <Choice options={['ok', 'pressure_adjusted', 'problem'] as const} value={tyres} onChange={setTyres} labels={TYRES} />

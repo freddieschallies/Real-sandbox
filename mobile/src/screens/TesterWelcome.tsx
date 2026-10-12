@@ -19,6 +19,7 @@ const STEPS: [string, string[]][] = [
     'To issue: open Thabo\'s request, tick each item as you pick it, then issue it.',
     'To receive: count and tick what Thabo sent back.',
     'Stock: the whole inventory by item or technician; Live: every movement as it happens; Issued register.',
+    'Workshop: what the mechanic keeps and the minimums. Issue oil from the stockroom to the workshop, set which oil the daily checks use, take stock back.',
     'Small company with no mechanic? Turn on the switch under the top bar: the CEO gives Lindiwe the mechanic\'s work too, and she switches between "My work" and "Fleet".',
   ]],
   ['As mechanic (Bongani)', [
@@ -29,6 +30,7 @@ const STEPS: [string, string[]][] = [
     'Take ND 412-778 off the road (Status), then sign in as Thabo and try to drive it: it is refused.',
     'Map: where every vehicle is (moving, parked, no signal). Tap a vehicle for the driver and "Open in Maps".',
     'Bookings: book a vehicle in for a service or repair (driver is told), move or cancel it, and open the job card when it arrives.',
+    'Stock: his own workshop stock (oil, coolant, filters, pads). Dip the oil drum: a little short is allowed and recorded; a lot short goes to the office. Note a spill straight away. Parts on a job card can come from it.',
     'Techs: Thabo\'s phone is broken, so put him in a vehicle yourself (or take it off his name). Switch to Tech to see it on his My day.',
   ]],
 ];

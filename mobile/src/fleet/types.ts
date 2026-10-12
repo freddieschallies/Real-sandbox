@@ -15,7 +15,7 @@ export interface Fault {
   fleet_job_id?: string | null; closed_note?: string | null;
 }
 
-export interface FleetJobPart { id: string; description: string; qty: number; unitCostCents: number | null; source: 'stockroom' | 'bought' | 'other' }
+export interface FleetJobPart { id: string; description: string; qty: number; unitCostCents: number | null; source: 'stockroom' | 'bought' | 'other' | 'workshop' }
 
 export interface FleetJob {
   id: string; number: number; vehicle_id: string; registration: string; job_type: FleetJobType; status: 'open' | 'completed'; reason: string;
