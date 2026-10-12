@@ -13,13 +13,14 @@ import { KitCard, StaffRecord } from '../staff/Staff.tsx';
 import { DepartmentCard, VanCard, VanLists } from '../vanstock/VanStock.tsx';
 import { TeamMap } from '../team/TeamMap.tsx';
 import { DepartmentsBoard } from '../hr/Departments.tsx';
+import { TimesheetsExport } from '../timesheets/Timesheet.tsx';
 import { Avatar, ProfileDetails, ProfileTop, useProfile } from './Profile.tsx';
 import { Accounts, InvoiceDetail, InvoiceList, NewQuote, QuoteDetail, QuoteList, useBooks } from './Books.tsx';
 import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries.tsx';
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 
 const K = { band: '#121212', bandText: '#F7F3EC', stripe: '#E8701A' };
-type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'people' | 'stores';
+type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'stores';
 type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
@@ -75,6 +76,7 @@ export function OfficeApp() {
     ...(does('flags') || s.session?.user.level === 'management' ? [{ key: 'map' as Tab, label: 'Team map', short: 'Map' }] : []),
     ...(does('vanstock') ? [{ key: 'vans' as Tab, label: 'Van stock', short: 'Vans' }] : []),
     ...(does('hr') ? [{ key: 'departments' as Tab, label: 'Departments' }] : []),
+    ...(does('hr') || s.session?.user.level === 'management' ? [{ key: 'timesheets' as Tab, label: 'Timesheets' }] : []),
     ...(canPeople ? [{ key: 'people' as Tab, label: 'People' }] : []),
     ...(jobsSide ? [{ key: 'stores' as Tab, label: 'Stores' }] : []),
   ];
@@ -90,6 +92,7 @@ export function OfficeApp() {
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
       {tab === 'handovers' ? <HandoverList o={o} open={id => setSel({ kind: 'handover', id })} /> : null}
       {tab === 'map' ? <TeamMap openPerson={canPeople ? id => { setTab('people'); setSel({ kind: 'person', id }); } : undefined} /> : null}
+      {tab === 'timesheets' ? <TimesheetsExport /> : null}
       {tab === 'departments' ? <DepartmentsBoard openPerson={canPeople ? id => { setTab('people'); setSel({ kind: 'person', id }); } : undefined} /> : null}
       {tab === 'vans' ? <VanLists openTech={id => setSel({ kind: 'van', id })} /> : null}
       {tab === 'people' ? <PeopleList o={o} open={id => setSel({ kind: 'person', id })} /> : null}
@@ -149,8 +152,8 @@ export function OfficeApp() {
               </Pressable>
             ))}
           </View>
-          <View style={{ width: tab === 'today' || tab === 'accounts' || tab === 'map' || tab === 'departments' ? undefined : 460, flex: tab === 'today' || tab === 'accounts' || tab === 'map' || tab === 'departments' ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
-          {tab !== 'today' && tab !== 'accounts' && tab !== 'map' && tab !== 'departments' ? <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}</View> : null}
+          <View style={{ width: tab === 'today' || tab === 'accounts' || tab === 'map' || tab === 'departments' || tab === 'timesheets' ? undefined : 460, flex: tab === 'today' || tab === 'accounts' || tab === 'map' || tab === 'departments' || tab === 'timesheets' ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
+          {tab !== 'today' && tab !== 'accounts' && tab !== 'map' && tab !== 'departments' && tab !== 'timesheets' ? <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}</View> : null}
         </View>
       </View>
     );
@@ -678,8 +681,11 @@ function PersonDetail({ id, o, ask }: { id: string; o: OfficeHook; ask?: (toId: 
   const [saved, setSaved] = useState<string | null>(null);
   const [extra, setExtra] = useState(false);
   const prof = useProfile(id);
+  const me = useStore().session?.user.id;
   if (!x || !p) return <Body quiet>Not found.</Body>;
   const manage = !!p.canManage;
+  const setsPos = !!(p.canSetPositions ?? manage);
+  const settable = p.settablePositions ?? (manage ? p.positions.map(pos => pos.level) : []);
   const first = x.full_name.split(' ')[0];
   const isTech = x.login_level === 'technician';
   const put = async (path: string, body: object, what: string) => { const r = await o.send('PUT', path, body); setAns(r.ok ? null : r); setSaved(r.ok ? what : null); if (r.ok) prof.load(); };
@@ -696,13 +702,14 @@ function PersonDetail({ id, o, ask }: { id: string; o: OfficeHook; ask?: (toId: 
       {prof.p?.record?.read ? <StaffRecord userId={x.id} name={x.full_name} /> : null}
       <Heading>Position{isTech ? ' and trade' : ''}</Heading>
       <Card>
-        <Select label="Position" value={x.login_level} disabled={!manage || x.login_level === 'creator'}
-          options={p.positions.map(pos => ({ value: pos.level, label: pos.label }))} onChange={v => put(`/access/users/${x.id}/position`, { position: v }, `${first} is now ${p.positions.find(pos => pos.level === v)?.label}`)} />
+        <Select label="Position" value={x.login_level} disabled={!setsPos || x.login_level === 'creator' || x.id === me && !manage || !settable.includes(x.login_level)}
+          options={p.positions.filter(pos => settable.includes(pos.level) || pos.level === x.login_level).map(pos => ({ value: pos.level, label: pos.label }))} onChange={v => put(`/access/users/${x.id}/position`, { position: v }, `${first} is now ${p.positions.find(pos => pos.level === v)?.label}`)} />
         {isTech ? (
-          <Select label="Trade" value={x.trade ?? null} disabled={!manage} placeholder="Not set"
+          <Select label="Trade" value={x.trade ?? null} disabled={!setsPos} placeholder="Not set"
             options={(p.trades ?? []).map(t => ({ value: t.key, label: t.label }))} onChange={v => put(`/access/users/${x.id}/trade`, { trade: v }, `${first} is now ${(p.trades ?? []).find(t => t.key === v)?.label}`)} />
         ) : null}
-        {!manage ? <Text style={st.small}>Only the CEO, or someone the CEO gives "Positions and access", can change these.</Text> : null}
+        {!setsPos ? <Text style={st.small}>Only the CEO or HR can change these.</Text>
+          : !manage ? <Text style={st.small}>HR sets technician, admin, department manager or stock controller. Mechanic, HR, director and CEO positions are the CEO's.</Text> : null}
       </Card>
       {saved ? <Notice tone="good" title="Saved" lines={[`${saved}. It is logged and applies at once.`]} /> : null}
       <Reasons a={ans} />

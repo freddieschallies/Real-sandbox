@@ -69,6 +69,8 @@ export const WORK_AREAS = {
   fleet: "Fleet (the mechanic's work)", flags: 'Flags and approvals', prices: 'Prices and rates', access: 'Positions and access (People)',
   hr: 'HR: staff records, and who works in which department', vanstock: 'Van stock lists (bill of quantities)',
 } as const;
+/** The positions HR gives and takes; the others stay with the CEO. */
+export const HR_POSITIONS = ['technician', 'admin', 'management', 'stockroom'];
 export const TRADES = { foodservice: 'Foodservice tech', plumber: 'Plumber', electrician: 'Electrician', assistant: 'Assistant' } as const;
 export type WorkArea = keyof typeof WORK_AREAS;
 const ALL_WORK = Object.keys(WORK_AREAS) as WorkArea[];
@@ -227,10 +229,12 @@ export class DemoOffice {
     };
   }
 
-  setPosition(id: string, position: string, by: string): Res {
+  setPosition(id: string, position: string, by: string, full = true, me?: string): Res {
     const p = this.o.people.find(x => x.id === id);
     if (!p) return bad(404, 'no such user');
     if (!POSITION_LABEL[position]) return bad(400, 'no such position');
+    if (!full && (!HR_POSITIONS.includes(p.login_level) || !HR_POSITIONS.includes(position))) return bad(403, "HR sets technician, admin, department manager or stock controller; the other positions are the CEO's");
+    if (!full && id === me) return bad(403, 'you cannot change your own position');
     if ((position === 'creator' || p.login_level === 'creator') && by !== 'creator') return bad(403, 'only the Creator can give or take the Creator position');
     if (p.login_level === 'creator' && position !== 'creator' && this.o.people.filter(x => x.login_level === 'creator').length === 1) return bad(409, 'somebody must still be able to manage access');
     const change = `${POSITION_LABEL[p.login_level]} → ${POSITION_LABEL[position]}`;
@@ -239,9 +243,9 @@ export class DemoOffice {
     return good({ userId: id, position, label: POSITION_LABEL[position] });
   }
 
-  people(canManage: boolean) {
+  people(canManage: boolean, setsPositions = canManage) {
     return {
-      canManage,
+      canManage, canSetPositions: setsPositions, settablePositions: canManage ? Object.keys(POSITION_LABEL) : setsPositions ? HR_POSITIONS : [],
       positions: Object.entries(POSITION_LABEL).map(([level, label]) => ({ level, label })),
       trades: Object.entries(TRADES).map(([key, label]) => ({ key, label })),
       areas: Object.entries(WORK_AREAS).map(([key, label]) => ({ key, label })),

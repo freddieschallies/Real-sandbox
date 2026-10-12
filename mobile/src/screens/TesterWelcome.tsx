@@ -16,6 +16,7 @@ const STEPS: [string, string[]][] = [
     'On the vehicle card: Report a fault, or Release vehicle (km and where you left it).',
     'Queries: Zanele (the office) asked about an access card; answer her. Or send another technician a question.',
     'My tools and PPE (on My day): what the stockroom has on his name.',
+    'Timesheet (on My day): yesterday\'s timesheet, made by the app from his jobs: travel, work, paused and time not accounted for. Check it and submit it; time not accounted for needs a word.',
   ]],
   ['As stock controller (Lindiwe)', [
     'To issue: open Thabo\'s request, tick each item as you pick it, then issue it.',
@@ -44,12 +45,15 @@ const STEPS: [string, string[]][] = [
     'He runs the Refrigeration department: Thabo, Sipho and Nomvula work under him. He assigns jobs, checks job cards and answers flags for his technicians; quotes, invoices and the stockroom only if the CEO adds them.',
     'Team map: where Thabo, Sipho and Nomvula are right now (on site, driving, parked), with the vehicle, the job and who they are with. Tap a name for "Open in Maps" or the profile. Ayanda is in Plumbing, so he is not on Pieter\'s map; the CEO sees everyone.',
     'Van stock: his department\'s list of spares every technician must carry. Thabo and Nomvula are short (flagged); Sipho is complete. Add an item or raise a quantity and see who goes short; every change is kept.',
+    'Timesheets: his own technicians\' daily timesheets, for a day, a week or a month.',
     'Flags: a van that is short of the list stays flagged until the stockroom tops it up, then closes by itself.',
   ]],
   ['As HR (Precious)', [
+    'Timesheets: daily, weekly or monthly, for one person, a department or everyone, with every job and flag on each sheet. Ayanda has not submitted his last days. Print or save as PDF (one page per sheet, on the letterhead), or download for Excel. In this test drive the browser may block the print window and the download; the real app saves them.',
+    'People: set anyone\'s position (technician, admin, department manager, stock controller) and a technician\'s trade. Mechanic, HR, director and CEO stay with the CEO.',
     'Departments: every department with its manager and the technicians under him. Move a technician to another department, or give Plumbing a manager. Each person is in one department; a manager runs one department, so moving Pieter takes him off Refrigeration.',
     'Staff records: open anyone under People to add an issue or a warning, or delete one (a line keeps who deleted it and when).',
-    'She does not see jobs, quotes or the stockroom, cannot change positions, and does not see ID numbers or home addresses (those stay with the CEO).',
+    'She does not see jobs, quotes or the stockroom, and does not see ID numbers or home addresses (those stay with the CEO).',
   ]],
   ['As the office admin (Zanele)', [
     'She only sees the work the CEO switched on for her. By default: jobs, quotes and invoices, and stores.',

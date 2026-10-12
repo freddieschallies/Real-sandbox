@@ -7,6 +7,7 @@ import { NavProvider, useNav } from './src/nav.tsx';
 import { OfficeApp, isOffice } from './src/office/OfficeApp.tsx';
 import { QueriesScreen } from './src/screens/QueriesScreen.tsx';
 import { MyKitScreen } from './src/screens/MyKitScreen.tsx';
+import { MyTimesheetsScreen } from './src/timesheets/Timesheet.tsx';
 import { Login } from './src/screens/Login.tsx';
 import { Policy } from './src/screens/Policy.tsx';
 import { Day } from './src/screens/Day.tsx';
@@ -50,6 +51,7 @@ function Current() {
     case 'release': return <Release />;
     case 'queries': return <QueriesScreen />;
     case 'kit': return <MyKitScreen />;
+    case 'timesheets': return <MyTimesheetsScreen />;
   }
 }
 

@@ -4,6 +4,7 @@
 import { DemoWorkshop, seedWorkshop, type DemoWorkshopState } from './demoWorkshop.ts';
 import { DemoDocs, seedDocs, type DemoDocsState } from './demoDocs.ts';
 import { DemoVan, seedVan, type DemoVanState } from './demoVan.ts';
+import { DemoTimes, type DemoTimesState } from './demoTimes.ts';
 import { DemoOffice, seedOffice, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
@@ -30,6 +31,7 @@ export interface DemoState {
   van?: { lastDriverMe: boolean; odometerKm: number; problems: H.CheckKey[] };
   stockControl?: DemoStockState;
   vanStock?: DemoVanState;
+  times?: DemoTimesState;
   fleet?: DemoFleetState;
   who?: { id: string; name: string; level: string };
   fuel: { litres: number; at: string }[];
@@ -206,6 +208,32 @@ export class DemoTransport implements Transport {
     return this.office().workOf(this.who.id, this.who.level)[area];
   }
 
+  /** Daily timesheets: the technician's own, and HR's export. */
+  private timesRoute(p: string, req: Request, b: any): Response | null {
+    let m: RegExpMatchArray | null;
+    if (!(p === '/me/timesheets' || p.startsWith('/me/timesheets/') || p === '/timesheets')) return null;
+    const t = this.times();
+    const save = (r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }) => { this.persist(this.state); return r.ok ? ok(r.body) : refuse(r.status, ...r.reasons); };
+    if (p === '/me/timesheets') { if (this.who.level !== 'technician') return ok({ due: [], recent: [], explainFromMin: 30 }); const r = t.mine(this.who.id); this.persist(this.state); return ok(r); }
+    if ((m = p.match(/^\/me\/timesheets\/(\d{4}-\d{2}-\d{2})\/submit$/))) return this.who.level === 'technician' ? save(t.submit(this.who.id, m[1], b)) : refuse(403, 'timesheets are for technicians');
+    if ((m = p.match(/^\/me\/timesheets\/(\d{4}-\d{2}-\d{2})$/))) return ok(t.sheet(this.who.id, m[1]));
+    // HR (everyone) or a department manager (his own technicians).
+    const all = this.does('hr') || ['director', 'creator'].includes(this.who.level);
+    if (!all && this.who.level !== 'management') return refuse(403, 'timesheets are for HR and department managers');
+    const v = this.vans();
+    const q = new URLSearchParams(req.path.split('?')[1] ?? '');
+    const from = q.get('from') ?? '', to = q.get('to') ?? '';
+    const mine = all ? null : v.v.memberOf[this.who.id] ?? null;
+    const techs = this.office().o.people.filter(x => x.login_level === 'technician')
+      .filter(x => all || (mine && v.v.memberOf[x.id] === mine))
+      .filter(x => !q.get('userId') || x.id === q.get('userId'))
+      .filter(x => !q.get('departmentId') || v.v.memberOf[x.id] === q.get('departmentId'))
+      .sort((a, c) => (v.deptOf(a.id)?.name ?? '~').localeCompare(v.deptOf(c.id)?.name ?? '~') || a.full_name.localeCompare(c.full_name))
+      .map(x => ({ id: x.id, department: v.deptOf(x.id)?.name ?? null }));
+    if (q.get('userId') && !techs.length) return refuse(403, 'not one of your technicians');
+    return save(t.exportFor(from, to, techs));
+  }
+
   /** Departments and van stock lists. */
   private vanRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
@@ -273,7 +301,7 @@ export class DemoTransport implements Transport {
     if (p.startsWith('/flags') || p.startsWith('/vehicles/inspections')) { const n = need('flags', 'flags and approvals are not part of your work'); if (n) return n; }
     if (p === '/office/stores' && req.method === 'POST') { const n = need('stores', 'adding stores is not part of your work'); if (n) return n; }
     const manages = this.does('access');
-    if (p === '/people') return ok(o.people(manages));
+    if (p === '/people') return ok(o.people(manages, manages || this.does('hr')));
     if ((m = p.match(/^\/people\/([^/]+)\/record(?:\/([^/]+))?$/))) {
       if (!this.does('hr') || m[1] === this.who.id) return refuse(403, 'staff records are for the CEO and HR only');
       if (req.method === 'GET') return done(o.record(m[1], true));
@@ -293,7 +321,7 @@ export class DemoTransport implements Transport {
       return done(res);
     }
     if ((m = p.match(/^\/access\/users\/([^/]+)\/work$/))) return manages ? done(o.setWork(m[1], b.area, !!b.on)) : refuse(403, 'only whoever manages access');
-    if ((m = p.match(/^\/access\/users\/([^/]+)\/trade$/))) return manages ? done(o.setTrade(m[1], b.trade)) : refuse(403, 'only whoever manages access');
+    if ((m = p.match(/^\/access\/users\/([^/]+)\/trade$/))) return manages || this.does('hr') ? done(o.setTrade(m[1], b.trade)) : refuse(403, 'only the CEO or HR sets trades');
     if ((m = p.match(/^\/jobs\/([^/]+)\/changes$/))) return ok((this.state.office!.jobChanges ?? []).filter(x => x.jobId === m![1]).sort((a, c) => c.changed_at.localeCompare(a.changed_at)));
     if ((m = p.match(/^\/jobs\/([^/]+)\/cancel$/))) {
       const j = this.findJob(m[1]);
@@ -384,7 +412,7 @@ export class DemoTransport implements Transport {
       return ok({ id: m[1], status });
     }
     if (p === '/access/positions') return manages ? ok(o.positions()) : refuse(403, 'only whoever manages access');
-    if ((m = p.match(/^\/access\/users\/([^/]+)\/position$/))) return manages ? done(o.setPosition(m[1], b.position, this.who.level)) : refuse(403, 'only whoever manages access');
+    if ((m = p.match(/^\/access\/users\/([^/]+)\/position$/))) return manages || this.does('hr') ? done(o.setPosition(m[1], b.position, this.who.level, manages, this.who.id)) : refuse(403, 'only the CEO or HR sets positions');
     return null;
   }
 
@@ -537,6 +565,13 @@ export class DemoTransport implements Transport {
     return dv;
   }
 
+  private times(): DemoTimes {
+    const o = this.office();
+    const real = this.state.jobs.map(j => ({ jobId: j.meta.id, jobNumber: j.meta.job_number, store: j.meta.store, fault: j.meta.fault_reported,
+      techIds: [j.meta.lead_id ?? 'me', ...(j.meta.helper_ids ?? [])], visits: j.card.visits as never }));
+    return new DemoTimes(this.state.times ?? (this.state.times = { submitted: {} }), o.o, this.state.flags, real);
+  }
+
   private stock(): DemoStock {
     const st = this.state.stockControl ?? (this.state.stockControl = seedStock());
     const ds = new DemoStock(st, jobId => {
@@ -629,6 +664,8 @@ export class DemoTransport implements Transport {
     if (qr) return qr;
     const vr = this.vanRoute(p, req, b);
     if (vr) return vr;
+    const tr = this.timesRoute(p, req, b);
+    if (tr) return tr;
     const off = this.officeRoute(p, req, b);
     if (off) return off;
 

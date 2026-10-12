@@ -19,7 +19,8 @@ export type Route =
   | { name: 'fault' }
   | { name: 'release' }
   | { name: 'queries' }
-  | { name: 'kit' };
+  | { name: 'kit' }
+  | { name: 'timesheets' };
 
 interface Nav { route: Route; push(r: Route): void; back(): void; reset(): void; replace(r: Route): void }
 const Ctx = createContext<Nav | null>(null);

@@ -7,6 +7,7 @@ import { useNav } from '../nav.tsx';
 import { Body, Button, Card, Label, Notice, Pill, Toggle, st } from '../ui.tsx';
 import { SyncPill } from './SyncPill.tsx';
 import { useQueries } from '../queries/Queries.tsx';
+import { useMyTimesheets } from '../timesheets/Timesheet.tsx';
 import { C, S } from '../theme.ts';
 import type { TodayJob } from '../types.ts';
 
@@ -25,6 +26,7 @@ export function Day() {
   const s = useStore();
   const nav = useNav();
   const q = useQueries();
+  const ts = useMyTimesheets();
   const ins = useSafeAreaInsets();
   const [pulling, setPulling] = useState(false);
   useEffect(() => { s.refresh(); }, []);
@@ -85,6 +87,14 @@ export function Day() {
           {t?.vehicle?.handover_status === 'rejected' ? (
             <Text style={[st.small, { color: C.bad }]}>Handover rejected – speak to your supervisor</Text>
           ) : null}
+        </Card>
+
+        <Card onPress={() => nav.push({ name: 'timesheets' })} accessibilityLabel="Timesheet" style={ts.d?.due.length ? { borderColor: C.warn, borderWidth: 2 } : undefined}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>{ts.d?.due.length ? `Submit your timesheet for ${ts.d.due[0].label}` : 'Timesheet'}</Text>
+            {ts.d?.due.length ? <Pill text={ts.d.due.length > 1 ? `${ts.d.due.length} days` : 'Due'} tone="warn" /> : null}
+          </View>
+          <Text style={st.small}>{ts.d?.due.length ? 'The app made it from your jobs. Check it and submit it.' : 'Yesterday\'s is in. Tap to see your submitted timesheets.'}</Text>
         </Card>
 
         <Card onPress={() => nav.push({ name: 'queries' })} accessibilityLabel="Queries" style={q.unread ? { borderColor: C.accent, borderWidth: 2 } : undefined}>
