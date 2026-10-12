@@ -514,6 +514,10 @@ export class DemoTransport implements Transport {
     }
     if ((m = p.match(/^\/stock\/returns\/([^/]+)\/receive$/))) return this.stockResult(this.stock().receive(m[1], b));
     if (p === '/stock/stockroom') return ok(this.stock().stockroomList());
+    if (p === '/stock/order-list') return ok(this.stock().orderList());
+    if ((m = p.match(/^\/stock\/items\/([^/]+)\/settings$/))) return this.stockResult(this.stock().settings(m[1], b));
+    if ((m = p.match(/^\/stock\/items\/([^/]+)\/ordered$/))) return this.stockResult(this.stock().markOrdered(m[1], b));
+    if ((m = p.match(/^\/stock\/items\/([^/]+)\/history$/))) return ok(this.stock().history(m[1]));
     if (p === '/stock/holdings') return ok(this.stock().allHoldings());
     if (p === '/stock/activity') return ok(this.stock().activity());
     if ((m = p.match(/^\/stock\/items\/([^/]+)$/)) && req.method === 'PATCH') return this.stockResult(this.stock().nameItem(m[1], b));

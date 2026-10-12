@@ -1,5 +1,6 @@
 // The stock controller's app. Phone: tabs at the bottom, list then detail. Desktop (wide screen):
 // menu, list and the open request side by side. Nothing leaves or enters the stockroom without this.
+import { OrderList, PartDetail, Thumb, useOrderList } from './Parts.tsx';
 import { WorkshopAdd, WorkshopItem, WorkshopList, useWorkshop } from '../fleet/Workshop.tsx';
 import React, { useState } from 'react';
 import { Image, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
@@ -15,8 +16,8 @@ import type { StockRequest, StockReturn } from '../types.ts';
 // The stockroom's own colour, so nobody confuses it with the technician app.
 const K = { band: '#1E6F6A', bandText: '#E8FFFB', tick: '#3FB57A' };
 
-type Tab = 'issue' | 'receive' | 'room' | 'workshop' | 'live' | 'items';
-type Sel = { kind: 'issue'; id: string } | { kind: 'return'; id: string } | { kind: 'item'; id: string } | { kind: 'delivery' } | { kind: 'ws'; id: string } | { kind: 'wsadd' } | null;
+type Tab = 'issue' | 'receive' | 'room' | 'order' | 'workshop' | 'live' | 'items';
+type Sel = { kind: 'issue'; id: string } | { kind: 'return'; id: string } | { kind: 'item'; id: string } | { kind: 'delivery' } | { kind: 'ws'; id: string } | { kind: 'wsadd' } | { kind: 'part'; id: string } | null;
 type Photo = { id: string; uri: string; mime: string };
 
 const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
@@ -28,6 +29,7 @@ export function StockroomApp() {
   const wide = width >= 900;
   const room = useStockroom();
   const ws = useWorkshop();
+  const ol = useOrderList();
   const [tab, setTab] = useState<Tab>('issue');
   const [sel, setSel] = useState<Sel>(null);
   const o = room.ctl.overview;
@@ -36,6 +38,7 @@ export function StockroomApp() {
     { key: 'issue', label: 'To issue', count: room.ctl.issues.length },
     { key: 'receive', label: 'To receive', count: room.ctl.returns.length },
     { key: 'room', label: 'Stock' },
+    { key: 'order', label: 'To order', count: ol.d?.toOrder.length },
     { key: 'workshop', label: 'Workshop', count: ws.data?.belowMin },
     { key: 'live', label: 'Live', count: (room.ctl.activity ?? []).filter(a => !room.ctl.seenActivityAt || a.at > room.ctl.seenActivityAt).length },
     { key: 'items', label: 'New items', count: o?.newItems ?? room.ctl.room.filter(i => i.needsReview).length },
@@ -45,7 +48,8 @@ export function StockroomApp() {
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 40 }}>
       {tab === 'issue' ? <IssueTab waiting={room.ctl.issues} issued={room.ctl.issued ?? []} open={id => setSel({ kind: 'issue', id })} selected={sel?.kind === 'issue' ? sel.id : null} /> : null}
       {tab === 'receive' ? <ReturnList items={room.ctl.returns} open={id => setSel({ kind: 'return', id })} selected={sel?.kind === 'return' ? sel.id : null} /> : null}
-      {tab === 'room' ? <RoomList items={room.ctl.room} holdings={room.ctl.holdings ?? []} onDelivery={() => setSel({ kind: 'delivery' })} /> : null}
+      {tab === 'room' ? <RoomList items={room.ctl.room} holdings={room.ctl.holdings ?? []} onDelivery={() => setSel({ kind: 'delivery' })} onPart={id => setSel({ kind: 'part', id })} /> : null}
+      {tab === 'order' ? <OrderList ol={ol} open={id => setSel({ kind: 'part', id })} /> : null}
       {tab === 'workshop' ? <WorkshopList ws={ws} role="controller" open={id => setSel({ kind: 'ws', id })} onAdd={() => setSel({ kind: 'wsadd' })} /> : null}
       {tab === 'live' ? <LiveFeed items={room.ctl.activity ?? []} seen={room.ctl.seenActivityAt ?? null} invoices={room.ctl.invoices} /> : null}
       {tab === 'items' ? <NewItemList items={room.ctl.room.filter(i => i.needsReview)} open={id => setSel({ kind: 'item', id })} /> : null}
@@ -68,6 +72,10 @@ export function StockroomApp() {
     if (sel.kind === 'item') {
       const it = room.ctl.room.find(x => x.id === sel.id);
       return it ? <NameItem key={it.id} it={it} room={room} done={close} /> : null;
+    }
+    if (sel.kind === 'part') {
+      const it = room.ctl.room.find(x => x.id === sel.id);
+      return it ? <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}><PartDetail key={it.id} it={it} done={close} reload={() => { room.load(); ol.load(); }} /></ScrollView> : null;
     }
     if (sel.kind === 'ws') return <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}><WorkshopItem key={sel.id} id={sel.id} ws={ws} role="controller" done={close} /></ScrollView>;
     if (sel.kind === 'wsadd') return <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}><WorkshopAdd ws={ws} done={() => { close(); room.load(); }} /></ScrollView>;
@@ -307,7 +315,7 @@ function ReturnDetail({ r, room, done }: { r: StockReturn; room: ReturnType<type
 // ---- The stockroom, deliveries and new items ------------------------------------------
 
 // The whole inventory: what is in the stockroom and exactly who holds the rest, for which job.
-function RoomList({ items, holdings, onDelivery }: { items: RoomItem[]; holdings: Holding[]; onDelivery: () => void }) {
+function RoomList({ items, holdings, onDelivery, onPart }: { items: RoomItem[]; holdings: Holding[]; onDelivery: () => void; onPart: (id: string) => void }) {
   const [q, setQ] = useState('');
   const [view, setView] = useState<'item' | 'tech'>('item');
   const [open, setOpen] = useState<string | null>(null);
@@ -332,16 +340,24 @@ function RoomList({ items, holdings, onDelivery }: { items: RoomItem[]; holdings
         return (
           <Card key={i.id} onPress={() => setOpen(isOpen ? null : i.id)} accessibilityLabel={`${i.code} stock`}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Thumb id={i.photoId} size={44} />
               <View style={{ flex: 1 }}>
                 <Text style={[st.body, { fontWeight: '700' }]}>{i.description}</Text>
-                <Text style={st.small}>{i.code} · {i.unit}{i.needsReview ? ' · needs a code' : ''}</Text>
+                <Text style={st.small}>{i.code} · {i.unit}{i.needsReview ? ' · needs a code' : ''}{i.minQty ? ` · min ${i.minQty}` : ''}</Text>
+                {i.belowMin ? <Text style={[st.small, { color: C.warn }]}>{i.ordered ? 'Below minimum · ordered' : 'Below minimum · on the order list'}</Text> : null}
               </View>
               <View style={{ alignItems: 'flex-end' }}>
                 <Text style={{ color: i.inStockroom <= 0 ? C.bad : C.text, fontSize: 22, fontWeight: '800' }}>{i.inStockroom}</Text>
                 <Text style={st.small}>{i.withTechnicians} with techs · {i.inStockroom + i.withTechnicians} total</Text>
               </View>
             </View>
-            {isOpen ? (out.length ? out.map((h, n) => <HoldingRow key={n} h={h} who />) : <Text style={st.small}>None out with technicians.</Text>) : null}
+            {isOpen ? (
+              <>
+                {i.lastUsed ? <Text style={st.small}>Last used: {i.lastUsed.jobNumber ? `job ${i.lastUsed.jobNumber}${i.lastUsed.store ? `, ${i.lastUsed.store}` : ''}` : i.lastUsed.vehicle ? `vehicle ${i.lastUsed.vehicle}` : ''}{i.lastUsed.technician ? ` · ${i.lastUsed.technician}` : ''} · {new Date(i.lastUsed.at).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })}</Text> : <Text style={st.small}>Not used yet.</Text>}
+                {out.length ? out.map((h, n) => <HoldingRow key={n} h={h} who />) : <Text style={st.small}>None out with technicians.</Text>}
+                <Button label="Open part: photo, minimum, history" kind="secondary" onPress={() => onPart(i.id)} style={{ minHeight: 44 }} />
+              </>
+            ) : null}
           </Card>
         );
       }) : techs.filter(t => holdings.some(h => h.technician === t && hit(`${t} ${h.code} ${h.description} ${h.jobNumber ?? ''} ${h.store ?? ''}`))).map(t => {

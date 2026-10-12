@@ -12,7 +12,11 @@ const WHAT: Record<string, string> = {
 };
 
 export interface DemoStockState {
-  items: { id: string; code: string; description: string; unit: string; supplierCode?: string | null; needsReview?: boolean }[];
+  items: {
+    id: string; code: string; description: string; unit: string; supplierCode?: string | null; needsReview?: boolean;
+    minQty?: number; reorderQty?: number | null; photoId?: string | null; supplierName?: string | null;
+    ordered?: { at: string; qty: number; note: string | null; by: string } | null; sellingPriceCents?: number | null;
+  }[];
   stockroom: Record<string, number>;
   /** tech: 'me' (Thabo, the demo technician) or another technician's name. */
   holdings: { stockItemId: string; holdingJobId: string | null; qty: number; tech?: string }[];
@@ -29,13 +33,13 @@ export interface DemoStockState {
 export function seedStock(): DemoStockState {
   return {
     items: [
-      { id: 'st-1', code: 'VALVE-01', description: 'Water inlet valve 24V', unit: 'each', supplierCode: 'WV-24' },
+      { id: 'st-1', code: 'VALVE-01', description: 'Water inlet valve 24V', unit: 'each', supplierCode: 'WV-24', minQty: 6, reorderQty: 10, supplierName: 'Scotsman Parts SA' },
       { id: 'st-2', code: 'SEAL-04', description: 'Oven door seal 1/1', unit: 'each' },
-      { id: 'st-3', code: 'GAS-R404', description: 'Refrigerant R404A', unit: 'kg' },
-      { id: 'st-4', code: 'FUSE-10A', description: 'Fuse 10A', unit: 'each' },
-      { id: 'st-5', code: 'CONT-25A', description: 'Contactor 25A 230V coil', unit: 'each' },
+      { id: 'st-3', code: 'GAS-R404', description: 'Refrigerant R404A', unit: 'kg', minQty: 10, supplierName: 'Refrigeration Wholesalers' },
+      { id: 'st-4', code: 'FUSE-10A', description: 'Fuse 10A', unit: 'each', minQty: 60, reorderQty: 100, supplierName: 'Voltex Richards Bay' },
+      { id: 'st-5', code: 'CONT-25A', description: 'Contactor 25A 230V coil', unit: 'each', minQty: 10, reorderQty: 10, supplierName: 'Voltex Richards Bay' },
       { id: 'st-6', code: 'CAP-35UF', description: 'Run capacitor 35uF', unit: 'each' },
-      { id: 'st-7', code: 'FAN-MTR', description: 'Condenser fan motor 10W', unit: 'each' },
+      { id: 'st-7', code: 'FAN-MTR', description: 'Condenser fan motor 10W', unit: 'each', minQty: 5, supplierName: 'Refrigeration Wholesalers', ordered: { at: new Date(Date.now() - 26 * 3600_000).toISOString(), qty: 4, note: 'RW order 88120', by: 'Lindiwe Zulu' } },
     ],
     stockroom: { 'st-1': 12, 'st-2': 6, 'st-3': 20, 'st-4': 50, 'st-5': 8, 'st-6': 10, 'st-7': 4 },
     holdings: [
@@ -277,6 +281,10 @@ export class DemoStock {
       id: i.id, code: i.code, description: i.description, unit: i.unit, needsReview: !!i.needsReview, supplierCode: i.supplierCode ?? null,
       inStockroom: this.s.stockroom[i.id] ?? 0,
       withTechnicians: this.s.holdings.filter(h => h.stockItemId === i.id).reduce((n, h) => n + h.qty, 0),
+      minQty: i.minQty ?? 0, reorderQty: i.reorderQty ?? null, photoId: i.photoId ?? null, supplierName: i.supplierName ?? null,
+      belowMin: (i.minQty ?? 0) > 0 && (this.s.stockroom[i.id] ?? 0) < (i.minQty ?? 0), ordered: i.ordered ?? null,
+      lastUsed: (() => { const a = (this.s.activity ?? []).filter(x => x.code === i.code && x.kind === 'use_on_job').sort((x, y) => y.at.localeCompare(x.at))[0];
+        return a ? { at: a.at, kind: a.kind, qty: a.qty, jobNumber: a.jobNumber, store: a.store, technician: a.technician, vehicle: null } : null; })(),
     })).sort((a, b) => Number(b.needsReview) - Number(a.needsReview) || a.code.localeCompare(b.code));
   }
 
@@ -297,6 +305,8 @@ export class DemoStock {
     for (const l of b.lines) {
       this.s.stockroom[l.stockItemId] = (this.s.stockroom[l.stockItemId] ?? 0) + l.qty;
       this.record('receive', l.stockItemId, l.qty, null, 'Lindiwe Zulu', null, `${b.supplierName} ${b.reference}`);
+      const it = this.item(l.stockItemId);
+      if (it) it.ordered = null;
     }
     return good({ id: `del-${Date.now()}` });
   }
@@ -373,5 +383,44 @@ export class DemoStock {
     };
     this.s.returns.unshift(r);
     return good({ id: r.id, status: 'pending' });
+  }
+
+  // ---- The order list ------------------------------------------------------------------------
+
+  orderList() {
+    const lines = this.s.items.filter(i => (i.minQty ?? 0) > 0 && (this.s.stockroom[i.id] ?? 0) < (i.minQty ?? 0)).map(i => {
+      const inStock = this.s.stockroom[i.id] ?? 0;
+      const short = (i.minQty ?? 0) - inStock;
+      return {
+        id: i.id, code: i.code, description: i.description, unit: i.unit, min_qty: i.minQty ?? 0, reorder_qty: i.reorderQty ?? null, photo_id: i.photoId ?? null,
+        supplier_name: i.supplierName ?? null, supplier_code: i.supplierCode ?? null, in_stockroom: inStock,
+        suggested: i.reorderQty && i.reorderQty >= short ? i.reorderQty : Math.ceil(short),
+        ordered_at: i.ordered?.at ?? null, ordered_qty: i.ordered?.qty ?? null, ordered_note: i.ordered?.note ?? null, ordered_by: i.ordered?.by ?? null,
+      };
+    }).sort((a, b) => a.in_stockroom / a.min_qty - b.in_stockroom / b.min_qty);
+    return { toOrder: lines.filter(l => !l.ordered_at), ordered: lines.filter(l => l.ordered_at) };
+  }
+
+  settings(id: string, b: { minQty: number; reorderQty?: number | null; photoId?: string | null; supplierName?: string | null }): Res {
+    const it = this.item(id);
+    if (!it) return bad(404, 'no such item');
+    if (!(b.minQty >= 0)) return bad(400, 'the minimum must be 0 or more');
+    Object.assign(it, { minQty: b.minQty, reorderQty: b.reorderQty ?? null, supplierName: b.supplierName || null, photoId: b.photoId ?? it.photoId ?? null });
+    return good({ id });
+  }
+
+  markOrdered(id: string, b: { qty: number; note?: string; cancel?: boolean }): Res {
+    const it = this.item(id);
+    if (!it) return bad(404, 'no such item');
+    it.ordered = b.cancel ? null : { at: new Date().toISOString(), qty: b.qty, note: b.note ?? null, by: 'Lindiwe Zulu' };
+    return good({ id, ordered: !b.cancel });
+  }
+
+  history(id: string) {
+    const it = this.item(id);
+    if (!it) return [];
+    return (this.s.activity ?? []).filter(a => a.code === it.code).sort((a, b) => b.at.localeCompare(a.at)).map(a => ({
+      id: a.id, at: a.at, kind: a.kind, qty: a.qty, note: a.reference, job_number: a.jobNumber, store: a.store, technician: a.technician, by: a.by, vehicle: null, fleet_job_number: null,
+    }));
   }
 }

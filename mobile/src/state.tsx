@@ -32,6 +32,8 @@ interface Cache {
   ctl?: unknown;
   /** The mechanic app's own data. */
   fleet?: unknown;
+  /** Photos taken on this device, by id, so they show without downloading. */
+  photoUris?: Record<string, string>;
 }
 const EMPTY: Cache = { today: null, cards: {}, stock: [], flags: [], refreshedAt: null, inventory: [], invoices: [], returns: [], catalogue: [], jobStock: {} };
 

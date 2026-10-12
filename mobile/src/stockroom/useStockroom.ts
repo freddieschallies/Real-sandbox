@@ -5,7 +5,12 @@ import { useStore } from '../state.tsx';
 import { nowIso, takePhoto } from '../device.ts';
 import type { StockRequest, StockReturn } from '../types.ts';
 
-export interface RoomItem { id: string; code: string; description: string; unit: string; needsReview: boolean; supplierCode: string | null; inStockroom: number; withTechnicians: number }
+export interface RoomItem {
+  id: string; code: string; description: string; unit: string; needsReview: boolean; supplierCode: string | null; inStockroom: number; withTechnicians: number;
+  minQty?: number; reorderQty?: number | null; photoId?: string | null; supplierName?: string | null; belowMin?: boolean;
+  ordered?: { at: string; qty: number; note: string | null } | null;
+  lastUsed?: { at: string; kind: string; qty: number; jobNumber: number | null; store: string | null; technician: string | null; vehicle: string | null } | null;
+}
 export interface Overview { toIssue: number; toReceive: number; newItems: number; invoicesToday: number }
 export interface BookedInvoice { id: string; technician?: string; job_number?: number | null; supplier_name: string | null; invoice_number: string | null; total_cents: number | null; confirmed_at: string | null; changed_from_read?: boolean; lines?: { description: string; qty: number; unitPriceCents: number | null }[] | null }
 
