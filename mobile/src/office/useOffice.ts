@@ -22,7 +22,7 @@ export interface Inspection {
   id: string; registration: string; driver: string; previous_driver: string | null; inspected_at: string; odometer_km: number; fuel_level: string;
   problems: string[]; new_problems: string[]; handover_by: string; handed_over_by_name: string | null; remote_reason: string | null; status: string;
 }
-export interface Person { id: string; full_name: string; login_level: string; position: string; does_fleet?: boolean; work?: Record<string, boolean>; trade?: string | null; tradeLabel?: string | null; department?: string | null }
+export interface Person { id: string; full_name: string; login_level: string; position: string; does_fleet?: boolean; work?: Record<string, boolean>; trade?: string | null; tradeLabel?: string | null; department?: string | null; photo_id?: string | null }
 export interface JobChange { changed_at: string; by: string; field: string; old_value: string | null; new_value: string | null; reason: string | null }
 
 export interface OfficeData {

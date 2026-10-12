@@ -12,6 +12,28 @@ export interface DemoInspection {
   remote_reason: string | null; status: 'signed' | 'awaiting_approval' | 'approved' | 'rejected'; decided_at: string | null; decision_note: string | null;
 }
 export interface DemoPerson { id: string; full_name: string; login_level: string; department: string; trade?: keyof typeof TRADES | null }
+export interface DemoProfile {
+  photo_id: string | null; phone: string | null; email: string | null; emergency_name: string | null; emergency_phone: string | null;
+  id_number: string | null; date_of_birth: string | null; home_address: string | null; start_date: string | null; notes: string | null;
+}
+const blank = (): DemoProfile => ({ photo_id: null, phone: null, email: null, emergency_name: null, emergency_phone: null, id_number: null, date_of_birth: null, home_address: null, start_date: null, notes: null });
+/** Demo contact details: 555 numbers and example.com addresses, so nothing real. */
+function seedProfiles(): Record<string, DemoProfile> {
+  const p = (id: string, phone: string, email: string, em: string, emPhone: string, start: string, addr: string): [string, DemoProfile] =>
+    [id, { ...blank(), phone, email, emergency_name: em, emergency_phone: emPhone, start_date: start, home_address: addr, date_of_birth: '1990-01-01', id_number: 'DEMO-0000000' }];
+  return Object.fromEntries([
+    p('office', '072 555 0101', 'lilanie@example.com', 'Demo contact', '072 555 0901', '2015-03-01', '1 Demo Street, Meerensee'),
+    p('admin-1', '072 555 0102', 'zanele@example.com', 'Demo contact', '072 555 0902', '2019-07-15', '2 Demo Street, Arboretum'),
+    p('mgr-1', '072 555 0103', 'pieter@example.com', 'Demo contact', '072 555 0903', '2017-02-01', '3 Demo Street, Birdswood'),
+    p('stock', '072 555 0104', 'lindiwe@example.com', 'Demo contact', '072 555 0904', '2020-05-04', '4 Demo Street, Brackenham'),
+    p('mech', '072 555 0105', 'bongani@example.com', 'Demo contact', '072 555 0905', '2018-09-10', '5 Demo Street, Alton'),
+    p('me', '072 555 0106', 'thabo@example.com', 'Demo contact', '072 555 0906', '2021-01-11', '6 Demo Street, Esikhawini'),
+    p('tech-2', '072 555 0107', 'sipho@example.com', 'Demo contact', '072 555 0907', '2016-04-18', '7 Demo Street, Empangeni'),
+    p('tech-3', '072 555 0108', 'ayanda@example.com', 'Demo contact', '072 555 0908', '2022-08-01', '8 Demo Street, Nseleni'),
+    p('tech-4', '072 555 0109', null as unknown as string, 'Demo contact', '072 555 0909', '2025-02-03', '9 Demo Street, Veldenvlei'),
+  ]);
+}
+
 export interface DemoOfficeState {
   stores: DemoStore[];
   inspections: DemoInspection[];
@@ -19,6 +41,8 @@ export interface DemoOfficeState {
   changes: { at: string; by: string; person: string; action: string; change: string }[];
   /** Work the CEO switched on or off per person, over what their position gives. */
   work?: Record<string, Partial<Record<WorkArea, boolean>>>;
+  /** Contact and personal details per person (made-up demo numbers). */
+  profiles?: Record<string, DemoProfile>;
   jobChanges?: { jobId: string; changed_at: string; by: string; field: string; old_value: string | null; new_value: string | null; reason: string | null }[];
 }
 
@@ -65,6 +89,7 @@ export function seedOffice(): DemoOfficeState {
         trade: ({ me: 'foodservice', 'tech-2': 'electrician', 'tech-3': 'plumber', 'tech-4': 'assistant' } as const)[t.id as 'me'] ?? null })),
     ],
     changes: [],
+    profiles: seedProfiles(),
   };
 }
 
@@ -203,6 +228,56 @@ export class DemoOffice {
       people: this.o.people.map(p => ({ ...p, position: POSITION_LABEL[p.login_level], tradeLabel: p.trade ? TRADES[p.trade] : null, work: this.workOf(p.id) }))
         .sort((a, b) => a.full_name.localeCompare(b.full_name)),
     };
+  }
+
+  private profiles() { return this.o.profiles ?? (this.o.profiles = seedProfiles()); }
+
+  /** One person's profile; `crew` says who is in which vehicle, `spot` where a vehicle is. */
+  profile(id: string, canEdit: boolean, crew: { id: string; full_name: string; vehicle_id: string | null; registration: string | null; mode: 'driving' | 'riding_along' | null }[],
+    spot: (vehicleId: string) => { lat: number | null; lng: number | null; speed_kmh: number | null; ignition: boolean | null; minutesAgo: number | null } | null): Res {
+    const p = this.o.people.find(x => x.id === id);
+    if (!p) return bad(404, 'no such person');
+    const f = { ...blank(), ...this.profiles()[id] };
+    const mine = crew.find(c => c.id === id);
+    const open = this.src.jobs.filter(j => !['closed', 'cancelled'].includes(j.card.status) && ((j.meta.lead_id ?? 'me') === id || (j.meta.helper_ids ?? []).includes(id)));
+    const rank = (st: string) => (st === 'in_progress' ? 0 : st === 'continue_later' ? 1 : 2);
+    const j = open.sort((a, b) => rank(a.card.status) - rank(b.card.status) || a.meta.scheduled_date.localeCompare(b.meta.scheduled_date))[0];
+    const withIds = new Set<string>();
+    if (mine?.vehicle_id) crew.filter(c => c.vehicle_id === mine.vehicle_id && c.id !== id).forEach(c => withIds.add(c.id));
+    if (j) [j.meta.lead_id ?? 'me', ...(j.meta.helper_ids ?? [])].filter(x => x !== id).forEach(x => withIds.add(x));
+    let location = null;
+    const store = j ? this.o.stores.find(s => s.name === j.meta.store) : undefined;
+    if (j?.card.status === 'in_progress' && store) location = { source: 'on site', lat: store.lat, lng: store.lng, moving: false, speedKmh: null, minutesAgo: 0 };
+    else if (mine?.vehicle_id) {
+      const v = spot(mine.vehicle_id);
+      if (v && v.lat != null && v.lng != null) location = { source: 'vehicle tracker', lat: v.lat, lng: v.lng, moving: !!v.ignition, speedKmh: v.speed_kmh, minutesAgo: v.minutesAgo };
+    }
+    const since = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    return good({
+      id, full_name: p.full_name, position: POSITION_LABEL[p.login_level], login_level: p.login_level, tradeLabel: p.trade ? TRADES[p.trade] : null, department: p.department, photo_id: f.photo_id,
+      now: {
+        vehicle: mine?.vehicle_id && mine.registration ? { registration: mine.registration, mode: mine.mode ?? 'driving', since } : null,
+        job: j ? { id: j.meta.id, number: j.meta.job_number, status: j.card.status, store: j.meta.store, fault: j.meta.fault_reported, lead: (j.meta.lead_id ?? 'me') === id, startedAt: null } : null,
+        with: [...withIds].map(x => this.name(x)),
+        location,
+      },
+      contact: { phone: f.phone, email: f.email, emergency_name: f.emergency_name, emergency_phone: f.emergency_phone },
+      personal: canEdit ? { id_number: f.id_number, date_of_birth: f.date_of_birth, home_address: f.home_address, start_date: f.start_date, notes: f.notes } : null,
+      canEdit,
+    });
+  }
+
+  saveProfile(id: string, b: Record<string, string | null | undefined>): Res {
+    const p = this.o.people.find(x => x.id === id);
+    if (!p) return bad(404, 'no such person');
+    const f = (this.profiles()[id] ??= blank());
+    const map: Record<string, keyof DemoProfile> = { phone: 'phone', email: 'email', emergencyName: 'emergency_name', emergencyPhone: 'emergency_phone', idNumber: 'id_number',
+      dateOfBirth: 'date_of_birth', homeAddress: 'home_address', startDate: 'start_date', notes: 'notes', photoId: 'photo_id' };
+    for (const k of ['dateOfBirth', 'startDate']) if (b[k] && !/^\d{4}-\d{2}-\d{2}$/.test(b[k]!)) return bad(400, `${k === 'dateOfBirth' ? 'date of birth' : 'start date'} must look like 2021-03-31`);
+    if (b.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(b.email)) return bad(400, 'that email address does not look right');
+    for (const [k, col] of Object.entries(map)) if (k in b) (f as unknown as Record<string, string | null>)[col] = b[k] === '' ? null : (b[k] ?? null);
+    this.o.changes.unshift({ at: new Date().toISOString(), by: this.name('office'), person: p.full_name, action: 'profile', change: 'Profile details updated' });
+    return good({ userId: id });
   }
 
   setTrade(id: string, trade: keyof typeof TRADES | null): Res {

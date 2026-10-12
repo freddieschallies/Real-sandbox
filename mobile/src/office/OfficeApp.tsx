@@ -9,6 +9,7 @@ import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, Select
 import { C, S } from '../theme.ts';
 import { TITLE as FLAG_TITLE } from '../screens/Flags.tsx';
 import type { CardView } from '../types.ts';
+import { Avatar, ProfileDetails, ProfileTop, useProfile } from './Profile.tsx';
 import { Accounts, InvoiceDetail, InvoiceList, NewQuote, QuoteDetail, QuoteList, useBooks } from './Books.tsx';
 import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries.tsx';
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
@@ -643,6 +644,7 @@ function PeopleList({ o, open }: { o: OfficeHook; open: (id: string) => void }) 
           {g.people.map(x => (
             <Pressable key={x.id} onPress={() => open(x.id)} accessibilityRole="button" accessibilityLabel={`Person ${x.full_name}`}
               style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, minHeight: 52, borderRadius: 8, backgroundColor: pressed ? C.panel2 : C.panel, borderWidth: 1, borderColor: C.line })}>
+              <Avatar id={x.photo_id} name={x.full_name} size={34} />
               <Text style={[st.body, { fontWeight: '700', flex: 1 }]}>{x.full_name}</Text>
               {x.tradeLabel ? <Text style={st.small}>{x.tradeLabel}</Text> : null}
             </Pressable>
@@ -659,16 +661,18 @@ function PersonDetail({ id, o, ask }: { id: string; o: OfficeHook; ask?: (toId: 
   const [ans, setAns] = useState<Answer | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [extra, setExtra] = useState(false);
+  const prof = useProfile(id);
   if (!x || !p) return <Body quiet>Not found.</Body>;
   const manage = !!p.canManage;
   const first = x.full_name.split(' ')[0];
   const isTech = x.login_level === 'technician';
-  const put = async (path: string, body: object, what: string) => { const r = await o.send('PUT', path, body); setAns(r.ok ? null : r); setSaved(r.ok ? what : null); };
+  const put = async (path: string, body: object, what: string) => { const r = await o.send('PUT', path, body); setAns(r.ok ? null : r); setSaved(r.ok ? what : null); if (r.ok) prof.load(); };
   return (
     <>
-      <Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>{x.full_name}</Text>
-      <Text style={st.small}>{[x.position, x.tradeLabel, x.department].filter(Boolean).join(' · ')}</Text>
+      {prof.p ? <ProfileTop p={prof.p} reload={prof.load} /> : <Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>{x.full_name}</Text>}
       {isTech && ask ? <Button label={`Send ${first} a query`} kind="secondary" onPress={() => ask(x.id)} /> : null}
+      {prof.p ? <ProfileDetails p={prof.p} reload={prof.load} /> : null}
+      <Heading>Position{isTech ? ' and trade' : ''}</Heading>
       <Card>
         <Select label="Position" value={x.login_level} disabled={!manage || x.login_level === 'creator'}
           options={p.positions.map(pos => ({ value: pos.level, label: pos.label }))} onChange={v => put(`/access/users/${x.id}/position`, { position: v }, `${first} is now ${p.positions.find(pos => pos.level === v)?.label}`)} />

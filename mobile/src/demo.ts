@@ -207,7 +207,7 @@ export class DemoTransport implements Transport {
     let m: RegExpMatchArray | null;
     const office = ['admin', 'management', 'director', 'creator'].includes(this.who.level);
     const isOffice = p.startsWith('/office') || p === '/jobs' || p.startsWith('/flags') && !p.endsWith('/explain') || p.startsWith('/vehicles/inspections') || p === '/access/positions'
-      || p === '/people' || /^\/access\/users\/[^/]+\/(position|work|trade)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
+      || p === '/people' || /^\/people\/[^/]+(\/profile)?$/.test(p) || /^\/access\/users\/[^/]+\/(position|work|trade)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
     if (!isOffice) return null;
     if (!office) return refuse(403, 'office only');
     const o = this.office();
@@ -220,6 +220,12 @@ export class DemoTransport implements Transport {
     if (p === '/office/stores' && req.method === 'POST') { const n = need('stores', 'adding stores is not part of your work'); if (n) return n; }
     const manages = this.does('access');
     if (p === '/people') return ok(o.people(manages));
+    if ((m = p.match(/^\/people\/([^/]+)\/profile$/))) return manages ? done(o.saveProfile(m[1], b)) : refuse(403, 'only whoever manages access');
+    if ((m = p.match(/^\/people\/([^/]+)$/))) {
+      const f = this.fleet();
+      const spots = f.positions();
+      return done(o.profile(m[1], manages, f.technicians(this.thaboIn()), v => spots.find(x => x.id === v) ?? null));
+    }
     if ((m = p.match(/^\/access\/users\/([^/]+)\/work$/))) return manages ? done(o.setWork(m[1], b.area, !!b.on)) : refuse(403, 'only whoever manages access');
     if ((m = p.match(/^\/access\/users\/([^/]+)\/trade$/))) return manages ? done(o.setTrade(m[1], b.trade)) : refuse(403, 'only whoever manages access');
     if ((m = p.match(/^\/jobs\/([^/]+)\/changes$/))) return ok((this.state.office!.jobChanges ?? []).filter(x => x.jobId === m![1]).sort((a, c) => c.changed_at.localeCompare(a.changed_at)));
