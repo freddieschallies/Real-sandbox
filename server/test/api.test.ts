@@ -915,6 +915,37 @@ test('the CEO assigns each person a position; it takes effect at once and is log
   assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/fleet-duty`, { on: false })).status, 200);
   assert.equal((await call('director', 'PUT', `/access/users/${ids.tech2}/fleet-duty`, { on: false })).status, 200);
   assert.equal((await call('admin', 'GET', '/fleet')).status, 403, 'taken away at once');
+
+  // A chosen Admin also runs the stockroom, with full access; other Admins do not.
+  assert.equal((await call('admin', 'GET', '/stock/issues')).status, 403);
+  assert.equal((await call('manager', 'PUT', `/access/users/${ids.admin}/stock-duty`, { on: true })).status, 403, 'only whoever manages access');
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.stock}/stock-duty`, { on: true })).status, 409, 'already a stock controller');
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/stock-duty`, { on: true })).status, 200);
+  const am = (await call('admin', 'GET', '/me')).body;
+  assert.equal(am.login_level, 'admin');
+  assert.equal(am.stockDuty, true);
+  assert.ok(am.permissions.includes('manage_stockroom') && am.permissions.includes('assign_jobs'));
+  assert.equal((await call('admin', 'GET', '/stock/issues')).status, 200, 'full stockroom access');
+  assert.equal((await call('admin', 'GET', '/stock/stockroom')).status, 200);
+  assert.ok((await call('director', 'GET', '/access/positions')).body.people.find((x: { id: string }) => x.id === ids.admin).does_stock);
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/stock-duty`, { on: false })).status, 200);
+  assert.equal((await call('admin', 'GET', '/stock/issues')).status, 403, 'taken away at once');
+
+  // The CEO decides which Admin does which work.
+  const before = (await call('admin', 'GET', '/me')).body.work;
+  assert.deepEqual([before.jobs, before.documents, before.stockroom, before.fleet], [true, true, false, false], 'an Admin by default: jobs, quotes and invoices');
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.creator}/work`, { area: 'jobs', on: false })).status, 409, 'the CEO always has everything');
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/work`, { area: 'jobs', on: false })).status, 200);
+  assert.equal((await call('admin', 'GET', '/me')).body.work.jobs, false);
+  assert.equal((await call('admin', 'POST', '/jobs', { jobType: 'breakdown', storeId: ids.store, faultReported: 'Test', scheduledDate: '2026-10-20', leadTechnicianId: ids.tech })).status, 403, 'this Admin no longer opens jobs');
+  const w = await call('director', 'PUT', `/access/users/${ids.admin}/work`, { area: 'flags', on: true });
+  assert.equal(w.body.work.flags, true);
+  assert.equal((await call('admin', 'GET', '/flags')).status, 200, 'flags for every department');
+  const ppl = (await call('director', 'GET', '/access/positions')).body;
+  assert.ok(ppl.areas.some((a: { key: string }) => a.key === 'stockroom'));
+  assert.equal(ppl.people.find((x: { id: string }) => x.id === ids.admin).work.flags, true);
+  await call('director', 'PUT', `/access/users/${ids.admin}/work`, { area: 'jobs', on: true });
+  await call('director', 'PUT', `/access/users/${ids.admin}/work`, { area: 'flags', on: false });
   assert.equal((await call('director', 'PUT', `/access/users/${ids.director}/position`, { position: 'technician' })).status, 200, 'the Creator can still manage access');
   assert.equal((await call('creator', 'PUT', `/access/users/${ids.director}/position`, { position: 'director' })).status, 200);
 });
@@ -1011,7 +1042,7 @@ test('the CEO decides access: changes apply at once, are logged, and nobody can 
   assert.equal(lock.status, 409);
   assert.equal((await call('creator', 'PUT', '/access/levels/director/manage_access', { effect: 'default' })).status, 200);
   assert.equal((await call('director', 'GET', '/access/catalogue')).status, 200);
-  const log = { body: (await call('director', 'GET', '/access/changes')).body.filter((c: { action: string }) => !['position', 'fleet_duty', 'view_fleet', 'manage_fleet'].includes(c.action)) };
+  const log = { body: (await call('director', 'GET', '/access/changes')).body.filter((c: { action: string }) => !c.action.startsWith('work:') && !['position', 'fleet_duty', 'stock_duty'].includes(c.action)) };
   assert.equal(log.body.length, 3, 'every change is in the history');
   assert.equal(log.body[2].change, 'granted (all departments)');
 });

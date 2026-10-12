@@ -163,3 +163,23 @@ export function departmentsFor(a: Actor, action: Action): 'all' | string[] | nul
 export function actorWithDefaults(id: string, level: LoginLevel, departmentId: string | null = null, overrides: Override[] = []): Actor {
   return { id, level, departmentId, perms: effectivePermissions(level, [], overrides) };
 }
+
+/**
+ * The kinds of work the CEO switches on or off per person (an Admin who only does quotes and invoices,
+ * another who also runs the stockroom). Each is a set of permissions turned on or off together.
+ */
+export const WORK_AREAS = {
+  jobs:      { label: 'Jobs: open, assign and edit', actions: ['assign_jobs', 'view_all_job_cards'] },
+  documents: { label: 'Quotes and invoices', actions: ['view_quotes_invoices_stock', 'prepare_quotes_invoices'] },
+  stores:    { label: 'Clients, stores and equipment', actions: ['manage_stores_equipment'] },
+  stockroom: { label: 'Stockroom (full access)', actions: ['manage_stockroom', 'assign_stock', 'run_stocktake'] },
+  fleet:     { label: "Fleet (the mechanic's work)", actions: ['view_fleet', 'manage_fleet'] },
+  flags:     { label: 'Flags and approvals', actions: ['view_flags', 'resolve_flags'] },
+  prices:    { label: 'Prices and rates', actions: ['set_prices'] },
+} as const satisfies Record<string, { label: string; actions: readonly Action[] }>;
+export type WorkArea = keyof typeof WORK_AREAS;
+
+/** Which kinds of work a set of permissions covers (all of an area's permissions, for any department). */
+export function workOf(p: Permissions): Record<WorkArea, boolean> {
+  return Object.fromEntries(Object.entries(WORK_AREAS).map(([k, a]) => [k, a.actions.every(x => !!p[x as Action])])) as Record<WorkArea, boolean>;
+}

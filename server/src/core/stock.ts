@@ -30,7 +30,7 @@ export function drawPlan(holdings: Holding[], qty: number, onJobId: string): { o
 
 /** Stock booked for a job that is closed must go back; van stock stays. */
 export function mustReturn(holdingJobId: string | null, jobStatus: string | null): boolean {
-  return holdingJobId !== null && jobStatus === 'closed';
+  return holdingJobId !== null && (jobStatus === 'closed' || jobStatus === 'cancelled');
 }
 
 export interface CatalogueItem { id: string; code: string; description: string; supplierCode?: string | null }

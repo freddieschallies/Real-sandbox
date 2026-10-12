@@ -26,6 +26,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     await tx(req.db, async c => {
       const loaded = await loadCard(c, jobId, true);
       if (!loaded) throw new Refused(404, ['no such job']);
+      if ((loaded.row as { status?: string }).status === 'cancelled') throw new Refused(409, ['the office cancelled this job']);
       if (!(await isOnJob(c, jobId, req.actor.id))) throw new Refused(403, ['you are not assigned to this job']);
       const result = rule(loaded.card);
       if (!result.ok) throw new Refused(409, result.reasons);
@@ -87,7 +88,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
         WHERE ($1::boolean = false OR j.lead_technician_id = $2
                OR EXISTS (SELECT 1 FROM job_helpers h WHERE h.job_id = j.id AND h.user_id = $2))
           AND ($3::text IS NULL OR j.status::text = $3)
-        ORDER BY (j.status = 'closed'), j.scheduled_date, j.priority, j.job_number`,
+        ORDER BY (j.status IN ('closed', 'cancelled')), j.scheduled_date, j.priority, j.job_number`,
       [mine, req.actor.id, q.status ?? null],
     );
     return rows;

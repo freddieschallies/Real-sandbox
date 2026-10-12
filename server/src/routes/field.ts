@@ -190,10 +190,10 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
               s.name AS store, s.address, s.lat, s.lng,
               (j.lead_technician_id = $1) AS i_am_lead,
               (SELECT v.planned_return_date FROM job_visits v WHERE v.job_id = j.id ORDER BY v.go_at DESC LIMIT 1) AS planned_return,
-              (j.status <> 'closed' AND j.scheduled_date < $2::date) AS carried_over
+              (j.status NOT IN ('closed', 'cancelled') AND j.scheduled_date < $2::date) AS carried_over
          FROM jobs j JOIN stores s ON s.id = j.store_id
         WHERE (j.lead_technician_id = $1 OR EXISTS (SELECT 1 FROM job_helpers h WHERE h.job_id = j.id AND h.user_id = $1))
-          AND ((j.status <> 'closed' AND j.scheduled_date <= $2::date) OR (j.status = 'closed' AND j.closed_at::date = $2::date))
+          AND ((j.status NOT IN ('closed', 'cancelled') AND j.scheduled_date <= $2::date) OR (j.status = 'closed' AND j.closed_at::date = $2::date))
         ORDER BY (j.status = 'closed'), (j.priority = 'urgent') DESC, j.scheduled_date, j.job_number`,
       [me, today],
     );

@@ -21,11 +21,11 @@ export function registerControlRoutes(app: FastifyInstance) {
     const t = today();
     const one = async (sql: string, p: unknown[] = []) => (await req.db.query(sql, p)).rows[0];
     const jobs = await one(
-      `SELECT count(*) FILTER (WHERE status <> 'closed' AND scheduled_date = $1)::int AS today,
+      `SELECT count(*) FILTER (WHERE status NOT IN ('closed', 'cancelled') AND scheduled_date = $1)::int AS today,
               count(*) FILTER (WHERE status = 'in_progress')::int AS in_progress,
               count(*) FILTER (WHERE status = 'continue_later')::int AS continue_later,
-              count(*) FILTER (WHERE status <> 'closed' AND scheduled_date < $1)::int AS carried_over,
-              count(*) FILTER (WHERE status <> 'closed' AND priority = 'urgent')::int AS urgent,
+              count(*) FILTER (WHERE status NOT IN ('closed', 'cancelled') AND scheduled_date < $1)::int AS carried_over,
+              count(*) FILTER (WHERE status NOT IN ('closed', 'cancelled') AND priority = 'urgent')::int AS urgent,
               count(*) FILTER (WHERE status = 'closed' AND (closed_at AT TIME ZONE 'Africa/Johannesburg')::date = $1::date)::int AS closed_today
          FROM jobs`, [t]);
     const depts = departmentsFor(req.actor, 'view_flags');
@@ -51,7 +51,7 @@ export function registerControlRoutes(app: FastifyInstance) {
                 WHERE wi.min_qty > 0 AND coalesce(w.qty, 0) < wi.min_qty) AS workshop_below_min`);
     const techs = await one(
       `SELECT count(*)::int AS active,
-              count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM jobs j WHERE j.lead_technician_id = u.id AND j.status <> 'closed' AND j.scheduled_date <= $1))::int AS without_work
+              count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM jobs j WHERE j.lead_technician_id = u.id AND j.status NOT IN ('closed', 'cancelled') AND j.scheduled_date <= $1))::int AS without_work
          FROM users u WHERE u.login_level = 'technician' AND u.status = 'active'`, [t]);
     return { date: t, jobs, flags, handoversAwaitingApproval: handovers, fleet: { ...fleet, due: fleet.in_service, missedYesterday: missed }, stock, technicians: techs };
   });
@@ -63,7 +63,7 @@ export function registerControlRoutes(app: FastifyInstance) {
     const { rows } = await req.db.query(
       `SELECT s.id, s.name, s.branch_code, s.address, s.lat, s.lng, s.geofence_m, c.name AS client,
               (SELECT count(*)::int FROM equipment e WHERE e.store_id = s.id) AS equipment,
-              (SELECT count(*)::int FROM jobs j WHERE j.store_id = s.id AND j.status <> 'closed') AS open_jobs
+              (SELECT count(*)::int FROM jobs j WHERE j.store_id = s.id AND j.status NOT IN ('closed', 'cancelled')) AS open_jobs
          FROM stores s JOIN clients c ON c.id = s.client_id ORDER BY c.name, s.name`);
     return rows;
   });
@@ -98,7 +98,7 @@ export function registerControlRoutes(app: FastifyInstance) {
     const t = today();
     const { rows } = await req.db.query(
       `SELECT u.id, u.full_name, d.name AS department,
-              (SELECT count(*)::int FROM jobs j WHERE j.status <> 'closed' AND j.scheduled_date <= $1
+              (SELECT count(*)::int FROM jobs j WHERE j.status NOT IN ('closed', 'cancelled') AND j.scheduled_date <= $1
                  AND (j.lead_technician_id = u.id OR EXISTS (SELECT 1 FROM job_helpers h WHERE h.job_id = j.id AND h.user_id = u.id))) AS open_jobs,
               (SELECT count(*)::int FROM jobs j WHERE j.status = 'in_progress' AND j.lead_technician_id = u.id) AS working_now,
               (SELECT v.registration FROM vehicle_scans s JOIN vehicles v ON v.id = s.vehicle_id
@@ -120,7 +120,7 @@ export function registerControlRoutes(app: FastifyInstance) {
     return tx(req.db, async c => {
       const j = (await c.query('SELECT job_number, status, lead_technician_id FROM jobs WHERE id = $1 FOR UPDATE', [jobId])).rows[0];
       if (!j) throw new Refused(404, ['no such job']);
-      if (j.status === 'closed') throw new Refused(409, ['the job is closed']);
+      if (j.status === 'closed' || j.status === 'cancelled') throw new Refused(409, [`the job is ${j.status}`]);
       if (j.status === 'in_progress' && b.leadTechnicianId !== j.lead_technician_id) {
         throw new Refused(409, ['the technician is busy on this job: he must Continue later before it can move']);
       }
@@ -139,5 +139,108 @@ export function registerControlRoutes(app: FastifyInstance) {
       await audit(c, req.actor.id, 'job_assigned', 'job', jobId, b);
       return { jobId, leadTechnicianId: b.leadTechnicianId, helperIds: b.helperIds };
     });
+  });
+
+  // ---- Editing a job (Admin). Every change is written on the job and the technician is told. ----------
+
+  app.patch('/jobs/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    if (!can(req.actor, 'assign_jobs')) throw new Refused(403, ['you cannot edit jobs']);
+    const jobId = parse(Uuid, req.params.id);
+    const b = parse(z.object({
+      jobType: z.enum(['breakdown', 'planned_maintenance', 'installation', 'quote_visit', 'follow_up']).optional(),
+      priority: z.enum(['urgent', 'normal', 'scheduled']).optional(),
+      storeId: Uuid.optional(),
+      faultReported: z.string().trim().min(3).max(2000).optional(),
+      clientOrderRef: z.string().trim().max(100).nullable().optional(),
+      scheduledDate: DateOnly.optional(),
+      addMaintenanceSteps: z.array(z.string().trim().min(1).max(300)).max(50).optional(),
+      reason: z.string().trim().max(500).optional(),
+    }), req.body);
+    return tx(req.db, async c => {
+      const j = (await c.query(
+        `SELECT j.job_number, j.status, j.job_type, j.priority, j.store_id, s.name AS store, j.fault_reported, j.client_order_ref,
+                to_char(j.scheduled_date, 'YYYY-MM-DD') AS scheduled_date, j.lead_technician_id,
+                EXISTS (SELECT 1 FROM job_visits v WHERE v.job_id = j.id) AS started
+           FROM jobs j JOIN stores s ON s.id = j.store_id WHERE j.id = $1 FOR UPDATE OF j`, [jobId])).rows[0];
+      if (!j) throw new Refused(404, ['no such job']);
+      if (j.status === 'cancelled') throw new Refused(409, ['the job is cancelled']);
+      const closed = j.status === 'closed';
+      const changes: { field: string; old: string | null; new: string | null }[] = [];
+      const refused: string[] = [];
+      const set: Record<string, unknown> = {};
+      const change = (field: string, col: string, oldV: unknown, newV: unknown, shown?: [string | null, string | null]) => {
+        if (newV === undefined || (oldV ?? null) === (newV ?? null)) return;
+        set[col] = newV;
+        changes.push({ field, old: shown ? shown[0] : (oldV as string | null), new: shown ? shown[1] : (newV as string | null) });
+      };
+      // A closed job is the record of what was done: only the client's order number can still be added.
+      if (closed && Object.keys(b).some(k => !['clientOrderRef', 'reason'].includes(k) && (b as Record<string, unknown>)[k] !== undefined)) {
+        refused.push('a closed job can only have its client order number changed');
+      }
+      if (j.started && (b.storeId && b.storeId !== j.store_id)) refused.push('the store cannot change once the technician has been there: cancel and open a new job');
+      if (j.started && (b.jobType && b.jobType !== j.job_type)) refused.push('the job type cannot change once work has started');
+      if (refused.length) throw new Refused(409, refused);
+      if (b.storeId && b.storeId !== j.store_id) {
+        const st = (await c.query('SELECT name FROM stores WHERE id = $1', [b.storeId])).rows[0];
+        if (!st) throw new Refused(400, ['unknown store']);
+        change('store', 'store_id', j.store_id, b.storeId, [j.store, st.name]);
+      }
+      change('job type', 'job_type', j.job_type, b.jobType);
+      change('priority', 'priority', j.priority, b.priority);
+      change('fault reported', 'fault_reported', j.fault_reported, b.faultReported);
+      change('client order number', 'client_order_ref', j.client_order_ref, b.clientOrderRef === undefined ? undefined : (b.clientOrderRef || null));
+      change('date', 'scheduled_date', j.scheduled_date, b.scheduledDate);
+      const steps = b.addMaintenanceSteps ?? [];
+      if (!changes.length && !steps.length) return { jobId, changes: [] };
+      if (j.started && !closed && !(b.reason && b.reason.length >= 5)) throw new Refused(400, ['the technician has started: say why it changes']);
+      const cols = Object.keys(set);
+      if (cols.length) await c.query(`UPDATE jobs SET ${cols.map((k, i) => `${k} = $${i + 2}`).join(', ')} WHERE id = $1`, [jobId, ...cols.map(k => set[k])]);
+      // The first work item is the reported fault: keep it in step while nothing has been done on it.
+      if (b.faultReported && !j.started) await c.query("UPDATE work_items SET title = $2 WHERE job_id = $1 AND origin = 'reported'", [jobId, b.faultReported.slice(0, 200)]);
+      for (const step of steps) await c.query('INSERT INTO planned_maintenance_checks (job_id, step) VALUES ($1, $2)', [jobId, step]);
+      if (steps.length) changes.push({ field: 'checklist', old: null, new: `added: ${steps.join('; ')}` });
+      for (const ch of changes) {
+        await c.query('INSERT INTO job_changes (job_id, field, old_value, new_value, reason, changed_by) VALUES ($1, $2, $3, $4, $5, $6)',
+          [jobId, ch.field, ch.old, ch.new, b.reason ?? null, req.actor.id]);
+      }
+      if (!closed) {
+        const text = changes.map(ch => `${ch.field}: ${ch.new ?? '(removed)'}`).join('; ');
+        const crew = [j.lead_technician_id, ...(await c.query('SELECT user_id FROM job_helpers WHERE job_id = $1', [jobId])).rows.map(r => r.user_id)];
+        for (const u of crew) await notify(c, u, 'job_changed', `Job ${j.job_number} changed by the office: ${text}`, { jobId });
+      }
+      await audit(c, req.actor.id, 'job_edited', 'job', jobId, { changes, reason: b.reason ?? null });
+      return { jobId, changes };
+    });
+  });
+
+  app.post('/jobs/:id/cancel', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    if (!can(req.actor, 'assign_jobs')) throw new Refused(403, ['you cannot cancel jobs']);
+    const jobId = parse(Uuid, req.params.id);
+    const b = parse(z.object({ note: z.string().trim().min(5, 'say why the job is cancelled').max(500) }), req.body);
+    return tx(req.db, async c => {
+      const j = (await c.query('SELECT job_number, status, lead_technician_id FROM jobs WHERE id = $1 FOR UPDATE', [jobId])).rows[0];
+      if (!j) throw new Refused(404, ['no such job']);
+      if (j.status === 'closed' || j.status === 'cancelled') throw new Refused(409, [`the job is already ${j.status}`]);
+      if (j.status === 'in_progress') throw new Refused(409, ['the technician is working on it: he must Continue later first']);
+      await c.query("UPDATE jobs SET status = 'cancelled', cancelled_at = now(), cancelled_by = $2, cancel_note = $3 WHERE id = $1", [jobId, req.actor.id, b.note]);
+      await c.query('INSERT INTO job_changes (job_id, field, old_value, new_value, reason, changed_by) VALUES ($1, $2, $3, $4, $5, $6)',
+        [jobId, 'status', j.status, 'cancelled', b.note, req.actor.id]);
+      // Stock asked for but not yet issued is not needed any more.
+      await c.query("UPDATE stock_issues SET status = 'rejected', decided_by = $2, decided_at = now(), note = $3 WHERE job_id = $1 AND status = 'pending'",
+        [jobId, req.actor.id, `Job ${j.job_number} cancelled: ${b.note}`]);
+      const crew = [j.lead_technician_id, ...(await c.query('SELECT user_id FROM job_helpers WHERE job_id = $1', [jobId])).rows.map(r => r.user_id)];
+      for (const u of crew) await notify(c, u, 'job_cancelled', `Job ${j.job_number} was cancelled: ${b.note}. Return any stock booked for it.`, { jobId });
+      await audit(c, req.actor.id, 'job_cancelled', 'job', jobId, b);
+      return { jobId, status: 'cancelled' };
+    });
+  });
+
+  app.get('/jobs/:id/changes', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    office(req);
+    const jobId = parse(Uuid, req.params.id);
+    const { rows } = await req.db.query(
+      `SELECT c.changed_at, u.full_name AS by, c.field, c.old_value, c.new_value, c.reason
+         FROM job_changes c JOIN users u ON u.id = c.changed_by WHERE c.job_id = $1 ORDER BY c.changed_at DESC`, [jobId]);
+    return rows;
   });
 }

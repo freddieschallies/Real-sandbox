@@ -20,7 +20,10 @@ const lock = (c: Q, technicianId: string) => c.query('SELECT pg_advisory_xact_lo
 
 /** People who look after the stockroom, to tell them about returns and new items. */
 async function stockControllers(c: Q): Promise<string[]> {
-  const { rows } = await c.query("SELECT id FROM users WHERE login_level = 'stockroom' AND status <> 'left'");
+  // Stock controllers, and anyone the CEO gave full stockroom access.
+  const { rows } = await c.query(
+    `SELECT id FROM users u WHERE status <> 'left' AND (login_level = 'stockroom'
+       OR EXISTS (SELECT 1 FROM access_overrides o WHERE o.user_id = u.id AND o.action = 'manage_stockroom' AND o.effect = 'grant'))`);
   return rows.map(r => r.id);
 }
 
@@ -70,7 +73,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
       const job = (await c.query('SELECT status, job_number FROM jobs WHERE id = $1', [jobId])).rows[0];
       if (!job) throw new Refused(404, ['no such job']);
       if (!(await isOnJob(c, jobId, me))) throw new Refused(403, ['you are not assigned to this job']);
-      if (job.status === 'closed') throw new Refused(409, ['job is closed']);
+      if (job.status === 'closed' || job.status === 'cancelled') throw new Refused(409, [`job is ${job.status}`]);
       const short: string[] = [];
       for (const l of b.lines) {
         const have = await stockroomQty(c, l.stockItemId);

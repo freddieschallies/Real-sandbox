@@ -340,3 +340,15 @@ test('workshop counts: pouring losses within the allowance are noted, bigger one
   assert.equal(W.countResult(24, 25, 3, true).result, 'over');
   assert.deepEqual(W.missingOnCount(23, '', { result: 'short' }), ['what happened (a short note)']);
 });
+
+test('quotes and invoices: totals with VAT, labour per quarter hour, draft from a closed job', async () => {
+  const D = await import('../src/core/documents.ts');
+  assert.deepEqual(D.totals([{ qty: 1.5, unitPriceCents: 65000 }, { qty: 2, unitPriceCents: 12050 }], 15), { exVatCents: 121600, vatCents: 18240, totalCents: 139840 });
+  assert.equal(D.quarterHours(61), 1.25);
+  assert.equal(D.quarterHours(0), 0);
+  const lines = D.invoiceDraft({ jobType: 'breakdown', jobNumber: 10231, minutesOnSite: 95, technicians: 2, visits: 1,
+    stockUsed: [{ stockItemId: 's1', description: 'Water inlet valve', qty: 1, sellingPriceCents: null }], boughtOut: [{ description: 'Hose clamp', qty: 2, costCents: 1000 }] },
+    { labour_per_hour: 65000, call_out: 45000, bought_out_markup_pct: 20 });
+  assert.deepEqual(lines.map(l => [l.kind, l.qty, l.unitPriceCents]), [['labour', 3.5, 65000], ['call_out', 1, 45000], ['stock', 1, 0], ['bought_out', 2, 1200]]);
+  assert.deepEqual(D.missingToSend({ lines }), ['line 3 (Water inlet valve): a price']);
+});
