@@ -19,8 +19,11 @@ export const SignaturePad = forwardRef<SignaturePadHandle, { hint: string; heigh
   const live = useRef('');
 
   const responder = useRef(PanResponder.create({
+    // Take the finger before the page's scrolling can, so signing doesn't scroll the page instead.
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
+    onStartShouldSetPanResponderCapture: () => true,
+    onMoveShouldSetPanResponderCapture: () => true,
     onPanResponderTerminationRequest: () => false,   // don't let the page scroll steal the pen
     onPanResponderGrant: e => {
       const { locationX: x, locationY: y } = e.nativeEvent;
@@ -43,8 +46,8 @@ export const SignaturePad = forwardRef<SignaturePadHandle, { hint: string; heigh
   return (
     <View style={{ gap: 6 }}>
       <View ref={box} collapsable={false} {...responder.panHandlers}
-        style={{ height, backgroundColor: '#FFFFFF', borderRadius: 10, overflow: 'hidden' }}>
-        <Svg width="100%" height="100%">
+        style={[{ height, backgroundColor: '#FFFFFF', borderRadius: 10, overflow: 'hidden' }, Platform.OS === 'web' ? ({ touchAction: 'none', userSelect: 'none' } as object) : null]}>
+        <Svg width="100%" height="100%" pointerEvents="none">
           {paths.map((d, i) => <Path key={i} d={d} stroke="#111" strokeWidth={3} fill="none" strokeLinecap="round" strokeLinejoin="round" />)}
         </Svg>
         {paths.length === 0 ? <Text pointerEvents="none" style={{ position: 'absolute', bottom: 12, left: 14, color: '#888' }}>{hint}</Text> : null}

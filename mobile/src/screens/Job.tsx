@@ -114,6 +114,7 @@ export function Job({ jobId }: { jobId: string }) {
 
       {state === 'working' ? (
         <>
+          {reasons ? <Notice tone="bad" title="Not yet. Still needed:" lines={reasons} /> : null}
           <Button label="Done – all work finished" onPress={() => run('Job done', c => J.done(c, nowIso()), 'done', { at: nowIso() })} />
           <PauseBox onPause={reason => run(`Paused: ${reason.replace(/_/g, ' ')}`, c => J.pause(c, reason, nowIso()), 'pause', { at: nowIso(), reason })} />
           <Button label="Continue later (another day)" kind="secondary" onPress={() => nav.push({ name: 'later', jobId })} />

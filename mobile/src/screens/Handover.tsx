@@ -171,6 +171,7 @@ export function Handover({ look, onBack, onDone }: { look: Lookup; onBack: () =>
         </>
       ) : null}
 
+      {reasons ? <Notice tone="bad" title="Not yet. Still needed:" lines={reasons} /> : null}
       <Button label="Accept vehicle" onPress={submit} busy={busy} />
     </Screen>
   );

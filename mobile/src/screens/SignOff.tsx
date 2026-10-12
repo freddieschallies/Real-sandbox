@@ -79,6 +79,7 @@ export function SignOff({ jobId }: { jobId: string }) {
           {v.storeManagers.length ? <Choice options={v.storeManagers} value={manager} onChange={setManager} labels={Object.fromEntries(v.storeManagers.map(m => [m, m]))} /> : null}
           <Label>Signature</Label>
           <SignaturePad ref={pad} hint="Manager signs here" height={220} />
+          {reasons ? <Notice tone="bad" title="Not yet. Still needed:" lines={reasons} /> : null}
           <Button label="Close job – signed" onPress={signed} busy={busy} />
         </>
       ) : (
@@ -87,6 +88,7 @@ export function SignOff({ jobId }: { jobId: string }) {
           <Body quiet>The job closes without a signature. Your after photos are the evidence, and the office is told.</Body>
           <Field label="Why is the manager unavailable?" value={reason} onChangeText={setReason} multiline />
           <Field label="Who did you speak to instead?" value={spokeTo} onChangeText={setSpokeTo} autoCapitalize="words" />
+          {reasons ? <Notice tone="bad" title="Not yet. Still needed:" lines={reasons} /> : null}
           <Button label="Close job – unsigned" onPress={unsigned} />
         </>
       )}
