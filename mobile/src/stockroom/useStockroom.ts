@@ -5,8 +5,11 @@ import { useStore } from '../state.tsx';
 import { nowIso, takePhoto } from '../device.ts';
 import type { StockRequest, StockReturn } from '../types.ts';
 
+export type Category = 'stock' | 'tool' | 'ppe';
+export const CATEGORY_LABEL: Record<Category, string> = { stock: 'Stock', tool: 'Tools', ppe: 'PPE' };
 export interface RoomItem {
   id: string; code: string; description: string; unit: string; needsReview: boolean; supplierCode: string | null; inStockroom: number; withTechnicians: number;
+  category?: 'stock' | 'tool' | 'ppe'; onNames?: number;
   minQty?: number; reorderQty?: number | null; photoId?: string | null; supplierName?: string | null; belowMin?: boolean;
   ordered?: { at: string; qty: number; note: string | null } | null;
   lastUsed?: { at: string; kind: string; qty: number; jobNumber: number | null; store: string | null; technician: string | null; vehicle: string | null } | null;
@@ -106,7 +109,7 @@ export function useStockroom() {
     }));
   };
 
-  const nameItem = (it: RoomItem, b: { code: string; description: string; unit: string }) => {
+  const nameItem = (it: RoomItem, b: { code: string; description: string; unit: string; category?: Category }) => {
     s.queue(`Named ${it.code} as ${b.code}`, { method: 'PATCH', path: `/stock/items/${it.id}`, json: b });
     save(c => ({ ...c, room: c.room.map(i => (i.id === it.id ? { ...i, ...b, needsReview: false } : i)),
       overview: c.overview ? { ...c.overview, newItems: Math.max(0, c.overview.newItems - 1) } : c.overview }));

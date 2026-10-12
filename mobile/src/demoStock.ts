@@ -9,14 +9,46 @@ export interface Holding { technicianId: string; technician: string; stockItemId
 const ME = 'Thabo Mkhize';
 const WHAT: Record<string, string> = {
   assign: 'Issued from stockroom', use_on_job: 'Used on job card', return: 'Returned to stockroom', supplier_invoice: 'Bought on supplier invoice', receive: 'Delivery into stockroom',
+  issue_kit: 'Issued by name (tool / PPE)', return_kit: 'Tool / PPE returned',
 };
+
+export interface DemoKit {
+  id: string; userId: string; kind: 'tool' | 'ppe'; name: string; detail: string | null; qty: number; stockItemId: string | null; replaceBy: string | null;
+  issuedAt: string; issuedBy: string; status: 'issued' | 'returned' | 'lost' | 'damaged'; closedAt: string | null; closedBy: string | null; closeNote: string | null;
+}
+const KIT_ITEMS: DemoStockState['items'] = [
+  { id: 'st-8', code: 'PPE-BOOT', description: 'Safety boots', unit: 'pair', category: 'ppe', minQty: 3 },
+  { id: 'st-9', code: 'PPE-GLOVE', description: 'Work gloves', unit: 'pair', category: 'ppe', minQty: 10 },
+  { id: 'st-10', code: 'PPE-GLASS', description: 'Safety glasses', unit: 'each', category: 'ppe' },
+  { id: 'st-11', code: 'PPE-OVR', description: 'Overall (2-piece)', unit: 'each', category: 'ppe' },
+  { id: 'st-12', code: 'TL-METER', description: 'Clamp multimeter', unit: 'each', category: 'tool' },
+  { id: 'st-13', code: 'TL-GAUGE', description: 'Manifold gauge set R404A', unit: 'set', category: 'tool' },
+  { id: 'st-14', code: 'TL-DRILL', description: 'Cordless drill 18V', unit: 'each', category: 'tool' },
+];
+const KIT_STOCK: Record<string, number> = { 'st-8': 4, 'st-9': 24, 'st-10': 10, 'st-11': 6, 'st-12': 2, 'st-13': 1, 'st-14': 3 };
+function seedKit(): DemoKit[] {
+  const d = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+  const k = (id: string, userId: string, kind: 'tool' | 'ppe', name: string, detail: string | null, stockItemId: string | null, days: number, replaceBy: string | null = null): DemoKit =>
+    ({ id, userId, kind, name, detail, qty: 1, stockItemId, replaceBy, issuedAt: d(days), issuedBy: 'Lindiwe Zulu', status: 'issued', closedAt: null, closedBy: null, closeNote: null });
+  return [
+    k('kit-1', 'me', 'ppe', 'Safety boots', 'Size 9', 'st-8', 300, '2027-04-01'),
+    k('kit-2', 'me', 'ppe', 'Overall (2-piece)', 'Size L', 'st-11', 120),
+    k('kit-3', 'me', 'tool', 'Clamp multimeter', 'Serial FL-44718', 'st-12', 400),
+    k('kit-4', 'me', 'tool', 'Manifold gauge set R404A', null, 'st-13', 200),
+    k('kit-5', 'tech-2', 'ppe', 'Safety boots', 'Size 10', 'st-8', 420, new Date(Date.now() - 5 * 86_400_000).toLocaleDateString('en-CA')),
+    k('kit-6', 'tech-2', 'tool', 'Cordless drill 18V', 'Makita, serial 8812', 'st-14', 90),
+    k('kit-7', 'tech-3', 'ppe', 'Safety glasses', null, 'st-10', 30),
+  ];
+}
 
 export interface DemoStockState {
   items: {
     id: string; code: string; description: string; unit: string; supplierCode?: string | null; needsReview?: boolean;
     minQty?: number; reorderQty?: number | null; photoId?: string | null; supplierName?: string | null;
-    ordered?: { at: string; qty: number; note: string | null; by: string } | null; sellingPriceCents?: number | null;
+    ordered?: { at: string; qty: number; note: string | null; by: string } | null; sellingPriceCents?: number | null; category?: 'stock' | 'tool' | 'ppe';
   }[];
+  /** Tools and PPE on each person's name. */
+  kit?: DemoKit[];
   stockroom: Record<string, number>;
   /** tech: 'me' (Thabo, the demo technician) or another technician's name. */
   holdings: { stockItemId: string; holdingJobId: string | null; qty: number; tech?: string }[];
@@ -90,7 +122,59 @@ const good = (body: unknown): Res => ({ ok: true, body });
 const bad = (status: number, ...reasons: string[]): Res => ({ ok: false, status, reasons });
 
 export class DemoStock {
-  constructor(public s: DemoStockState, private jobInfo: (jobId: string) => { number: number; status: string; store: string } | null) {}
+  constructor(public s: DemoStockState, private jobInfo: (jobId: string) => { number: number; status: string; store: string } | null) {
+    // Older saved demos: add the tools and PPE.
+    if (!s.items.some(i => i.category === 'ppe')) { s.items.push(...KIT_ITEMS.filter(k => !s.items.some(i => i.id === k.id))); Object.assign(s.stockroom, KIT_STOCK); }
+    s.kit ??= seedKit();
+  }
+
+  // ---- Tools and PPE ------------------------------------------------------------------------
+  kitFor(userId: string, canWrite: boolean) {
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+    const view = (k: DemoKit) => ({ id: k.id, kind: k.kind, name: k.name, detail: k.detail, qty: k.qty, stock_item_id: k.stockItemId, stock_code: k.stockItemId ? this.item(k.stockItemId)?.code ?? null : null,
+      replace_by: k.replaceBy, issued_at: k.issuedAt, issued_by: k.issuedBy, status: k.status, closed_at: k.closedAt, closed_by: k.closedBy, close_note: k.closeNote, due: !!k.replaceBy && k.replaceBy <= today });
+    const mine = (this.s.kit ?? []).filter(k => k.userId === userId);
+    const held = mine.filter(k => k.status === 'issued').map(view).sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+    return { held, history: mine.filter(k => k.status !== 'issued').map(view).sort((a, b) => (b.closed_at ?? '').localeCompare(a.closed_at ?? '')), dueForReplacement: held.filter(k => k.due).length, canWrite };
+  }
+  kitPeople(people: { id: string; full_name: string; login_level: string; trade?: string | null }[]) {
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+    return people.map(p => {
+      const h = (this.s.kit ?? []).filter(k => k.userId === p.id && k.status === 'issued');
+      return { id: p.id, full_name: p.full_name, login_level: p.login_level, trade: p.trade ?? null, tools: h.filter(k => k.kind === 'tool').length, ppe: h.filter(k => k.kind === 'ppe').length, due: h.filter(k => k.replaceBy && k.replaceBy <= today).length };
+    }).sort((a, b) => Number(b.login_level === 'technician') - Number(a.login_level === 'technician') || a.full_name.localeCompare(b.full_name));
+  }
+  issueKit(userId: string, who: string, by: string, b: { kind: 'tool' | 'ppe'; name?: string; detail?: string; qty?: number; stockItemId?: string; replaceBy?: string }): Res {
+    const qty = b.qty ?? 1;
+    let name = b.name?.trim();
+    if (b.stockItemId) {
+      const it = this.item(b.stockItemId);
+      if (!it) return bad(404, 'no such stock item');
+      const cat = it.category ?? 'stock';
+      if (cat !== b.kind) return bad(409, `${it.description} is ${cat === 'stock' ? 'stock (parts for jobs)' : cat === 'ppe' ? 'PPE' : 'a tool'}, not ${b.kind === 'ppe' ? 'PPE' : 'a tool'}`);
+      const have = this.s.stockroom[it.id] ?? 0;
+      if (have < qty) return bad(409, `only ${have} in the stockroom`);
+      this.s.stockroom[it.id] = have - qty;
+      name ??= it.description;
+      this.record('issue_kit', it.id, qty, who, by, null);
+    }
+    if (!name || name.length < 2) return bad(400, 'what the item is');
+    if (b.replaceBy && !/^\d{4}-\d{2}-\d{2}$/.test(b.replaceBy)) return bad(400, 'replace-by date must look like 2027-03-31');
+    const id = `kit-${Date.now()}`;
+    (this.s.kit ??= []).push({ id, userId, kind: b.kind, name, detail: b.detail?.trim() || null, qty, stockItemId: b.stockItemId ?? null, replaceBy: b.replaceBy ?? null,
+      issuedAt: new Date().toISOString(), issuedBy: by, status: 'issued', closedAt: null, closedBy: null, closeNote: null });
+    return good({ id });
+  }
+  closeKit(kitId: string, by: string, who: string, b: { status: 'returned' | 'lost' | 'damaged'; note?: string }): Res {
+    const k = (this.s.kit ?? []).find(x => x.id === kitId);
+    if (!k) return bad(404, 'no such item');
+    if (k.status !== 'issued') return bad(409, `this item is already ${k.status}`);
+    if (b.status !== 'returned' && (!b.note || b.note.trim().length < 5)) return bad(400, `say how it was ${b.status}`);
+    Object.assign(k, { status: b.status, closedAt: new Date().toISOString(), closedBy: by, closeNote: b.note?.trim() || null });
+    if (b.status === 'returned' && k.stockItemId) { this.s.stockroom[k.stockItemId] = (this.s.stockroom[k.stockItemId] ?? 0) + k.qty; this.record('return_kit', k.stockItemId, k.qty, who, by, null); }
+    return good({ id: kitId, status: b.status });
+  }
+  userOfKit(kitId: string) { return (this.s.kit ?? []).find(x => x.id === kitId)?.userId ?? null; }
 
   private item(id: string) { return this.s.items.find(i => i.id === id); }
   private pending(stockItemId: string, holdingJobId: string | null) {
@@ -170,7 +254,7 @@ export class DemoStock {
   }
 
   catalogue(): CatalogueLine[] {
-    return this.s.items.filter(i => !i.needsReview).map(i => ({ id: i.id, code: i.code, description: i.description, unit: i.unit, inStockroom: this.s.stockroom[i.id] ?? 0 }));
+    return this.s.items.filter(i => !i.needsReview && (i.category ?? 'stock') === 'stock').map(i => ({ id: i.id, code: i.code, description: i.description, unit: i.unit, inStockroom: this.s.stockroom[i.id] ?? 0 }));
   }
 
   jobStock(jobId: string): JobStockLine[] {
@@ -196,6 +280,8 @@ export class DemoStock {
 
   /** The technician asks; nothing moves until the stock controller issues it. */
   request(jobId: string, b: { id?: string; at: string; lines: { stockItemId: string; qty: number }[] }, job: { number: number; store: string }): Res {
+    const kit = b.lines.map(l => this.item(l.stockItemId)).filter(i => i && (i.category ?? 'stock') !== 'stock');
+    if (kit.length) return bad(409, ...kit.map(i => `${i!.code} is a tool or PPE: the stockroom issues it to you by name, not to a job`));
     const short = b.lines.filter(l => (this.s.stockroom[l.stockItemId] ?? 0) < l.qty).map(l => `${this.item(l.stockItemId)?.code}: only ${this.s.stockroom[l.stockItemId] ?? 0} in the stockroom`);
     if (short.length) return bad(409, ...short);
     const id = b.id ?? `req-${Date.now()}`;
@@ -278,7 +364,8 @@ export class DemoStock {
 
   stockroomList() {
     return this.s.items.map(i => ({
-      id: i.id, code: i.code, description: i.description, unit: i.unit, needsReview: !!i.needsReview, supplierCode: i.supplierCode ?? null,
+      id: i.id, code: i.code, description: i.description, unit: i.unit, needsReview: !!i.needsReview, supplierCode: i.supplierCode ?? null, category: i.category ?? 'stock',
+      onNames: (this.s.kit ?? []).filter(k => k.stockItemId === i.id && k.status === 'issued').reduce((n, k) => n + k.qty, 0),
       inStockroom: this.s.stockroom[i.id] ?? 0,
       withTechnicians: this.s.holdings.filter(h => h.stockItemId === i.id).reduce((n, h) => n + h.qty, 0),
       minQty: i.minQty ?? 0, reorderQty: i.reorderQty ?? null, photoId: i.photoId ?? null, supplierName: i.supplierName ?? null,
@@ -288,11 +375,11 @@ export class DemoStock {
     })).sort((a, b) => Number(b.needsReview) - Number(a.needsReview) || a.code.localeCompare(b.code));
   }
 
-  nameItem(id: string, b: { code: string; description: string; unit: string }): Res {
+  nameItem(id: string, b: { code: string; description: string; unit: string; category?: 'stock' | 'tool' | 'ppe' }): Res {
     const it = this.item(id);
     if (!it) return bad(404, 'no such item');
     if (this.s.items.some(x => x.id !== id && x.code.toLowerCase() === b.code.trim().toLowerCase())) return bad(409, `code ${b.code} is already used`);
-    Object.assign(it, { code: b.code.trim(), description: b.description.trim(), unit: b.unit.trim(), needsReview: false });
+    Object.assign(it, { code: b.code.trim(), description: b.description.trim(), unit: b.unit.trim(), needsReview: false, ...(b.category ? { category: b.category } : {}) });
     return good({ id, ...b, needsReview: false });
   }
 

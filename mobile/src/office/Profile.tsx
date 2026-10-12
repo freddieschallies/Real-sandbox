@@ -19,6 +19,8 @@ export interface Profile {
   contact: { phone: string | null; email: string | null; emergency_name: string | null; emergency_phone: string | null };
   personal: { id_number: string | null; date_of_birth: string | null; home_address: string | null; start_date: string | null; notes: string | null } | null;
   canEdit: boolean;
+  record?: { read: boolean; write: boolean };
+  kit?: { read: boolean; write: boolean };
 }
 
 const time = (iso: string) => new Date(iso).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' });

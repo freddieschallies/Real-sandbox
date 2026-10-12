@@ -6,6 +6,7 @@ import { StoreProvider, useStore } from './src/state.tsx';
 import { NavProvider, useNav } from './src/nav.tsx';
 import { OfficeApp, isOffice } from './src/office/OfficeApp.tsx';
 import { QueriesScreen } from './src/screens/QueriesScreen.tsx';
+import { MyKitScreen } from './src/screens/MyKitScreen.tsx';
 import { Login } from './src/screens/Login.tsx';
 import { Policy } from './src/screens/Policy.tsx';
 import { Day } from './src/screens/Day.tsx';
@@ -48,6 +49,7 @@ function Current() {
     case 'fault': return <VehicleFault />;
     case 'release': return <Release />;
     case 'queries': return <QueriesScreen />;
+    case 'kit': return <MyKitScreen />;
   }
 }
 

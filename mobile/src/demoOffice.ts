@@ -34,6 +34,20 @@ function seedProfiles(): Record<string, DemoProfile> {
   ]);
 }
 
+export interface DemoRecord { id: string; employeeId: string; type: string; happenedOn: string; what: string; action: string | null; reason: string | null; author: string; createdAt: string }
+export const ENTRY_TYPES: Record<string, string> = {
+  observation: 'Issue / note', verbal_warning: 'Verbal warning', written_warning: 'Written warning', final_written_warning: 'Final written warning', commendation: 'Commendation',
+};
+const WARNINGS = ['verbal_warning', 'written_warning', 'final_written_warning'];
+function seedRecords(): DemoRecord[] {
+  const d = (n: number) => new Date(Date.now() - n * 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+  return [
+    { id: 'rec-1', employeeId: 'tech-3', type: 'observation', happenedOn: d(40), what: 'Arrived 50 minutes late at Spar Arboretum without phoning the office.', action: null, reason: null, author: 'Lilanie Schallies', createdAt: new Date(Date.now() - 40 * 86_400_000).toISOString() },
+    { id: 'rec-2', employeeId: 'tech-3', type: 'verbal_warning', happenedOn: d(12), what: 'Late again at FreshMart Meerensee, the store manager complained.', action: 'Verbal warning given in the office, with Pieter present', reason: 'Second late arrival in a month after being spoken to', author: 'Lilanie Schallies', createdAt: new Date(Date.now() - 12 * 86_400_000).toISOString() },
+    { id: 'rec-3', employeeId: 'me', type: 'commendation', happenedOn: d(20), what: 'Harbour Deli thanked us for fixing the cold room on a Sunday night.', action: null, reason: null, author: 'Lilanie Schallies', createdAt: new Date(Date.now() - 20 * 86_400_000).toISOString() },
+  ];
+}
+
 export interface DemoOfficeState {
   stores: DemoStore[];
   inspections: DemoInspection[];
@@ -43,12 +57,16 @@ export interface DemoOfficeState {
   work?: Record<string, Partial<Record<WorkArea, boolean>>>;
   /** Contact and personal details per person (made-up demo numbers). */
   profiles?: Record<string, DemoProfile>;
+  /** Staff records: CEO and HR only. */
+  records?: DemoRecord[];
+  recordDeletions?: { employeeId: string; entryHappenedOn: string; deletedAt: string; deletedBy: string }[];
   jobChanges?: { jobId: string; changed_at: string; by: string; field: string; old_value: string | null; new_value: string | null; reason: string | null }[];
 }
 
 export const WORK_AREAS = {
   jobs: 'Jobs: open, assign and edit', documents: 'Quotes and invoices', stores: 'Clients, stores and equipment', stockroom: 'Stockroom (full access)',
   fleet: "Fleet (the mechanic's work)", flags: 'Flags and approvals', prices: 'Prices and rates', access: 'Positions and access (People)',
+  hr: 'Staff records (HR): issues and warnings',
 } as const;
 export const TRADES = { foodservice: 'Foodservice tech', plumber: 'Plumber', electrician: 'Electrician', assistant: 'Assistant' } as const;
 export type WorkArea = keyof typeof WORK_AREAS;
@@ -233,7 +251,7 @@ export class DemoOffice {
   private profiles() { return this.o.profiles ?? (this.o.profiles = seedProfiles()); }
 
   /** One person's profile; `crew` says who is in which vehicle, `spot` where a vehicle is. */
-  profile(id: string, canEdit: boolean, crew: { id: string; full_name: string; vehicle_id: string | null; registration: string | null; mode: 'driving' | 'riding_along' | null }[],
+  profile(id: string, canEdit: boolean, flags: { record: { read: boolean; write: boolean }; kit: { read: boolean; write: boolean } }, crew: { id: string; full_name: string; vehicle_id: string | null; registration: string | null; mode: 'driving' | 'riding_along' | null }[],
     spot: (vehicleId: string) => { lat: number | null; lng: number | null; speed_kmh: number | null; ignition: boolean | null; minutesAgo: number | null } | null): Res {
     const p = this.o.people.find(x => x.id === id);
     if (!p) return bad(404, 'no such person');
@@ -263,8 +281,45 @@ export class DemoOffice {
       },
       contact: { phone: f.phone, email: f.email, emergency_name: f.emergency_name, emergency_phone: f.emergency_phone },
       personal: canEdit ? { id_number: f.id_number, date_of_birth: f.date_of_birth, home_address: f.home_address, start_date: f.start_date, notes: f.notes } : null,
-      canEdit,
+      canEdit, ...flags,
     });
+  }
+
+  private recs() { return this.o.records ?? (this.o.records = seedRecords()); }
+  record(id: string, canWrite: boolean): Res {
+    if (!this.o.people.some(p => p.id === id)) return bad(404, 'no such person');
+    const entries = this.recs().filter(r => r.employeeId === id).sort((a, b) => b.happenedOn.localeCompare(a.happenedOn) || b.createdAt.localeCompare(a.createdAt))
+      .map(r => ({ id: r.id, entry_type: r.type, typeLabel: ENTRY_TYPES[r.type] ?? r.type, happened_on: r.happenedOn, what_happened: r.what, action_taken: r.action, reason: r.reason, corrects_entry_id: null, job_number: null, author: r.author, created_at: r.createdAt }));
+    const n = (t: string) => entries.filter(e => e.entry_type === t).length;
+    return good({
+      canWrite, types: Object.entries(ENTRY_TYPES).map(([key, label]) => ({ key, label, warning: WARNINGS.includes(key) })),
+      summary: { issues: n('observation'), verbal: n('verbal_warning'), written: n('written_warning'), final: n('final_written_warning'), commendations: n('commendation') },
+      entries, deletions: (this.o.recordDeletions ?? []).filter(d => d.employeeId === id).map(d => ({ entry_happened_on: d.entryHappenedOn, deleted_at: d.deletedAt, deleted_by: d.deletedBy })),
+    });
+  }
+  addRecord(id: string, by: string, b: { type: string; happenedOn?: string; whatHappened?: string; actionTaken?: string; reason?: string }): Res {
+    if (!this.o.people.some(p => p.id === id)) return bad(404, 'no such person');
+    if (!ENTRY_TYPES[b.type]) return bad(400, 'which kind of record');
+    const miss: string[] = [];
+    if (!b.whatHappened || b.whatHappened.trim().length < 5) miss.push('say what happened');
+    if (WARNINGS.includes(b.type)) {
+      if (!b.actionTaken || b.actionTaken.trim().length < 3) miss.push('the action taken (a warning must say what was done)');
+      if (!b.reason || b.reason.trim().length < 3) miss.push('the reason for the warning');
+    }
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+    if (b.happenedOn && !/^\d{4}-\d{2}-\d{2}$/.test(b.happenedOn)) miss.push('the date like 2026-10-12');
+    else if (b.happenedOn && b.happenedOn > today) miss.push('a date that is not in the future');
+    if (miss.length) return bad(400, ...miss);
+    const rec: DemoRecord = { id: `rec-${Date.now()}`, employeeId: id, type: b.type, happenedOn: b.happenedOn || today, what: b.whatHappened!.trim(), action: b.actionTaken?.trim() || null, reason: b.reason?.trim() || null, author: this.name(by), createdAt: new Date().toISOString() };
+    this.recs().push(rec);
+    return good({ id: rec.id });
+  }
+  deleteRecord(id: string, entryId: string, by: string): Res {
+    const r = this.recs().find(x => x.id === entryId && x.employeeId === id);
+    if (!r) return bad(404, 'no such record');
+    this.o.records = this.recs().filter(x => x !== r);
+    (this.o.recordDeletions ??= []).unshift({ employeeId: id, entryHappenedOn: r.happenedOn, deletedAt: new Date().toISOString(), deletedBy: this.name(by) });
+    return good({ deleted: 1 });
   }
 
   saveProfile(id: string, b: Record<string, string | null | undefined>): Res {

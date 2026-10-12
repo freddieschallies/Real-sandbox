@@ -9,6 +9,7 @@ import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, Select
 import { C, S } from '../theme.ts';
 import { TITLE as FLAG_TITLE } from '../screens/Flags.tsx';
 import type { CardView } from '../types.ts';
+import { KitCard, StaffRecord } from '../staff/Staff.tsx';
 import { Avatar, ProfileDetails, ProfileTop, useProfile } from './Profile.tsx';
 import { Accounts, InvoiceDetail, InvoiceList, NewQuote, QuoteDetail, QuoteList, useBooks } from './Books.tsx';
 import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries.tsx';
@@ -672,6 +673,8 @@ function PersonDetail({ id, o, ask }: { id: string; o: OfficeHook; ask?: (toId: 
       {prof.p ? <ProfileTop p={prof.p} reload={prof.load} /> : <Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>{x.full_name}</Text>}
       {isTech && ask ? <Button label={`Send ${first} a query`} kind="secondary" onPress={() => ask(x.id)} /> : null}
       {prof.p ? <ProfileDetails p={prof.p} reload={prof.load} /> : null}
+      {prof.p?.kit?.read ? <KitCard userId={x.id} name={x.full_name} /> : null}
+      {prof.p?.record?.read ? <StaffRecord userId={x.id} name={x.full_name} /> : null}
       <Heading>Position{isTech ? ' and trade' : ''}</Heading>
       <Card>
         <Select label="Position" value={x.login_level} disabled={!manage || x.login_level === 'creator'}

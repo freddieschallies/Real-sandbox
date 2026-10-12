@@ -196,7 +196,7 @@ export class DemoTransport implements Transport {
   }
 
   /** Whether the signed-in person does this kind of work (their position, or switched on by the CEO). */
-  private does(area: 'jobs' | 'documents' | 'stores' | 'stockroom' | 'fleet' | 'flags' | 'prices' | 'access') {
+  private does(area: 'jobs' | 'documents' | 'stores' | 'stockroom' | 'fleet' | 'flags' | 'prices' | 'access' | 'hr') {
     if (area === 'fleet' && this.who.level === 'mechanic') return true;
     if (area === 'stockroom' && this.who.level === 'stockroom') return true;
     return this.office().workOf(this.who.id, this.who.level)[area];
@@ -207,7 +207,7 @@ export class DemoTransport implements Transport {
     let m: RegExpMatchArray | null;
     const office = ['admin', 'management', 'director', 'creator'].includes(this.who.level);
     const isOffice = p.startsWith('/office') || p === '/jobs' || p.startsWith('/flags') && !p.endsWith('/explain') || p.startsWith('/vehicles/inspections') || p === '/access/positions'
-      || p === '/people' || /^\/people\/[^/]+(\/profile)?$/.test(p) || /^\/access\/users\/[^/]+\/(position|work|trade)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
+      || p === '/people' || /^\/people\/[^/]+(\/profile|\/record(\/[^/]+)?)?$/.test(p) || /^\/access\/users\/[^/]+\/(position|work|trade)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
     if (!isOffice) return null;
     if (!office) return refuse(403, 'office only');
     const o = this.office();
@@ -220,11 +220,18 @@ export class DemoTransport implements Transport {
     if (p === '/office/stores' && req.method === 'POST') { const n = need('stores', 'adding stores is not part of your work'); if (n) return n; }
     const manages = this.does('access');
     if (p === '/people') return ok(o.people(manages));
+    if ((m = p.match(/^\/people\/([^/]+)\/record(?:\/([^/]+))?$/))) {
+      if (!this.does('hr') || m[1] === this.who.id) return refuse(403, 'staff records are for the CEO and HR only');
+      if (req.method === 'GET') return done(o.record(m[1], true));
+      if (req.method === 'POST') return done(o.addRecord(m[1], this.who.id, b));
+      if (req.method === 'DELETE' && m[2]) return done(o.deleteRecord(m[1], m[2], this.who.id));
+    }
     if ((m = p.match(/^\/people\/([^/]+)\/profile$/))) return manages ? done(o.saveProfile(m[1], b)) : refuse(403, 'only whoever manages access');
     if ((m = p.match(/^\/people\/([^/]+)$/))) {
       const f = this.fleet();
       const spots = f.positions();
-      return done(o.profile(m[1], manages, f.technicians(this.thaboIn()), v => spots.find(x => x.id === v) ?? null));
+      const rec = this.does('hr') && m[1] !== this.who.id;
+      return done(o.profile(m[1], manages, { record: { read: rec, write: rec }, kit: { read: true, write: this.does('stockroom') } }, f.technicians(this.thaboIn()), v => spots.find(x => x.id === v) ?? null));
     }
     if ((m = p.match(/^\/access\/users\/([^/]+)\/work$/))) return manages ? done(o.setWork(m[1], b.area, !!b.on)) : refuse(403, 'only whoever manages access');
     if ((m = p.match(/^\/access\/users\/([^/]+)\/trade$/))) return manages ? done(o.setTrade(m[1], b.trade)) : refuse(403, 'only whoever manages access');
@@ -577,6 +584,23 @@ export class DemoTransport implements Transport {
     if (p === '/me/stock') return ok(this.stock().totals());
     if (p === '/me/inventory') { const r = this.stock().inventory(); this.persist(this.state); return ok(r); }
     if (p === '/stock/catalogue') return ok(this.stock().catalogue());
+    {
+      const kitWrite = this.does('stockroom');
+      const office = ['admin', 'management', 'director', 'creator'].includes(this.who.level);
+      if (p === '/me/kit') { const k = this.stock().kitFor(this.who.id, false); this.persist(this.state); return ok(k); }
+      if (p === '/kit/people') return kitWrite ? ok(this.stock().kitPeople(this.office().o.people)) : refuse(403, 'the stockroom keeps tools and PPE');
+      if ((m = p.match(/^\/people\/([^/]+)\/kit$/))) {
+        if (req.method === 'GET') return (kitWrite || office || m[1] === this.who.id) ? ok(this.stock().kitFor(m[1], kitWrite)) : refuse(403, 'not your list');
+        if (!kitWrite) return refuse(403, 'the stockroom keeps tools and PPE');
+        const r = this.stock().issueKit(m[1], this.office().name(m[1]), this.who.name, b);
+        this.persist(this.state); return this.stockResult(r);
+      }
+      if ((m = p.match(/^\/kit\/([^/]+)\/close$/))) {
+        if (!kitWrite) return refuse(403, 'the stockroom keeps tools and PPE');
+        const st = this.stock(); const u = st.userOfKit(m[1]);
+        return this.stockResult(st.closeKit(m[1], this.who.name, u ? this.office().name(u) : '', b));
+      }
+    }
     if (p === '/me/supplier-invoices' && req.method === 'GET') { this.stock(); this.persist(this.state); return ok(this.state.stockControl!.invoices); }
     if (p === '/me/returns' && req.method === 'GET') { this.stock(); this.persist(this.state); return ok(this.state.stockControl!.returns); }
     if (p === '/supplier-invoices') return this.stockResult(this.stock().scanInvoice(b), 201);

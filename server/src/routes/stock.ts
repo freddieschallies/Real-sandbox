@@ -421,6 +421,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
       `SELECT i.id, i.code, i.description, i.unit, i.needs_review, i.supplier_code, COALESCE(s.qty, 0) AS in_stockroom,
               COALESCE((SELECT SUM(h.qty) FROM technician_holdings h WHERE h.stock_item_id = i.id), 0) AS with_technicians,
               i.min_qty, i.reorder_qty, i.photo_id, i.supplier_name, i.ordered_at, i.ordered_qty, i.ordered_note, i.selling_price_cents, i.category,
+              (SELECT COALESCE(SUM(k.qty), 0) FROM person_kit k WHERE k.stock_item_id = i.id AND k.status = 'issued')::float AS on_names,
               (SELECT json_build_object('at', m.created_at, 'kind', m.kind, 'qty', m.qty, 'jobNumber', j.job_number, 'store', st.name,
                                         'technician', u.full_name, 'vehicle', v.registration)
                  FROM stock_movements m LEFT JOIN jobs j ON j.id = m.job_id LEFT JOIN stores st ON st.id = j.store_id LEFT JOIN users u ON u.id = m.from_technician_id
@@ -438,7 +439,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
         supplierCode: r.supplier_code, inStockroom, withTechnicians: Number(r.with_technicians),
         minQty, reorderQty: r.reorder_qty == null ? null : Number(r.reorder_qty), photoId: r.photo_id, supplierName: r.supplier_name,
         belowMin: minQty > 0 && inStockroom < minQty, ordered: r.ordered_at ? { at: r.ordered_at, qty: Number(r.ordered_qty), note: r.ordered_note } : null,
-        sellingPriceCents: r.selling_price_cents, lastUsed: r.last_used, category: r.category,
+        sellingPriceCents: r.selling_price_cents, lastUsed: r.last_used, category: r.category, onNames: r.on_names,
       };
     });
   });

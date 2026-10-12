@@ -3,7 +3,7 @@
 export interface Upload { fields: Record<string, string>; fileUri: string; mime: string }
 
 export interface Request {
-  method: 'GET' | 'POST' | 'PATCH' | 'PUT';
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   path: string;
   json?: unknown;
   upload?: Upload;

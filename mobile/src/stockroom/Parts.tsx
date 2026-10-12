@@ -5,7 +5,7 @@ import { Image, Pressable, Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { nowIso, takePhoto } from '../device.ts';
 import { rememberPhoto, usePhotoUri } from '../photo.ts';
-import { Body, Button, Card, Field, Heading, Label, Notice, Pill, st } from '../ui.tsx';
+import { Body, Button, Card, Field, Heading, Label, Notice, Pill, st, Select } from '../ui.tsx';
 import { C } from '../theme.ts';
 import type { RoomItem } from './useStockroom.ts';
 
@@ -139,6 +139,12 @@ export function PartDetail({ it, done, reload }: { it: RoomItem; done: () => voi
         </View>
       </View>
       <Button label={it.photoId ? 'Replace the photo of the part' : 'Add a photo of the part'} kind="secondary" onPress={shoot} />
+      <Select label="Category" value={it.category ?? 'stock'} options={[{ value: 'stock', label: 'Stock (parts for jobs)' }, { value: 'tool', label: 'Tool (issued to a person)' }, { value: 'ppe', label: 'PPE (issued to a person)' }] as const}
+        onChange={async c => {
+          const r = await s.ask({ method: 'PATCH', path: `/stock/items/${it.id}`, json: { code: it.code, description: it.description, unit: it.unit, category: c } });
+          setMsg(r && r.status < 300 ? { tone: 'good', text: `Moved to ${c === 'stock' ? 'Stock' : c === 'tool' ? 'Tools' : 'PPE'}` } : { tone: 'bad', text: (r?.body as { reasons?: string[] })?.reasons?.join('; ') ?? 'No signal: try again' });
+          reload();
+        }} />
       <View style={{ flexDirection: 'row', gap: 10 }}>
         <Card style={{ flex: 1 }}><Label>Stockroom</Label><Text style={{ color: C.text, fontSize: 24, fontWeight: '800' }}>{n(it.inStockroom)}</Text></Card>
         <Card style={{ flex: 1 }}><Label>With techs</Label><Text style={{ color: C.text, fontSize: 24, fontWeight: '800' }}>{n(it.withTechnicians)}</Text></Card>

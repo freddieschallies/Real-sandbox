@@ -15,11 +15,14 @@ const STEPS: [string, string[]][] = [
     'Vehicle: tap the licence disc, choose Driving and do the handover inspection; tick a problem to see it reach the mechanic.',
     'On the vehicle card: Report a fault, or Release vehicle (km and where you left it).',
     'Queries: Zanele (the office) asked about an access card; answer her. Or send another technician a question.',
+    'My tools and PPE (on My day): what the stockroom has on his name.',
   ]],
   ['As stock controller (Lindiwe)', [
     'To issue: open Thabo\'s request, tick each item as you pick it, then issue it.',
     'To receive: count and tick what Thabo sent back.',
     'Stock: the whole inventory by item or technician; Live: every movement as it happens; Issued register.',
+    'Stock: three separate categories, Stock (parts for jobs), Tools and PPE. Technicians book only stock onto jobs. Change an item\'s category on the part screen.',
+    'Tools & PPE: everyone\'s list. Sipho\'s boots are due for replacement. Issue him gloves from stock, take something back (it goes back into stock), or write it off as lost or damaged with a note.',
     'To order: fills by itself as items drop below their minimum (fuses and contactors are low). Mark one as ordered; receiving the delivery takes it off.',
     'Open a part (Stock → the part → Open part): add a photo of it, set its minimum and supplier, and see where it was last used.',
     'Workshop: what the mechanic keeps and the minimums. Issue oil from the stockroom to the workshop, set which oil the daily checks use, take stock back.',
@@ -49,7 +52,9 @@ const STEPS: [string, string[]][] = [
   ]],
   ['As the CEO (Lilanie)', [
     'Everything: the office, plus Stockroom and Fleet tabs at the top to open those screens.',
-    'People: open a person; a dropdown sets their position, and a technician\'s trade (foodservice tech, plumber, electrician, assistant). Switch their work on or off, or send a technician a query.',
+    'People: open a person for their picture, the vehicle they are in, where they are, the job they are busy with and who with, contact details, and (CEO only) personal details. A dropdown sets their position and a technician\'s trade.',
+    'Staff record: on Ayanda\'s profile, add an issue or a warning (a warning needs the action taken and the reason). Delete one: it goes, but a line says who deleted a record and when. Give Zanele "Staff records (HR)" to let her do this too.',
+    'Tools and PPE: each profile shows what the stockroom has on that person\'s name.',
     'Today: jobs, flags, handovers to approve, daily checks, safety faults and stock on one screen. Flags and Handovers: resolve and approve.',
   ]],
 ];

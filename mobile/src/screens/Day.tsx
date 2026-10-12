@@ -95,6 +95,11 @@ export function Day() {
           <Text style={st.small}>{q.unread ? 'Someone is waiting for your answer.' : 'Ask another technician something, or answer a question.'}</Text>
         </Card>
 
+        <Card onPress={() => nav.push({ name: 'kit' })} accessibilityLabel="My tools and PPE">
+          <Text style={[st.body, { fontWeight: '800' }]}>My tools and PPE</Text>
+          <Text style={st.small}>What the stockroom has on your name.</Text>
+        </Card>
+
         {open.length ? (
           <Card onPress={() => nav.push({ name: 'flags' })} style={{ borderColor: C.warn }}>
             <Notice tone="warn" title={`${open.length} question${open.length > 1 ? 's' : ''} from the office`} lines={['Tap to answer. Your explanation goes to your supervisor.']} />
