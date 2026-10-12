@@ -34,6 +34,7 @@ export interface DemoState {
   fleetDuty?: Record<string, boolean>;
   workshop?: DemoWorkshopState;
   office?: DemoOfficeState;
+  queries?: { id: string; from: string; to: string; job_id: string | null; subject: string; created_at: string; read: Record<string, string>; messages: { id: string; from: string; body: string; at: string }[] }[];
 }
 
 const STORES = {
@@ -303,6 +304,68 @@ export class DemoTransport implements Transport {
     return null;
   }
 
+  private queries() {
+    if (!this.state.queries) {
+      const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
+      this.state.queries = [
+        { id: 'q-1', from: 'admin-1', to: 'me', job_id: 'job-10228', subject: 'Harbour Deli access card', created_at: ago(1), read: { 'admin-1': ago(1) },
+          messages: [{ id: 'qm-1', from: 'admin-1', body: 'Did you get the access card back from the Harbour Deli manager yesterday? They are asking for it.', at: ago(1) }] },
+        { id: 'q-2', from: 'me', to: 'tech-2', job_id: null, subject: 'Spare 25A contactor', created_at: ago(20), read: { me: ago(19), 'tech-2': ago(19) },
+          messages: [{ id: 'qm-2', from: 'me', body: 'Sipho, do you have a spare 25A contactor in your van?', at: ago(20) },
+                     { id: 'qm-3', from: 'tech-2', body: 'Yes, one. Meet me at the yard at 4.', at: ago(19) }] },
+      ];
+    }
+    return this.state.queries;
+  }
+
+  private queryRoute(p: string, req: Request, b: any): Response | null {
+    let m: RegExpMatchArray | null;
+    if (!(p === '/me/queries' || p.startsWith('/queries'))) return null;
+    const me = this.who.id;
+    const o = this.office();
+    const may = this.who.level === 'technician' || this.does('jobs') || this.who.level === 'creator';
+    const list = this.queries();
+    if (p === '/queries/people') return may ? ok(o.o.people.filter(x => x.login_level === 'technician' && x.id !== me).map(x => ({ id: x.id, full_name: x.full_name }))) : refuse(403, 'you cannot send queries');
+    if (p === '/me/queries') {
+      const out = list.filter(q => q.from === me || q.to === me).map(q => {
+        const readAt = q.read[me] ?? '';
+        const msgs = q.messages.map(x => ({ ...x, name: o.name(x.from) }));
+        const job = q.job_id ? this.findJob(q.job_id) : null;
+        return {
+          id: q.id, subject: q.subject, created_at: q.created_at, job_id: q.job_id, job_number: job?.meta.job_number ?? null,
+          from_user: q.from, from_name: o.name(q.from), to_user: q.to, to_name: o.name(q.to), messages: msgs,
+          unread: msgs.filter(x => x.from !== me && x.at > readAt).length, waitingForAnswer: msgs.at(-1)?.from === me, lastAt: msgs.at(-1)?.at ?? q.created_at,
+        };
+      }).sort((a, c) => c.lastAt.localeCompare(a.lastAt));
+      return ok({ queries: out, unread: out.reduce((n, q) => n + q.unread, 0) });
+    }
+    const now = new Date().toISOString();
+    if (p === '/queries' && req.method === 'POST') {
+      if (!may) return refuse(403, 'you cannot send queries');
+      const to = o.o.people.find(x => x.id === b.toUserId && x.login_level === 'technician');
+      const missing = [!to ? 'which technician' : null, !b.subject || b.subject.trim().length < 3 ? 'what it is about' : null, !b.body || b.body.trim().length < 2 ? 'the question' : null].filter(Boolean) as string[];
+      if (b.toUserId === me) return refuse(400, 'you cannot send a query to yourself');
+      if (missing.length) return refuse(400, ...missing);
+      const q = { id: id('q'), from: me, to: b.toUserId, job_id: b.jobId ?? null, subject: b.subject.trim(), created_at: now, read: { [me]: now }, messages: [{ id: id('qm'), from: me, body: b.body.trim(), at: now }] };
+      list.unshift(q);
+      this.persist(this.state);
+      return ok({ id: q.id }, 201);
+    }
+    if ((m = p.match(/^\/queries\/([^/]+)\/(messages|read)$/))) {
+      const q = list.find(x => x.id === m![1]);
+      if (!q) return refuse(404, 'no such query');
+      if (q.from !== me && q.to !== me) return refuse(403, 'not your query');
+      if (m[2] === 'messages') {
+        if (!b.body || !b.body.trim()) return refuse(400, 'the answer');
+        q.messages.push({ id: id('qm'), from: me, body: b.body.trim(), at: now });
+      }
+      q.read[me] = new Date(Date.now() + 1).toISOString();
+      this.persist(this.state);
+      return ok({ id: q.id }, m[2] === 'messages' ? 201 : 200);
+    }
+    return null;
+  }
+
   private logChange(jobId: string, field: string, oldV: string | null, newV: string | null, reason: string | null) {
     const o = this.state.office!;
     (o.jobChanges ??= []).push({ jobId, changed_at: new Date().toISOString(), by: this.who.name, field, old_value: oldV, new_value: newV, reason });
@@ -396,6 +459,8 @@ export class DemoTransport implements Transport {
     if (p === '/policy/current') return ok({ id: 'policy-1', version: '1.0', body: DEMO_POLICY });
     if (p === '/policy/acknowledge') { this.state.acknowledged = true; this.persist(this.state); return ok({ ok: true }); }
     if (!this.state.acknowledged) return { status: 403, body: { error: 'acknowledge the monitoring policy first', code: 'policy_required' } };
+    const qr = this.queryRoute(p, req, b);
+    if (qr) return qr;
     const off = this.officeRoute(p, req, b);
     if (off) return off;
 

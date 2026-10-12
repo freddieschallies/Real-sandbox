@@ -14,6 +14,7 @@ const STEPS: [string, string[]][] = [
     'My stock: scan a supplier invoice (any photo) and confirm the lines it reads; return the contactor that must go back.',
     'Vehicle: tap the licence disc, choose Driving and do the handover inspection; tick a problem to see it reach the mechanic.',
     'On the vehicle card: Report a fault, or Release vehicle (km and where you left it).',
+    'Queries: Zanele (the office) asked about an access card; answer her. Or send another technician a question.',
   ]],
   ['As stock controller (Lindiwe)', [
     'To issue: open Thabo\'s request, tick each item as you pick it, then issue it.',
@@ -36,6 +37,7 @@ const STEPS: [string, string[]][] = [
   ['As the office admin (Zanele)', [
     'She only sees the work the CEO switched on for her. By default: jobs and stores (quotes and invoices come next).',
     'Jobs: open a job for any technician (Thabo sees it on his phone at once), edit anything on it (every change is written on the job and the technician is told), move it, or cancel it.',
+    'Queries: send any technician a question (switch to Tech to see it on Thabo\'s My day and answer it).',
     'Stores: add a store by pasting its point from Google Maps.',
     'Ask the CEO to give her the stockroom: a Stockroom tab appears at the top and she has the stock controller\'s full screens.',
   ]],

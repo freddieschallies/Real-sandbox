@@ -9,11 +9,12 @@ import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, st } f
 import { C, S } from '../theme.ts';
 import { TITLE as FLAG_TITLE } from '../screens/Flags.tsx';
 import type { CardView } from '../types.ts';
+import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries.tsx';
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 
 const K = { band: '#121212', bandText: '#F7F3EC', stripe: '#E8701A' };
-type Tab = 'today' | 'jobs' | 'flags' | 'handovers' | 'people' | 'stores';
-type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | null;
+type Tab = 'today' | 'jobs' | 'queries' | 'flags' | 'handovers' | 'people' | 'stores';
+type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery' } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
   cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
@@ -36,6 +37,7 @@ export function OfficeApp() {
   const ins = useSafeAreaInsets();
   const wide = useWindowDimensions().width >= 900;
   const o = useOffice();
+  const qs = useQueries();
   const [tab, setTab] = useState<Tab>('today');
   const [sel, setSel] = useState<Sel>(null);
   const ov = o.d.overview;
@@ -48,6 +50,7 @@ export function OfficeApp() {
   const tabs: { key: Tab; label: string; short?: string; count?: number }[] = [
     { key: 'today', label: 'Today' },
     { key: 'jobs', label: 'Jobs', count: ov ? ov.jobs.carried_over + ov.jobs.urgent : undefined },
+    ...(does('jobs') ? [{ key: 'queries' as Tab, label: 'Queries', count: qs.unread }] : []),
     ...(does('flags') ? [
       { key: 'flags' as Tab, label: 'Flags', count: ov?.flags?.unresolved },
       { key: 'handovers' as Tab, label: 'Handovers', short: 'Approve', count: ov?.handoversAwaitingApproval },
@@ -60,6 +63,7 @@ export function OfficeApp() {
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 40 }}>
       {tab === 'today' ? <TodayView o={o} go={go} flags={does('flags')} /> : null}
       {tab === 'jobs' ? <JobList o={o} open={id => setSel({ kind: 'job', id })} add={does('jobs') ? () => setSel({ kind: 'newjob' }) : undefined} selected={sel?.kind === 'job' ? sel.id : null} /> : null}
+      {tab === 'queries' ? <QueryList q={qs} open={id => setSel({ kind: 'query', id })} ask={() => setSel({ kind: 'newquery' })} /> : null}
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
       {tab === 'handovers' ? <HandoverList o={o} open={id => setSel({ kind: 'handover', id })} /> : null}
       {tab === 'people' ? <PeopleList o={o} open={id => setSel({ kind: 'person', id })} /> : null}
@@ -75,6 +79,8 @@ export function OfficeApp() {
     const wrap = (el: React.ReactNode) => <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60, maxWidth: 820 }}>{el}</ScrollView>;
     if (sel.kind === 'job') return wrap(<JobDetail key={sel.id} id={sel.id} o={o} canEdit={does('jobs')} />);
     if (sel.kind === 'newjob') return wrap(<NewJob o={o} done={id => setSel(id ? { kind: 'job', id } : null)} />);
+    if (sel.kind === 'query') return wrap(<QueryThread key={sel.id} q={qs} id={sel.id} />);
+    if (sel.kind === 'newquery') return wrap(<NewQuery q={qs} jobs={o.d.jobs.filter(j => j.status !== 'closed' && j.status !== 'cancelled').map(j => ({ id: j.id, label: `#${j.job_number} ${j.store}` }))} done={() => setSel(null)} />);
     if (sel.kind === 'flag') return wrap(<FlagDetail key={sel.id} id={sel.id} o={o} done={close} />);
     if (sel.kind === 'handover') return wrap(<HandoverDetail key={sel.id} id={sel.id} o={o} done={close} />);
     if (sel.kind === 'person') return wrap(<PersonDetail key={sel.id} id={sel.id} o={o} />);

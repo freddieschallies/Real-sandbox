@@ -6,6 +6,7 @@ import { useStore } from '../state.tsx';
 import { useNav } from '../nav.tsx';
 import { Body, Button, Card, Label, Notice, Pill, Toggle, st } from '../ui.tsx';
 import { SyncPill } from './SyncPill.tsx';
+import { useQueries } from '../queries/Queries.tsx';
 import { C, S } from '../theme.ts';
 import type { TodayJob } from '../types.ts';
 
@@ -23,6 +24,7 @@ const rank = (j: TodayJob) => (j.status === 'closed' ? 9 : j.status === 'in_prog
 export function Day() {
   const s = useStore();
   const nav = useNav();
+  const q = useQueries();
   const ins = useSafeAreaInsets();
   const [pulling, setPulling] = useState(false);
   useEffect(() => { s.refresh(); }, []);
@@ -83,6 +85,14 @@ export function Day() {
           {t?.vehicle?.handover_status === 'rejected' ? (
             <Text style={[st.small, { color: C.bad }]}>Handover rejected – speak to your supervisor</Text>
           ) : null}
+        </Card>
+
+        <Card onPress={() => nav.push({ name: 'queries' })} accessibilityLabel="Queries" style={q.unread ? { borderColor: C.accent, borderWidth: 2 } : undefined}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>Queries</Text>
+            {q.unread ? <Pill text={`${q.unread} new`} tone="warn" /> : null}
+          </View>
+          <Text style={st.small}>{q.unread ? 'Someone is waiting for your answer.' : 'Ask another technician something, or answer a question.'}</Text>
         </Card>
 
         {open.length ? (
