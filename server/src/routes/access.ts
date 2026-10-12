@@ -114,7 +114,10 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
   // The position decides which app opens on their phone and what they may do by default.
   app.get('/access/positions', async req => {
     guard(req);
-    const { rows } = await req.db.query("SELECT id, full_name, login_level, department_id FROM users WHERE status <> 'left' ORDER BY full_name");
+    const { rows } = await req.db.query(
+      `SELECT u.id, u.full_name, u.login_level, u.department_id,
+              u.login_level = 'mechanic' OR EXISTS (SELECT 1 FROM access_overrides o WHERE o.user_id = u.id AND o.action = 'manage_fleet' AND o.effect = 'grant') AS does_fleet
+         FROM users u WHERE u.status <> 'left' ORDER BY u.full_name`);
     return { positions: LEVELS.map(l => ({ level: l, label: POSITION_LABEL[l] })), people: rows.map(r => ({ ...r, position: POSITION_LABEL[r.login_level as LoginLevel] })) };
   });
 
@@ -136,6 +139,25 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
       await audit(c, req.actor.id, 'position_changed', 'user', userId, { from: u.login_level, to: b.position });
       await notify(c, userId, 'position_changed', `Your position is now ${POSITION_LABEL[b.position]}. Open the app again to see your screens.`, { position: b.position });
       return { userId, position: b.position, label: POSITION_LABEL[b.position] };
+    });
+  });
+
+  // Small companies have no mechanic of their own: the CEO can give the mechanic's work to as many
+  // people as he likes, on top of their own position (an Admin who also looks after the vehicles).
+  app.put('/access/users/:id/fleet-duty', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    guard(req);
+    const userId = parse(Uuid, req.params.id);
+    const b = parse(z.object({ on: z.boolean() }), req.body);
+    return tx(req.db, async c => {
+      const u = (await c.query("SELECT full_name, login_level FROM users WHERE id = $1 AND status <> 'left'", [userId])).rows[0];
+      if (!u) throw new Refused(404, ['no such user']);
+      if (u.login_level === 'mechanic') throw new Refused(409, [b.on ? 'already a mechanic' : 'a mechanic by position: change the position instead']);
+      for (const action of ['view_fleet', 'manage_fleet'] as Action[]) await writeOverride(c, { userId }, action, { effect: b.on ? 'grant' : 'default', departmentIds: [] }, req.actor.id);
+      const change = b.on ? `${POSITION_LABEL[u.login_level as LoginLevel]} + mechanic` : `${POSITION_LABEL[u.login_level as LoginLevel]}, no longer mechanic`;
+      await c.query('INSERT INTO access_changes (changed_by, user_id, action, change) VALUES ($1, $2, $3, $4)', [req.actor.id, userId, 'fleet_duty', change]);
+      await audit(c, req.actor.id, 'fleet_duty', 'user', userId, { on: b.on });
+      await notify(c, userId, 'position_changed', b.on ? 'You now also do the mechanic\'s work: open the app again to see the Fleet screens.' : 'You no longer do the mechanic\'s work.', { fleetDuty: b.on });
+      return { userId, fleetDuty: b.on, change };
     });
   });
 

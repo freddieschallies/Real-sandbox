@@ -28,6 +28,8 @@ export interface DemoState {
   fleet?: DemoFleetState;
   who?: { id: string; name: string; level: string };
   fuel: { litres: number; at: string }[];
+  /** People given the mechanic's work on top of their own position (by the CEO). */
+  fleetDuty?: Record<string, boolean>;
 }
 
 const STORES = {
@@ -147,8 +149,15 @@ export class DemoTransport implements Transport {
     return code.trim().length >= 3;
   }
 
+  private thaboIn() {
+    const v = this.state.vehicle;
+    return v ? { vehicle_id: v.id, mode: v.mode } : null;
+  }
+
   private fleet(): DemoFleet {
-    return new DemoFleet(this.state.fleet ?? (this.state.fleet = seedFleet()));
+    const fl = this.state.fleet ?? (this.state.fleet = seedFleet());
+    if (!fl.bookings) { const fresh = seedFleet(); Object.assign(fl, { bookings: fresh.bookings, spots: fresh.spots, crew: fresh.crew }); }
+    return new DemoFleet(fl);
   }
 
   private fleetResult(r: { ok: true; body: unknown; status?: number } | { ok: false; status: number; reasons: string[] }): Response {
@@ -201,6 +210,13 @@ export class DemoTransport implements Transport {
     if (p === '/policy/acknowledge') { this.state.acknowledged = true; this.persist(this.state); return ok({ ok: true }); }
     if (!this.state.acknowledged) return { status: 403, body: { error: 'acknowledge the monitoring policy first', code: 'policy_required' } };
 
+    if (p === '/me') return ok({ id: this.who.id, full_name: this.who.name, login_level: this.who.level, fleetDuty: !!this.state.fleetDuty?.[this.who.id] });
+    if ((m = p.match(/^\/access\/users\/([^/]+)\/fleet-duty$/))) {
+      // The CEO's switch; in the test build anyone may flip it.
+      this.state.fleetDuty = { ...this.state.fleetDuty, [m[1]]: !!b.on };
+      this.persist(this.state);
+      return ok({ userId: m[1], fleetDuty: !!b.on });
+    }
     if (p === '/me/today') {
       const jobs: TodayJob[] = this.state.jobs.map(j => ({
         id: j.meta.id, job_number: j.meta.job_number, job_type: j.meta.job_type, priority: j.meta.priority as TodayJob['priority'],
@@ -209,7 +225,8 @@ export class DemoTransport implements Transport {
         planned_return: j.card.status === 'continue_later' ? today() : null,
         carried_over: j.meta.scheduled_date < today() && j.card.status !== 'closed',
       }));
-      return ok({ date: today(), jobs, vehicle: this.state.vehicle, flagsToAnswer: this.state.flags.filter(f => f.status === 'open').length, unreadNotices: 0 });
+      const vehicle = this.state.vehicle ? { ...this.state.vehicle, booking: this.fleet().nextBooking(this.state.vehicle.id) } : null;
+      return ok({ date: today(), jobs, vehicle, flagsToAnswer: this.state.flags.filter(f => f.status === 'open').length, unreadNotices: 0 });
     }
     if (p === '/me/stock') return ok(this.stock().totals());
     if (p === '/me/inventory') { const r = this.stock().inventory(); this.persist(this.state); return ok(r); }
@@ -291,10 +308,10 @@ export class DemoTransport implements Transport {
         const missing = [b.km === undefined ? 'odometer reading (km)' : null, !b.place ? 'where you left the vehicle' : null].filter(Boolean) as string[];
         if (missing.length) return refuse(409, ...missing);
         if (b.place === 'home') return refuse(409, 'you are not approved to take a vehicle home: leave it at the office yard');
-        const last = this.fleet().latestKm('veh-1');
+        const last = this.fleet().latestKm(v.id);
         if (last != null && b.km < last) return refuse(409, `odometer cannot be lower than the last reading (${last} km)`);
-        this.fleet().s.km.unshift({ vehicle_id: 'veh-1', km: b.km, read_at: new Date().toISOString(), source: 'release', by: 'Thabo Mkhize' });
-        delete this.fleet().s.drivers['veh-1'];
+        this.fleet().s.km.unshift({ vehicle_id: v.id, km: b.km, read_at: new Date().toISOString(), source: 'release', by: 'Thabo Mkhize' });
+        delete this.fleet().s.drivers[v.id];
       }
       this.state.vehicle = null;
       this.persist(this.state);
@@ -312,7 +329,29 @@ export class DemoTransport implements Transport {
 
     // Fleet (mechanic). Technicians may report faults; the rest is the mechanic's.
     if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/faults$/))) return this.fleetResult(this.fleet().reportFault(m[1], b, this.who.name, this.who.level === 'mechanic'));
-    if (p.startsWith('/fleet') && this.who.level !== 'mechanic') return refuse(403, 'mechanic only');
+    if (p.startsWith('/fleet') && this.who.level !== 'mechanic' && !this.state.fleetDuty?.[this.who.id]) return refuse(403, 'mechanic only');
+    if (p === '/fleet/bookings') return ok(this.fleet().bookings());
+    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/bookings$/))) return this.fleetResult(this.fleet().book(m[1], b));
+    if ((m = p.match(/^\/fleet\/bookings\/([^/]+)\/move$/))) return this.fleetResult(this.fleet().move(m[1], b));
+    if ((m = p.match(/^\/fleet\/bookings\/([^/]+)\/cancel$/))) return this.fleetResult(this.fleet().cancel(m[1], b.note));
+    if (p === '/fleet/positions') { const r = this.fleet().positions(); this.persist(this.state); return ok(r); }
+    if (p === '/fleet/technicians') return ok(this.fleet().technicians(this.thaboIn()));
+    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/assign$/))) {
+      const r = this.fleet().assign(m[1], b);
+      if (r.ok) {
+        const reg = this.fleet().s.vehicles.find(v => v.id === m![1])!.registration;
+        if (b.technicianId === 'me') this.state.vehicle = { id: m[1], registration: reg, mode: b.mode, dropped_off_at: null, handover_status: null, assigned_by_mechanic: true };
+        else if (r.tookFrom?.includes('me') || (this.state.vehicle?.id === m[1] && b.mode === 'driving' && this.state.vehicle.mode === 'driving')) this.state.vehicle = null;
+        if (b.technicianId === 'me' && m[1] === 'veh-1' && b.mode === 'driving') this.state.van = { ...this.van(), lastDriverMe: true };
+      }
+      return this.fleetResult(r);
+    }
+    if ((m = p.match(/^\/fleet\/technicians\/([^/]+)\/release$/))) {
+      const t = this.fleet().technicians(this.thaboIn()).find(x => x.id === m![1]);
+      const r = this.fleet().releaseFor(m[1], t?.vehicle_id ? { vehicle_id: t.vehicle_id, mode: t.mode! } : null, b);
+      if (r.ok && m[1] === 'me') this.state.vehicle = null;
+      return this.fleetResult(r);
+    }
     if (p === '/fleet') return ok(this.fleet().list());
     if (p === '/fleet/faults') return ok(this.fleet().openFaults());
     if (p === '/fleet/jobs') return ok(this.fleet().jobsList(new URLSearchParams(req.path.split('?')[1] ?? '').get('status') ?? 'open'));

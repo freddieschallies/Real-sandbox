@@ -23,7 +23,17 @@ export function TesterBar() {
     await s.signIn('demo', '', who, 'demo');
     setBusy(false);
   };
+  const duty = !!s.session?.user.fleetDuty;
+  const toggleDuty = async () => {
+    if (busy) return;
+    setBusy(true);
+    // What the CEO does for a small company with no mechanic of its own.
+    await s.ask({ method: 'PUT', path: `/access/users/${s.session?.user.id}/fleet-duty`, json: { on: !duty } });
+    await s.refresh();
+    setBusy(false);
+  };
   return (
+    <View>
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#0B0C0E', borderBottomWidth: 1, borderBottomColor: C.line, flexWrap: 'nowrap' }}>
       <Text style={{ color: C.quiet, fontSize: 12, fontWeight: '700', marginRight: 4 }}>VIEW AS</Text>
       {ROLES.map(r => {
@@ -39,6 +49,16 @@ export function TesterBar() {
       <Pressable onPress={() => s.signOut()} accessibilityRole="button" accessibilityLabel="Back to the test guide" style={{ paddingHorizontal: 8, paddingVertical: 6 }}>
         <Text style={{ color: C.quiet, fontSize: 13, textDecorationLine: 'underline' }}>Guide</Text>
       </Pressable>
+    </View>
+    {current === 'stockroom' ? (
+      <Pressable onPress={toggleDuty} accessibilityRole="switch" accessibilityState={{ checked: duty }} accessibilityLabel="Lindiwe also does the mechanic's work"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#0B0C0E', borderBottomWidth: 1, borderBottomColor: C.line, opacity: busy ? 0.5 : 1 }}>
+        <View style={{ width: 34, height: 20, borderRadius: 10, backgroundColor: duty ? C.good : C.panel2, justifyContent: 'center', paddingHorizontal: 2 }}>
+          <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: '#FFF', alignSelf: duty ? 'flex-end' : 'flex-start' }} />
+        </View>
+        <Text style={{ color: C.quiet, fontSize: 12, flex: 1 }}>Small company, no mechanic: the CEO also gives Lindiwe the mechanic's work</Text>
+      </Pressable>
+    ) : null}
     </View>
   );
 }

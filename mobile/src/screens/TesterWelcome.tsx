@@ -19,12 +19,16 @@ const STEPS: [string, string[]][] = [
     'To issue: open Thabo\'s request, tick each item as you pick it, then issue it.',
     'To receive: count and tick what Thabo sent back.',
     'Stock: the whole inventory by item or technician; Live: every movement as it happens; Issued register.',
+    'Small company with no mechanic? Turn on the switch under the top bar: the CEO gives Lindiwe the mechanic\'s work too, and she switches between "My work" and "Fleet".',
   ]],
   ['As mechanic (Bongani)', [
     'Vehicles: five vans; one in the workshop, one off the road, one with an expired licence disc.',
     'Faults: Thabo\'s reports and handover problems land here, worst first.',
     'Open ND 412-778, start a job card for the windscreen crack, fill it in and complete it.',
     'Take ND 412-778 off the road (Status), then sign in as Thabo and try to drive it: it is refused.',
+    'Map: where every vehicle is (moving, parked, no signal). Tap a vehicle for the driver and "Open in Maps".',
+    'Bookings: book a vehicle in for a service or repair (driver is told), move or cancel it, and open the job card when it arrives.',
+    'Techs: Thabo\'s phone is broken, so put him in a vehicle yourself (or take it off his name). Switch to Tech to see it on his My day.',
   ]],
 ];
 
@@ -36,7 +40,7 @@ export function TesterWelcome() {
   return (
     <Screen title="Real Sandbox" sub="Test drive · ZSP job cards and stock">
       <View style={{ gap: 6 }}>
-        <Text style={{ color: C.accent, fontSize: 28, fontWeight: '800' }}>Try it as either person</Text>
+        <Text style={{ color: C.accent, fontSize: 28, fontWeight: '800' }}>Try it as any of the three</Text>
         <Body quiet>Everything here is made up and stays in this browser. Once in, the bar at the top switches between the three apps; what one does, the others see. (The real app only shows each person their own.)</Body>
       </View>
       <Button label="Open as technician" onPress={() => go('demo')} busy={busy === 'demo'} />

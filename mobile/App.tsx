@@ -1,7 +1,7 @@
 import React from 'react';
-import { ActivityIndicator, Platform, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, Text, View, useWindowDimensions } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StoreProvider, useStore } from './src/state.tsx';
 import { NavProvider, useNav } from './src/nav.tsx';
 import { Login } from './src/screens/Login.tsx';
@@ -60,6 +60,30 @@ function Root() {
   return <NavProvider key={s.session.user.id}><Current /></NavProvider>;
 }
 
+/** Someone given the mechanic's work on top of their own position switches between the two here. */
+const FleetView = React.createContext<{ on: boolean; set: (v: boolean) => void }>({ on: false, set: () => undefined });
+
+function Switchable() {
+  const s = useStore();
+  const fv = React.useContext(FleetView);
+  const ins = useSafeAreaInsets();
+  const duty = !!s.session?.user.fleetDuty && s.session.user.level !== 'mechanic' && !s.needsPolicy;
+  if (!duty) return <Root />;
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={{ flexDirection: 'row', gap: 6, padding: 6, paddingTop: 6 + (TESTER ? 0 : ins.top), backgroundColor: '#0E1A2B', borderBottomWidth: 1, borderBottomColor: C.line }}>
+        {[{ k: false, label: 'My work' }, { k: true, label: 'Fleet (mechanic)' }].map(o => (
+          <Pressable key={o.label} onPress={() => fv.set(o.k)} accessibilityRole="tab" accessibilityState={{ selected: fv.on === o.k }}
+            style={{ flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 8, backgroundColor: fv.on === o.k ? '#2E4A73' : 'transparent' }}>
+            <Text style={{ color: fv.on === o.k ? '#EAF1FB' : C.quiet, fontWeight: '800' }}>{o.label}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <View style={{ flex: 1 }}>{fv.on ? <NavProvider key={`fleet-${s.session!.user.id}`}><FleetApp /></NavProvider> : <Root />}</View>
+    </View>
+  );
+}
+
 /** Test build only: the bar to switch between the three apps, shown once someone is in. */
 function TesterBarSlot() {
   const s = useStore();
@@ -73,7 +97,8 @@ const TESTER = process.env.EXPO_PUBLIC_TESTER === '1';
 function Frame({ children }: { children: React.ReactNode }) {
   const s = useStore();
   const { width } = useWindowDimensions();
-  const narrow = Platform.OS === 'web' && width > 640 && !['stockroom', 'mechanic'].includes(s.session?.user.level ?? '');
+  const fv = React.useContext(FleetView);
+  const narrow = Platform.OS === 'web' && width > 640 && !['stockroom', 'mechanic'].includes(s.session?.user.level ?? '') && !(fv.on && s.session?.user.fleetDuty);
   if (!narrow) return <>{children}</>;
   return (
     <View style={{ flex: 1, alignItems: 'center', backgroundColor: '#101214' }}>
@@ -88,10 +113,15 @@ export default function App() {
       <StoreProvider>
         <View style={{ flex: 1, backgroundColor: C.bg }}>
           {TESTER ? <TesterBarSlot /> : null}
-          <Frame><Root /></Frame>
+          <FleetViewProvider><Frame><Switchable /></Frame></FleetViewProvider>
         </View>
         <StatusBar style="light" />
       </StoreProvider>
     </SafeAreaProvider>
   );
+}
+
+function FleetViewProvider({ children }: { children: React.ReactNode }) {
+  const [on, set] = React.useState(false);
+  return <FleetView.Provider value={{ on, set }}>{children}</FleetView.Provider>;
 }

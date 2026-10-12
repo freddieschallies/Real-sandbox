@@ -11,20 +11,12 @@ import { SyncPill } from '../screens/SyncPill.tsx';
 import { C, S } from '../theme.ts';
 import { useFleet, type Shot } from './useFleet.ts';
 import type { Fault, FleetJob, FleetVehicle } from './types.ts';
+import { DUE, K, SEV, STATUS, TYPE_LABEL, dayName, km, today, when, SLOT_LABEL } from './common.ts';
+import { AssignScreen, BookingScreen, BookingsList, FleetMap, NewBooking, TechList } from './FleetExtra.tsx';
 
-const K = { band: '#2E4A73', bandText: '#EAF1FB' };
-type Tab = 'vehicles' | 'faults' | 'jobs' | 'due';
-type Sel = { kind: 'vehicle'; id: string } | { kind: 'job'; id: string } | { kind: 'newjob'; vehicleId: string } | { kind: 'report'; vehicleId: string };
-
-const STATUS: Record<F.VehicleStatus, { text: string; tone: 'good' | 'warn' | 'bad' }> = {
-  in_service: { text: 'In service', tone: 'good' }, workshop: { text: 'In workshop', tone: 'warn' }, off_road: { text: 'Off the road', tone: 'bad' },
-};
-const SEV: Record<F.FaultSeverity, 'bad' | 'warn' | 'quiet'> = { safety: 'bad', urgent: 'warn', normal: 'quiet' };
-const DUE: Record<F.Due['state'], 'good' | 'warn' | 'bad' | 'quiet'> = { ok: 'good', soon: 'warn', overdue: 'bad', unknown: 'quiet' };
-const TYPE_LABEL: Record<F.FleetJobType, string> = { service: 'Service', repair: 'Repair', tyres: 'Tyres', brakes: 'Brakes', electrical: 'Electrical', roadworthy: 'Roadworthy', breakdown: 'Breakdown', other: 'Other' };
-const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-const km = (n: number | null | undefined) => (n == null ? '–' : `${n.toLocaleString('en-ZA')} km`);
-const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+type Tab = 'vehicles' | 'map' | 'bookings' | 'faults' | 'jobs' | 'techs';
+export type Sel = { kind: 'vehicle'; id: string } | { kind: 'job'; id: string } | { kind: 'newjob'; vehicleId: string; bookingId?: string } | { kind: 'report'; vehicleId: string }
+  | { kind: 'booking'; id: string } | { kind: 'newbooking'; vehicleId?: string } | { kind: 'assign'; techId?: string; vehicleId?: string };
 
 export function FleetApp() {
   const s = useStore();
@@ -35,16 +27,19 @@ export function FleetApp() {
   const [tab, setTab] = useState<Tab>('vehicles');
   const [stack, setStack] = useState<Sel[]>([]);
   const sel = stack.at(-1) ?? null;
-  const open = (x: Sel) => setStack(st0 => (wide && (x.kind === 'vehicle') ? [x] : [...st0, x]));
+  const open = (x: Sel) => setStack(st0 => (wide && (x.kind === 'vehicle' || x.kind === 'booking' || (x.kind === 'assign' && !!x.techId && tab === 'techs')) ? [x] : [...st0, x]));
   const back = () => setStack(st0 => st0.slice(0, -1));
   const v = f.d.vehicles;
   const due = v.filter(x => x.serviceDue.state === 'overdue' || x.serviceDue.state === 'soon' || x.licenceDue.state === 'overdue' || x.licenceDue.state === 'soon');
 
+  const booked = new Set(f.d.bookings.filter(b => b.status === 'booked').map(b => b.vehicle_id));
   const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: 'vehicles', label: 'Vehicles' },
+    { key: 'map', label: 'Map' },
+    { key: 'bookings', label: 'Bookings', count: due.filter(x => !booked.has(x.id)).length },
     { key: 'faults', label: 'Faults', count: f.d.faults.filter(x => x.status === 'open').length },
-    { key: 'jobs', label: 'Job cards', count: f.d.jobs.length },
-    { key: 'due', label: 'Due', count: due.length },
+    { key: 'jobs', label: 'Jobs', count: f.d.jobs.length },
+    { key: 'techs', label: 'Techs' },
   ];
 
   const list = (
@@ -52,7 +47,9 @@ export function FleetApp() {
       {tab === 'vehicles' ? <VehicleList vehicles={v} open={id => open({ kind: 'vehicle', id })} /> : null}
       {tab === 'faults' ? <FaultList faults={f.d.faults} open={id => open({ kind: 'vehicle', id })} /> : null}
       {tab === 'jobs' ? <JobList jobs={f.d.jobs} open={id => open({ kind: 'job', id })} /> : null}
-      {tab === 'due' ? <DueList vehicles={due} open={id => open({ kind: 'vehicle', id })} /> : null}
+      {tab === 'map' ? <FleetMap f={f} open={open} /> : null}
+      {tab === 'bookings' ? <BookingsList f={f} due={due.filter(x => !booked.has(x.id))} open={open} /> : null}
+      {tab === 'techs' ? <TechList f={f} open={open} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} disabled={s.waiting > 0} /> : null}
       <Text style={st.small}>{f.d.loadedAt ? `Updated ${when(f.d.loadedAt)}` : f.loading ? 'Loading…' : 'Needs signal to load.'}</Text>
     </ScrollView>
@@ -62,7 +59,10 @@ export function FleetApp() {
     if (!sel) return null;
     if (sel.kind === 'vehicle') return <VehicleScreen key={sel.id} id={sel.id} f={f} open={open} />;
     if (sel.kind === 'job') { const j = f.d.jobs.find(x => x.id === sel.id); return j ? <JobScreen key={j.id} j={j} f={f} done={back} /> : <Body quiet>Job card completed.</Body>; }
-    if (sel.kind === 'newjob') return <NewJob key={sel.vehicleId} vehicleId={sel.vehicleId} f={f} done={back} />;
+    if (sel.kind === 'newjob') return <NewJob key={sel.vehicleId} vehicleId={sel.vehicleId} bookingId={sel.bookingId} f={f} done={back} />;
+    if (sel.kind === 'booking') return <BookingScreen key={sel.id} id={sel.id} f={f} open={open} done={back} />;
+    if (sel.kind === 'newbooking') return <NewBooking key={sel.vehicleId ?? 'any'} vehicleId={sel.vehicleId} f={f} done={back} />;
+    if (sel.kind === 'assign') return <AssignScreen key={`${sel.techId}-${sel.vehicleId}`} techId={sel.techId} vehicleId={sel.vehicleId} f={f} done={back} />;
     return <ReportFault key={sel.vehicleId} vehicleId={sel.vehicleId} f={f} done={back} />;
   })();
 
@@ -99,7 +99,7 @@ export function FleetApp() {
             ))}
           </View>
           <View style={{ width: 420, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
-          <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose a vehicle or job card.</Body></View>}</View>
+          <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose a vehicle, booking or technician.</Body></View>}</View>
         </View>
       </View>
     );
@@ -112,8 +112,8 @@ export function FleetApp() {
         <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: C.line, paddingBottom: ins.bottom, backgroundColor: C.panel }}>
           {tabs.map(t => (
             <Pressable key={t.key} onPress={() => setTab(t.key)} accessibilityRole="tab" accessibilityState={{ selected: tab === t.key }}
-              style={{ flex: 1, alignItems: 'center', paddingVertical: 10, minHeight: 56, borderTopWidth: 3, borderTopColor: tab === t.key ? K.band : 'transparent' }}>
-              <Text style={{ color: tab === t.key ? C.text : C.quiet, fontWeight: '700', fontSize: 13 }}>{t.label}</Text>
+              style={{ flex: 1, alignItems: 'center', paddingVertical: 10, paddingHorizontal: 2, minHeight: 56, borderTopWidth: 3, borderTopColor: tab === t.key ? K.band : 'transparent' }}>
+              <Text numberOfLines={1} style={{ color: tab === t.key ? C.text : C.quiet, fontWeight: '700', fontSize: 12 }}>{t.label}</Text>
               {t.count ? <Text style={{ color: C.warn, fontWeight: '800' }}>{t.count}</Text> : null}
             </Pressable>
           ))}
@@ -195,17 +195,6 @@ function JobList({ jobs, open }: { jobs: FleetJob[]; open: (id: string) => void 
   ))}</>;
 }
 
-function DueList({ vehicles, open }: { vehicles: FleetVehicle[]; open: (id: string) => void }) {
-  if (!vehicles.length) return <Body quiet>Nothing due in the next two weeks.</Body>;
-  return <>{vehicles.map(x => (
-    <Card key={x.id} onPress={() => open(x.id)} accessibilityLabel={`Due ${x.registration}`}>
-      <Text style={[st.body, { fontWeight: '800' }]}>{x.registration} <Text style={st.small}>{[x.make, x.model].filter(Boolean).join(' ')}</Text></Text>
-      {x.serviceDue.state !== 'ok' ? <Text style={[st.body, { color: x.serviceDue.state === 'overdue' ? C.bad : x.serviceDue.state === 'soon' ? C.warn : C.quiet }]}>{x.serviceDue.text}</Text> : null}
-      {x.licenceDue.state !== 'ok' ? <Text style={[st.body, { color: x.licenceDue.state === 'overdue' ? C.bad : x.licenceDue.state === 'soon' ? C.warn : C.quiet }]}>{x.licenceDue.text}</Text> : null}
-    </Card>
-  ))}</>;
-}
-
 // ---- One vehicle ---------------------------------------------------------------------------
 
 function VehicleScreen({ id, f, open }: { id: string; f: FleetHook; open: (s: Sel) => void }) {
@@ -216,6 +205,7 @@ function VehicleScreen({ id, f, open }: { id: string; f: FleetHook; open: (s: Se
   if (!d || !sum) return <ScrollView contentContainerStyle={{ padding: S.pad }}><Body quiet>{sum ? 'Loading…' : 'Not found.'}</Body></ScrollView>;
   const v = d.vehicle;
   const openFaults = d.faults.filter(x => x.status === 'open' || x.status === 'in_progress');
+  const booking = f.d.bookings.find(b => b.vehicle_id === id && b.status === 'booked');
   return (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -232,13 +222,22 @@ function VehicleScreen({ id, f, open }: { id: string; f: FleetHook; open: (s: Se
           <Text style={st.small}>{v.licence_expiry ?? ''}</Text></Card>
       </View>
 
+      {booking ? (
+        <Card onPress={() => open({ kind: 'booking', id: booking.id })} accessibilityLabel="Booking" style={{ borderColor: C.info }}>
+          <Label>Booked in</Label>
+          <Text style={[st.body, { fontWeight: '800' }]}>{dayName(booking.booked_for)} · {SLOT_LABEL[booking.time_slot]} · {TYPE_LABEL[booking.job_type]}</Text>
+          <Text style={st.small}>{booking.place} · {booking.reason}</Text>
+        </Card>
+      ) : null}
       {sum.open_job ? <Button label={`Open job card ${sum.open_job.number}`} onPress={() => open({ kind: 'job', id: sum.open_job!.id })} />
-        : <Button label="New job card" onPress={() => open({ kind: 'newjob', vehicleId: id })} />}
+        : <Button label="New job card" onPress={() => open({ kind: 'newjob', vehicleId: id, bookingId: booking?.id })} />}
       <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
         <Button label="Log km" kind="secondary" onPress={() => setPanel(panel === 'km' ? 'none' : 'km')} style={{ flexBasis: '46%', flexGrow: 1 }} />
         <Button label="Status" kind="secondary" onPress={() => setPanel(panel === 'status' ? 'none' : 'status')} style={{ flexBasis: '46%', flexGrow: 1 }} />
         <Button label="Details" kind="secondary" onPress={() => setPanel(panel === 'edit' ? 'none' : 'edit')} style={{ flexBasis: '46%', flexGrow: 1 }} />
         <Button label="Add fault" kind="secondary" onPress={() => open({ kind: 'report', vehicleId: id })} style={{ flexBasis: '46%', flexGrow: 1 }} />
+        {!booking ? <Button label="Book in" kind="secondary" onPress={() => open({ kind: 'newbooking', vehicleId: id })} style={{ flexBasis: '46%', flexGrow: 1 }} /> : null}
+        <Button label="Put a tech in" kind="secondary" onPress={() => open({ kind: 'assign', vehicleId: id })} style={{ flexBasis: '46%', flexGrow: 1 }} />
       </View>
       {panel === 'km' ? <LogKm id={id} last={v.km} f={f} done={() => setPanel('none')} /> : null}
       {panel === 'status' ? <SetStatus id={id} current={v.status} f={f} done={() => setPanel('none')} /> : null}
@@ -265,7 +264,7 @@ function VehicleScreen({ id, f, open }: { id: string; f: FleetHook; open: (s: Se
         {d.km.slice(0, 15).map((k, n) => (
           <View key={n} style={{ flexDirection: 'row', gap: 8 }}>
             <Text style={[st.body, { fontWeight: '700', minWidth: 110 }]}>{km(k.km)}</Text>
-            <Text style={[st.small, { flex: 1 }]}>{when(k.read_at)} · {k.source === 'handover' ? 'handover' : k.source === 'fleet_job' ? 'job card' : 'mechanic'} · {k.by}</Text>
+            <Text style={[st.small, { flex: 1 }]}>{when(k.read_at)} · {k.source === 'handover' ? 'handover' : k.source === 'fleet_job' ? 'job card' : k.source === 'release' ? 'released' : 'mechanic'} · {k.by}</Text>
           </View>
         ))}
         {!d.km.length ? <Body quiet>No readings yet.</Body> : null}
@@ -374,12 +373,13 @@ function ReportFault({ vehicleId, f, done }: { vehicleId: string; f: FleetHook; 
 
 // ---- Mechanic job cards ------------------------------------------------------------------------
 
-function NewJob({ vehicleId, f, done }: { vehicleId: string; f: FleetHook; done: () => void }) {
+function NewJob({ vehicleId, bookingId, f, done }: { vehicleId: string; bookingId?: string; f: FleetHook; done: () => void }) {
   const s = useStore();
   const v = f.d.vehicles.find(x => x.id === vehicleId);
+  const booking = bookingId ? f.d.bookings.find(b => b.id === bookingId) : undefined;
   const faults = (f.d.details[vehicleId]?.faults ?? []).filter(x => x.status === 'open' || x.status === 'deferred');
-  const [type, setType] = useState<F.FleetJobType>('service');
-  const [reason, setReason] = useState('');
+  const [type, setType] = useState<F.FleetJobType>(booking?.job_type ?? 'service');
+  const [reason, setReason] = useState(booking?.reason ?? '');
   const [odo, setOdo] = useState(v?.km != null ? String(v.km) : '');
   const [chosen, setChosen] = useState<Record<string, boolean>>(() => Object.fromEntries(faults.filter(x => x.severity !== 'normal').map(x => [x.id, true])));
   const [during, setDuring] = useState<F.VehicleStatus>('workshop');
@@ -388,6 +388,7 @@ function NewJob({ vehicleId, f, done }: { vehicleId: string; f: FleetHook; done:
   return (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}>
       <Heading>New job card · {v?.registration}</Heading>
+      {booking ? <Notice tone="info" title={`From the booking for ${dayName(booking.booked_for)}`} lines={['The booking is marked as started when you open this job card.']} /> : null}
       <Label>Type of work</Label>
       <Choice options={F.JOB_TYPES} value={type} onChange={setType} labels={TYPE_LABEL} />
       <Field label="Why is it in?" value={reason} onChangeText={setReason} placeholder="e.g. 90 000 km service, windscreen crack" />
@@ -413,6 +414,7 @@ function NewJob({ vehicleId, f, done }: { vehicleId: string; f: FleetHook; done:
         const id = s.newId();
         f.act(`Job card on ${v?.registration}`, 'POST', `/fleet/vehicles/${vehicleId}/jobs`, {
           id, jobType: type, reason: reason.trim(), odometerIn: n, faultIds: Object.keys(chosen).filter(k => chosen[k]), vehicleStatus: during, at: nowIso(),
+          ...(booking ? { bookingId: booking.id } : {}),
         }, done);
       }} />
     </ScrollView>

@@ -30,3 +30,14 @@ export interface VehicleDetail {
   km: { km: number; read_at: string; source: string; by: string }[];
   inspections: { id: string; inspected_at: string; odometer_km: number; fuel_level: string; problems: string[]; new_problems: string[]; driver: string }[];
 }
+
+export type TimeSlot = 'morning' | 'afternoon' | 'all_day';
+export interface Booking {
+  id: string; vehicle_id: string; registration: string; job_type: FleetJobType; booked_for: string; time_slot: TimeSlot; place: string; reason: string;
+  status: 'booked' | 'started' | 'cancelled'; booked_at: string; booked_by: string; fleet_job_id: string | null; cancelled_note: string | null; driver: string | null;
+}
+export interface Position {
+  id: string; registration: string; status: VehicleStatus; lat: number | null; lng: number | null; speed_kmh: number | null; ignition: boolean | null;
+  recorded_at: string | null; minutesAgo: number | null; driver: string | null;
+}
+export interface Technician { id: string; full_name: string; mode: 'driving' | 'riding_along' | null; vehicle_id: string | null; registration: string | null }

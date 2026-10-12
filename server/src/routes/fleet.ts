@@ -37,7 +37,10 @@ export async function faultsFromHandover(c: Q, vehicleId: string, inspectionId: 
 }
 
 async function mechanics(c: Q): Promise<string[]> {
-  return (await c.query("SELECT id FROM users WHERE login_level = 'mechanic' AND status <> 'left'")).rows.map(r => r.id);
+  // Everyone doing the mechanic's work: by position, or given it on top of their own position.
+  return (await c.query(
+    `SELECT id FROM users u WHERE status <> 'left' AND (login_level = 'mechanic'
+       OR EXISTS (SELECT 1 FROM access_overrides o WHERE o.user_id = u.id AND o.action = 'manage_fleet' AND o.effect = 'grant'))`)).rows.map(r => r.id);
 }
 
 export function registerFleetRoutes(app: FastifyInstance, _db: Db) {

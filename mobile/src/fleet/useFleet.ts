@@ -2,15 +2,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useStore } from '../state.tsx';
 import { nowIso, takePhoto } from '../device.ts';
-import type { Fault, FleetJob, FleetVehicle, VehicleDetail } from './types.ts';
+import type { Booking, Fault, FleetJob, FleetVehicle, Position, Technician, VehicleDetail } from './types.ts';
 
-export interface FleetData { vehicles: FleetVehicle[]; faults: Fault[]; jobs: FleetJob[]; details: Record<string, VehicleDetail>; loadedAt: string | null }
-const EMPTY: FleetData = { vehicles: [], faults: [], jobs: [], details: {}, loadedAt: null };
+export interface FleetData {
+  vehicles: FleetVehicle[]; faults: Fault[]; jobs: FleetJob[]; details: Record<string, VehicleDetail>; loadedAt: string | null;
+  bookings: Booking[]; positions: Position[]; techs: Technician[];
+}
+const EMPTY: FleetData = { vehicles: [], faults: [], jobs: [], details: {}, loadedAt: null, bookings: [], positions: [], techs: [] };
 export type Shot = { id: string; uri: string; mime: string };
 
 export function useFleet() {
   const s = useStore();
-  const [d, setD] = useState<FleetData>(() => (s.cache.fleet as FleetData | undefined) ?? EMPTY);
+  const [d, setD] = useState<FleetData>(() => ({ ...EMPTY, ...(s.cache.fleet as Partial<FleetData> | undefined) }));
   const [loading, setLoading] = useState(false);
 
   const save = useCallback((fn: (x: FleetData) => FleetData) => {
@@ -23,9 +26,12 @@ export function useFleet() {
     if (s.waiting) { await s.syncNow(); if (s.waiting) return; }
     setLoading(true);
     try {
-      const [vehicles, faults, jobs] = await Promise.all([get<FleetVehicle[]>('/fleet'), get<Fault[]>('/fleet/faults'), get<FleetJob[]>('/fleet/jobs?status=open')]);
+      const [vehicles, faults, jobs, bookings, positions, techs] = await Promise.all([
+        get<FleetVehicle[]>('/fleet'), get<Fault[]>('/fleet/faults'), get<FleetJob[]>('/fleet/jobs?status=open'),
+        get<Booking[]>('/fleet/bookings'), get<Position[]>('/fleet/positions'), get<Technician[]>('/fleet/technicians'),
+      ]);
       if (!vehicles) return;
-      save(x => ({ ...x, vehicles, faults: faults ?? x.faults, jobs: jobs ?? x.jobs, loadedAt: new Date().toISOString() }));
+      save(x => ({ ...x, vehicles, faults: faults ?? x.faults, jobs: jobs ?? x.jobs, bookings: bookings ?? x.bookings, positions: positions ?? x.positions, techs: techs ?? x.techs, loadedAt: new Date().toISOString() }));
     } finally { setLoading(false); }
   }, [s, save]);
 

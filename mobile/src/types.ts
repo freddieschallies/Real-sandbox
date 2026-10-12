@@ -5,7 +5,7 @@ export interface Session {
   mode: 'demo' | 'server';
   baseUrl: string;
   token: string;
-  user: { id: string; name: string; level: string };
+  user: { id: string; name: string; level: string; /** Also does the mechanic's work, on top of their position. */ fleetDuty?: boolean };
   company: { id: string; name: string };
 }
 
@@ -30,6 +30,10 @@ export interface Today {
   vehicle: {
     id: string; registration: string; mode: 'driving' | 'riding_along'; dropped_off_at: string | null;
     handover_status?: 'signed' | 'awaiting_approval' | 'approved' | 'rejected' | null;
+    /** The mechanic put him in this vehicle (his phone was off or broken). */
+    assigned_by_mechanic?: boolean;
+    /** The vehicle is booked in for a service or repair. */
+    booking?: { bookedFor: string; timeSlot: 'morning' | 'afternoon' | 'all_day'; place: string; jobType: string; reason: string } | null;
   } | null;
   flagsToAnswer: number;
   unreadNotices: number;

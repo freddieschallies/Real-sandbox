@@ -70,6 +70,13 @@ export function Day() {
               <Button label="Release vehicle" kind="quiet" onPress={() => nav.push({ name: 'release' })} style={{ minHeight: 44, flex: 1 }} />
             </View>
           ) : null}
+          {t?.vehicle?.assigned_by_mechanic ? (
+            <Text style={[st.small, { color: C.info }]}>Put in this vehicle by the mechanic</Text>
+          ) : null}
+          {t?.vehicle?.booking ? (
+            <Notice tone="warn" title={`Booked in: ${bookingDay(t.vehicle.booking.bookedFor)}, ${t.vehicle.booking.timeSlot === 'all_day' ? 'all day' : t.vehicle.booking.timeSlot}`}
+              lines={[`${t.vehicle.booking.place}: ${t.vehicle.booking.reason}`, 'Have the vehicle there on time. Speak to the mechanic if you cannot.']} />
+          ) : null}
           {t?.vehicle?.handover_status === 'awaiting_approval' ? (
             <Text style={[st.small, { color: C.warn }]}>Handover awaiting your supervisor's approval</Text>
           ) : null}
@@ -150,4 +157,12 @@ export function Day() {
       </ScrollView>
     </View>
   );
+}
+
+function bookingDay(ymd: string) {
+  const d0 = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+  const d1 = new Date(Date.now() + 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+  if (ymd === d0) return 'today';
+  if (ymd === d1) return 'tomorrow';
+  return new Date(`${ymd}T12:00:00+02:00`).toLocaleDateString('en-ZA', { weekday: 'long', day: 'numeric', month: 'short' });
 }

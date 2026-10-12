@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Db, Q } from './db.ts';
 import { audit } from './db.ts';
 import { openCompanyConnection } from './tenancy.ts';
-import { CATALOGUE, effectivePermissions, type Actor, type LoginLevel, type Override } from './core/permissions.ts';
+import { CATALOGUE, can, effectivePermissions, type Actor, type LoginLevel, type Override } from './core/permissions.ts';
 
 declare module 'fastify' {
   interface FastifyRequest { actor: Actor }
@@ -106,7 +106,7 @@ export function registerAuth(app: FastifyInstance, db: Db) {
   app.get('/me', async req => {
     const { rows } = await req.db.query('SELECT id, full_name, email, login_level, department_id FROM users WHERE id = $1', [req.actor.id]);
     const company = (await db.query('SELECT id, name FROM companies WHERE id = $1', [req.companyId])).rows[0];
-    return { ...rows[0], company, policyAcknowledged: await hasAcknowledgedPolicy(req.db, req.actor.id) };
+    return { ...rows[0], company, fleetDuty: can(req.actor, 'manage_fleet') && rows[0].login_level !== 'mechanic', policyAcknowledged: await hasAcknowledgedPolicy(req.db, req.actor.id) };
   });
 
   app.get('/policy/current', async (req, reply) => {

@@ -1,7 +1,7 @@
 // The demo's pretend fleet for the mechanic, following the same rules as the server (core/fleet.ts).
 // ND 412-778 (veh-1) is the technician's demo van, so what Thabo does shows up here.
 import * as F from '../../server/src/core/fleet.ts';
-import type { Fault, FleetJob, FleetVehicle, VehicleDetail } from './fleet/types.ts';
+import type { Booking, Fault, FleetJob, FleetVehicle, Position, Technician, TimeSlot, VehicleDetail } from './fleet/types.ts';
 
 type V = Omit<VehicleDetail['vehicle'], 'km' | 'driver' | 'open_faults' | 'safety_faults' | 'open_job' | 'serviceDue' | 'licenceDue'>;
 type Job = Omit<FleetJob, 'faults' | 'parts' | 'registration'> & { odometer_out: number | null; completed_at: string | null; next_service_km?: number | null; next_service_at?: string | null };
@@ -13,7 +13,17 @@ export interface DemoFleetState {
   jobs: Job[];
   parts: { job_id: string; id: string; description: string; qty: number; unitCostCents: number | null; source: 'stockroom' | 'bought' | 'other' }[];
   nextJob: number;
+  bookings?: Omit<Booking, 'registration' | 'driver'>[];
+  /** Where each vehicle was last seen by the tracker, and whether it is moving. */
+  spots?: Record<string, { lat: number; lng: number; moving: boolean; at: string }>;
+  /** Who is in which vehicle (other than Thabo, who lives in the demo's own state). */
+  crew?: Record<string, { vehicle_id: string; mode: 'driving' | 'riding_along' } | null>;
 }
+
+export const DEMO_TECHS = [
+  { id: 'me', full_name: 'Thabo Mkhize' }, { id: 'tech-2', full_name: 'Sipho Ndlovu' },
+  { id: 'tech-3', full_name: 'Ayanda Mthembu' }, { id: 'tech-4', full_name: 'Nomvula Dlamini' },
+];
 
 const d = (offsetDays: number) => new Date(Date.now() + offsetDays * 86_400_000).toISOString();
 const day = (offsetDays: number) => d(offsetDays).slice(0, 10);
@@ -62,6 +72,28 @@ export function seedFleet(): DemoFleetState {
       { job_id: 'fj-6', id: 'pt-2', description: 'Gearbox synchro ring 2nd', qty: 1, unitCostCents: 145000, source: 'bought' },
     ],
     nextJob: 3008,
+    bookings: [
+      { id: 'bk-1', vehicle_id: 'veh-2', job_type: 'tyres', booked_for: day(1), time_slot: 'morning', place: 'Tyre Mart, Alton', reason: 'Rear left tyre losing pressure: replace both rears',
+        status: 'booked', booked_at: d(-1), booked_by: MECH_NAME, fleet_job_id: null, cancelled_note: null },
+      { id: 'bk-2', vehicle_id: 'veh-1', job_type: 'service', booked_for: day(4), time_slot: 'all_day', place: 'Own workshop', reason: '90 000 km service, check the windscreen crack',
+        status: 'booked', booked_at: d(-2), booked_by: MECH_NAME, fleet_job_id: null, cancelled_note: null },
+      { id: 'bk-3', vehicle_id: 'veh-5', job_type: 'roadworthy', booked_for: day(2), time_slot: 'afternoon', place: 'Licensing office, Richards Bay', reason: 'Licence disc expired: renew',
+        status: 'booked', booked_at: d(-1), booked_by: MECH_NAME, fleet_job_id: null, cancelled_note: null },
+    ],
+    spots: seedSpots(),
+    crew: { 'tech-2': { vehicle_id: 'veh-2', mode: 'driving' }, 'tech-3': { vehicle_id: 'veh-5', mode: 'driving' }, 'tech-4': { vehicle_id: 'veh-2', mode: 'riding_along' } },
+  };
+}
+
+const MECH_NAME = 'Bongani Khumalo';
+function seedSpots(): NonNullable<DemoFleetState['spots']> {
+  const at = new Date(Date.now() - 3 * 60_000).toISOString();
+  return {
+    'veh-1': { lat: -28.7499, lng: 32.0507, moving: false, at },       // office yard, Alton
+    'veh-2': { lat: -28.7735, lng: 32.0795, moving: true, at },        // near Meerensee
+    'veh-3': { lat: -28.7470, lng: 32.0455, moving: false, at },       // workshop
+    'veh-4': { lat: -28.7535, lng: 32.0395, moving: false, at: new Date(Date.now() - 9 * 86_400_000).toISOString() },
+    'veh-5': { lat: -28.7640, lng: 31.9050, moving: true, at },        // on the road to Empangeni
   };
 }
 
@@ -176,7 +208,7 @@ export class DemoFleet {
     return good({ id });
   }
 
-  openJob(vehicleId: string, b: { id?: string; jobType: F.FleetJobType; reason: string; odometerIn: number; faultIds?: string[]; vehicleStatus?: F.VehicleStatus; at: string }): Res {
+  openJob(vehicleId: string, b: { id?: string; jobType: F.FleetJobType; reason: string; odometerIn: number; faultIds?: string[]; vehicleStatus?: F.VehicleStatus; at: string; bookingId?: string }): Res {
     const v = this.veh(vehicleId);
     if (!v) return bad(404, 'no such vehicle');
     const open = this.s.jobs.find(j => j.vehicle_id === vehicleId && j.status === 'open');
@@ -189,6 +221,8 @@ export class DemoFleet {
     this.s.jobs.push({ id, number, vehicle_id: vehicleId, job_type: b.jobType, status: 'open', reason: b.reason.trim(), opened_at: new Date().toISOString(), odometer_in: b.odometerIn,
       odometer_out: null, completed_at: null, found_text: null, did_text: null, labour_hours: null, before_photo_ids: [], after_photo_ids: [], mechanic: MECH });
     for (const f of this.s.faults) if ((b.faultIds ?? []).includes(f.id)) Object.assign(f, { status: 'in_progress', fleet_job_id: id });
+    const bk = b.bookingId ? this.bookingsRaw().find(x => x.id === b.bookingId && x.status === 'booked' && x.vehicle_id === vehicleId) : undefined;
+    if (bk) Object.assign(bk, { status: 'started', fleet_job_id: id });
     if (b.vehicleStatus && b.vehicleStatus !== 'in_service') Object.assign(v, { status: b.vehicleStatus, status_note: `Job card ${number}: ${b.reason.trim()}` });
     return good({ id, number }, 201);
   }
@@ -236,5 +270,121 @@ export class DemoFleet {
     Object.assign(v, { status: b.vehicleStatusAfter, status_note: b.vehicleStatusAfter === 'in_service' ? null : (b.statusNote ?? `After job card ${j.number}`) });
     if (b.nextServiceKm && b.nextServiceAt) Object.assign(v, { next_service_km: b.nextServiceKm, next_service_at: b.nextServiceAt });
     return good({ id, status: 'completed' });
+  }
+
+  // ---- Bookings ------------------------------------------------------------------------------
+
+  private bookingsRaw() { return this.s.bookings ?? (this.s.bookings = []); }
+
+  bookings(): Booking[] {
+    const cut = day(-7);
+    return this.bookingsRaw().filter(b => b.status === 'booked' || b.booked_for >= cut)
+      .map(b => ({ ...b, registration: this.veh(b.vehicle_id)!.registration, driver: this.s.drivers[b.vehicle_id] ?? null }))
+      .sort((a, b) => Number(b.status === 'booked') - Number(a.status === 'booked') || a.booked_for.localeCompare(b.booked_for) || a.time_slot.localeCompare(b.time_slot));
+  }
+
+  /** The vehicle's next open booking, for the driver's My day. */
+  nextBooking(vehicleId: string) {
+    const b = this.bookingsRaw().filter(x => x.vehicle_id === vehicleId && x.status === 'booked').sort((a, c) => a.booked_for.localeCompare(c.booked_for))[0];
+    return b ? { bookedFor: b.booked_for, timeSlot: b.time_slot, place: b.place, jobType: b.job_type, reason: b.reason } : null;
+  }
+
+  book(vehicleId: string, b: { id?: string; jobType: F.FleetJobType; bookedFor: string; timeSlot?: TimeSlot; place?: string; reason: string }): Res {
+    const v = this.veh(vehicleId);
+    if (!v) return bad(404, 'no such vehicle');
+    const missing = [!b.bookedFor ? 'the date' : null, !b.reason || b.reason.trim().length < 5 ? 'what it is booked in for' : null].filter(Boolean) as string[];
+    if (missing.length) return bad(400, ...missing);
+    if (b.bookedFor < today()) return bad(409, 'a booking cannot be in the past');
+    const clash = this.bookingsRaw().find(x => x.vehicle_id === vehicleId && x.status === 'booked');
+    if (clash) return bad(409, `${v.registration} is already booked for ${clash.booked_for}: move that booking instead`);
+    const id = b.id ?? `bk-${Date.now()}`;
+    this.bookingsRaw().push({ id, vehicle_id: vehicleId, job_type: b.jobType, booked_for: b.bookedFor, time_slot: b.timeSlot ?? 'morning', place: (b.place ?? '').trim() || 'Own workshop',
+      reason: b.reason.trim(), status: 'booked', booked_at: new Date().toISOString(), booked_by: MECH_NAME, fleet_job_id: null, cancelled_note: null });
+    return good({ id }, 201);
+  }
+
+  move(id: string, b: { bookedFor: string; timeSlot?: TimeSlot; note: string }): Res {
+    const bk = this.bookingsRaw().find(x => x.id === id && x.status === 'booked');
+    if (!bk) return bad(409, 'only a booking that has not started can be moved');
+    if (!b.note || b.note.trim().length < 5) return bad(400, 'say why it is moved');
+    if (b.bookedFor < today()) return bad(409, 'a booking cannot be in the past');
+    Object.assign(bk, { booked_for: b.bookedFor, time_slot: b.timeSlot ?? bk.time_slot });
+    return good({ id, bookedFor: b.bookedFor });
+  }
+
+  cancel(id: string, note: string): Res {
+    const bk = this.bookingsRaw().find(x => x.id === id && x.status === 'booked');
+    if (!bk) return bad(409, 'only a booking that has not started can be cancelled');
+    if (!note || note.trim().length < 5) return bad(400, 'say why it is cancelled');
+    Object.assign(bk, { status: 'cancelled', cancelled_note: note.trim() });
+    return good({ id, status: 'cancelled' });
+  }
+
+  // ---- Where the vehicles are ------------------------------------------------------------------
+
+  positions(): Position[] {
+    const spots = this.s.spots ?? (this.s.spots = seedSpots());
+    const now = Date.now();
+    return this.s.vehicles.map(v => {
+      const p = spots[v.id];
+      if (!p) return { id: v.id, registration: v.registration, status: v.status, lat: null, lng: null, speed_kmh: null, ignition: null, recorded_at: null, minutesAgo: null, driver: this.s.drivers[v.id] ?? null };
+      // Moving vehicles drift a little each time you look, like the tracker updating.
+      const moving = p.moving && v.status === 'in_service' && !!this.s.drivers[v.id];
+      if (moving) { const t = now / 60_000; Object.assign(p, { lat: p.lat + Math.sin(t) * 0.0015, lng: p.lng + Math.cos(t) * 0.0015, at: new Date(now - 60_000).toISOString() }); }
+      return { id: v.id, registration: v.registration, status: v.status, lat: p.lat, lng: p.lng, speed_kmh: moving ? 40 + Math.round((now / 1000) % 30) : 0, ignition: moving,
+        recorded_at: p.at, minutesAgo: Math.round((now - new Date(p.at).getTime()) / 60_000), driver: this.s.drivers[v.id] ?? null };
+    });
+  }
+
+  // ---- Putting technicians in vehicles -------------------------------------------------------
+
+  private crew() { return this.s.crew ?? (this.s.crew = {}); }
+
+  /** `thabo` is where the demo's own technician is (kept in the demo's main state). */
+  technicians(thabo: { vehicle_id: string; mode: 'driving' | 'riding_along' } | null): Technician[] {
+    return DEMO_TECHS.map(t => {
+      const c = t.id === 'me' ? thabo : this.crew()[t.id] ?? null;
+      return { ...t, mode: c?.mode ?? null, vehicle_id: c?.vehicle_id ?? null, registration: c ? this.veh(c.vehicle_id)?.registration ?? null : null };
+    }).sort((a, b) => a.full_name.localeCompare(b.full_name));
+  }
+
+  /** Returns who was driving before, so the demo can take Thabo out if it was him. */
+  assign(vehicleId: string, b: { technicianId: string; mode: 'driving' | 'riding_along'; reason: string; km?: number }): Res & { tookFrom?: string[] } {
+    const v = this.veh(vehicleId);
+    if (!v) return bad(404, 'no such vehicle');
+    const t = DEMO_TECHS.find(x => x.id === b.technicianId);
+    if (!t) return bad(404, 'no such technician');
+    if (!b.reason || b.reason.trim().length < 5) return bad(400, 'say why you are doing it for him (e.g. phone broken)');
+    if (b.mode === 'driving') {
+      const ok = F.canDrive(v.status);
+      if (!ok.ok) return bad(409, ok.reason.replace('speak to the mechanic', 'put it back in service first'));
+      if (b.km === undefined || Number.isNaN(b.km)) return bad(409, 'odometer reading (km), so the handover is on record');
+      const err = this.recordKm(vehicleId, b.km, 'mechanic', MECH);
+      if (err) return err;
+    }
+    const tookFrom: string[] = [];
+    if (b.mode === 'driving') {
+      for (const [id, c] of Object.entries(this.crew())) if (c && c.vehicle_id === vehicleId && c.mode === 'driving' && id !== t.id) { this.crew()[id] = null; tookFrom.push(id); }
+      if (this.s.drivers[vehicleId] === 'Thabo Mkhize' && t.id !== 'me') tookFrom.push('me');
+      this.s.drivers[vehicleId] = t.full_name;
+    }
+    for (const [vid, name] of Object.entries(this.s.drivers)) if (name === t.full_name && vid !== vehicleId) delete this.s.drivers[vid];
+    if (t.id !== 'me') this.crew()[t.id] = { vehicle_id: vehicleId, mode: b.mode };
+    return { ...good({ vehicle: v.registration, technician: t.full_name }), tookFrom };
+  }
+
+  releaseFor(techId: string, current: { vehicle_id: string; mode: 'driving' | 'riding_along' } | null, b: { reason: string; km?: number }): Res {
+    const t = DEMO_TECHS.find(x => x.id === techId);
+    if (!t) return bad(404, 'no such technician');
+    if (!current) return bad(409, 'no vehicle is on his name');
+    if (!b.reason || b.reason.trim().length < 5) return bad(400, 'say why');
+    if (current.mode === 'driving') {
+      if (b.km === undefined || Number.isNaN(b.km)) return bad(409, 'odometer reading (km)');
+      const err = this.recordKm(current.vehicle_id, b.km, 'release', MECH);
+      if (err) return err;
+      delete this.s.drivers[current.vehicle_id];
+    }
+    if (techId !== 'me') this.crew()[techId] = null;
+    return good({ released: true });
   }
 }

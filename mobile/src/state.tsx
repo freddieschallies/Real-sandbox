@@ -146,8 +146,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       // The CEO may have given this person another position: open the matching app.
       const me = await call({ method: 'GET', path: '/me' });
       const level = me.status === 200 ? (me.body.login_level ?? me.body.user?.level) : null;
-      if (level && sessionRef.current && level !== sessionRef.current.user.level) {
-        const s2 = { ...sessionRef.current, user: { ...sessionRef.current.user, level } };
+      const fleetDuty = me.status === 200 ? !!me.body.fleetDuty : sessionRef.current?.user.fleetDuty;
+      if (level && sessionRef.current && (level !== sessionRef.current.user.level || fleetDuty !== !!sessionRef.current.user.fleetDuty)) {
+        const s2 = { ...sessionRef.current, user: { ...sessionRef.current.user, level, fleetDuty } };
         sessionRef.current = s2; setSession(s2); await save(K.session, s2);
       }
       const cards: Record<string, CardView> = {};

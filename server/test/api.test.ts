@@ -729,6 +729,26 @@ test('the CEO assigns each person a position; it takes effect at once and is log
   const log = (await call('director', 'GET', '/access/changes')).body;
   assert.ok(log.some((c: { action: string; change: string }) => c.action === 'position' && c.change === 'Technician → Mechanic (fleet)'));
   assert.equal((await call('director', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'technician' })).status, 200);
+
+  // No mechanic of their own: the Admin (and a technician) also get the mechanic's work, keeping their position.
+  assert.equal((await call('admin', 'GET', '/fleet')).status, 403);
+  assert.equal((await call('manager', 'PUT', `/access/users/${ids.admin}/fleet-duty`, { on: true })).status, 403, 'only whoever manages access');
+  const duty = await call('director', 'PUT', `/access/users/${ids.admin}/fleet-duty`, { on: true });
+  assert.equal(duty.status, 200, JSON.stringify(duty.body));
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.tech2}/fleet-duty`, { on: true })).status, 200);
+  const me = (await call('admin', 'GET', '/me')).body;
+  assert.equal(me.login_level, 'admin', 'still Admin');
+  assert.equal(me.fleetDuty, true);
+  assert.equal((await call('admin', 'GET', '/fleet/technicians')).status, 200, 'can run the fleet');
+  assert.equal((await call('admin', 'GET', '/jobs')).status, 200, 'and still do Admin work');
+  const people = (await call('director', 'GET', '/access/positions')).body.people;
+  assert.equal(people.filter((x: { does_fleet: boolean }) => x.does_fleet).length, 3, 'mechanic plus the two extra');
+  await call('tech', 'POST', `/fleet/vehicles/${ids.v2}/faults`, { description: 'Indicator on the right is not working', severity: 'urgent', at: '2026-10-16T07:30:00+02:00' });
+  assert.ok((await call('admin', 'GET', '/me/notifications')).body.some((n: { message: string }) => /ND 503-221/.test(n.message)), 'extra mechanics hear about faults too');
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.mech}/fleet-duty`, { on: false })).status, 409, 'a mechanic by position');
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/fleet-duty`, { on: false })).status, 200);
+  assert.equal((await call('director', 'PUT', `/access/users/${ids.tech2}/fleet-duty`, { on: false })).status, 200);
+  assert.equal((await call('admin', 'GET', '/fleet')).status, 403, 'taken away at once');
   assert.equal((await call('director', 'PUT', `/access/users/${ids.director}/position`, { position: 'technician' })).status, 200, 'the Creator can still manage access');
   assert.equal((await call('creator', 'PUT', `/access/users/${ids.director}/position`, { position: 'director' })).status, 200);
 });
@@ -825,7 +845,7 @@ test('the CEO decides access: changes apply at once, are logged, and nobody can 
   assert.equal(lock.status, 409);
   assert.equal((await call('creator', 'PUT', '/access/levels/director/manage_access', { effect: 'default' })).status, 200);
   assert.equal((await call('director', 'GET', '/access/catalogue')).status, 200);
-  const log = { body: (await call('director', 'GET', '/access/changes')).body.filter((c: { action: string }) => c.action !== 'position') };
+  const log = { body: (await call('director', 'GET', '/access/changes')).body.filter((c: { action: string }) => !['position', 'fleet_duty', 'view_fleet', 'manage_fleet'].includes(c.action)) };
   assert.equal(log.body.length, 3, 'every change is in the history');
   assert.equal(log.body[2].change, 'granted (all departments)');
 });
