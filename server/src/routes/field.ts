@@ -149,7 +149,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
     const up = await readUpload(req);
     const f = parse(z.object({
       kind: z.enum(['signature', 'fuel_slip', 'supplier_slip', 'bought_out_slip', 'vehicle_front', 'vehicle_back', 'vehicle_left',
-        'vehicle_right', 'vehicle_dashboard', 'vehicle_damage', 'handover_signature', 'stock_item', 'delivery_note',
+        'vehicle_right', 'vehicle_dashboard', 'vehicle_damage', 'handover_signature', 'stock_item', 'delivery_note', 'profile',
         'fleet_before', 'fleet_after', 'fleet_fault', 'fleet_slip']),
       takenAt: Iso, id: Uuid.optional(), jobId: Uuid.optional(),
     }), up.fields);

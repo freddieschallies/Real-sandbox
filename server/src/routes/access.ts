@@ -116,8 +116,8 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
     if (!can(req.actor, 'manage_access') && !can(req.actor, 'view_all_job_cards') && !can(req.actor, 'assign_jobs')) throw new Refused(403, ['people are not part of your work']);
     const manage = can(req.actor, 'manage_access');
     const { rows } = await req.db.query(
-      `SELECT u.id, u.full_name, u.login_level, u.trade, d.name AS department, u.status
-         FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.status <> 'left' ORDER BY u.full_name`);
+      `SELECT u.id, u.full_name, u.login_level, u.trade, d.name AS department, u.status, p.photo_id
+         FROM users u LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.status <> 'left' ORDER BY u.full_name`);
     const people = [];
     for (const r of rows) {
       const a = await loadActor(req.db, r.id);

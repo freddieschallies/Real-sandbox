@@ -1089,6 +1089,22 @@ test('the CEO assigns each person a position; it takes effect at once and is log
   assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/work`, { area: 'access', on: false })).status, 200);
   assert.equal((await call('admin', 'PUT', `/access/users/${ids.tech}/trade`, { trade: 'plumber' })).status, 403, 'taken away again');
 
+  // A profile: what they are busy with now, contact details for the office, personal details only with access.
+  const pic = await upload('director', '/photos', { kind: 'profile', takenAt: '2026-10-17T09:00:00+02:00' });
+  assert.equal((await call('admin', 'PUT', `/people/${ids.tech}/profile`, { phone: '082 555 0101' })).status, 403);
+  assert.equal((await call('director', 'PUT', `/people/${ids.tech}/profile`, { phone: '082 555 0101', emergencyName: 'Nandi Mkhize', emergencyPhone: '083 555 0199',
+    idNumber: '9001015800085', dateOfBirth: '1990-01-01', homeAddress: '12 Pelican Rd, Meerensee', startDate: '2019-02-01', photoId: pic.body.id })).status, 200);
+  const prof = (await call('director', 'GET', `/people/${ids.tech}`)).body;
+  assert.equal(prof.contact.phone, '082 555 0101');
+  assert.equal(prof.personal.id_number, '9001015800085');
+  assert.equal(prof.photo_id, pic.body.id);
+  assert.ok('vehicle' in prof.now && 'job' in prof.now && Array.isArray(prof.now.with));
+  const asAdmin = (await call('admin', 'GET', `/people/${ids.tech}`)).body;
+  assert.equal(asAdmin.contact.emergency_phone, '083 555 0199', 'the office sees contact details');
+  assert.equal(asAdmin.personal, null, 'but not personal details');
+  assert.equal((await call('tech2', 'GET', `/people/${ids.tech}`)).status, 403);
+  assert.equal((await call('admin', 'GET', '/people')).body.people.find((x: { id: string }) => x.id === ids.tech).photo_id, pic.body.id);
+
   // The CEO decides which Admin does which work.
   const before = (await call('admin', 'GET', '/me')).body.work;
   assert.deepEqual([before.jobs, before.documents, before.stockroom, before.fleet], [true, true, false, false], 'an Admin by default: jobs, quotes and invoices');
