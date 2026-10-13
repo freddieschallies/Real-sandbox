@@ -83,6 +83,8 @@ export interface CardView {
   moves?: MachineMove[];
   workshop?: Workshop | null;
   ready_to_deliver?: boolean;
+  /** Tools from the stockroom's tool store booked out for this job. */
+  tools_out?: { name: string; serial: string | null; user_id: string; full_name: string }[];
 }
 
 export interface StockLine { id: string; code: string; description: string; unit: string; qty: number }

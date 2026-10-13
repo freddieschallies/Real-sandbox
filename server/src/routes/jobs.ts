@@ -9,6 +9,7 @@ import { isOnJob, loadCard, type JobRow } from '../jobsRepo.ts';
 import { partsReportRequired, reportsOn } from './reports.ts';
 import { repairView } from './repairs.ts';
 import { notify } from './field.ts';
+import { toolsOnJob } from './toolStore.ts';
 import { useOnJob } from '../stockRepo.ts';
 import { Iso, Point, Refused, Uuid, DateOnly, parse } from '../http.ts';
 import { readUpload, saveFile, removeFile } from '../uploads.ts';
@@ -386,6 +387,14 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
         await raiseFlag(c, { type: 'manager_unavailable', technicianId: actorId, jobId: row.id, severity: 'low', details: { reason: (b.signOff as { reason: string }).reason } });
       }
       await audit(c, actorId, 'job_closed', 'job', row.id, { jobNumber: row.job_number, signed: b.signOff.signature });
+      // Tools from the tool store booked out for this job: sign them back now.
+      const tools = await toolsOnJob(c, row.id);
+      for (const t of tools) await notify(c, t.user_id, 'tool_due', `Job ${row.job_number} is done: sign ${t.name}${t.serial ? ` (${t.serial})` : ''} back in at the stockroom.`, { jobId: row.id });
+      if (tools.length) {
+        for (const s of (await c.query("SELECT id FROM users WHERE login_level = 'stockroom' AND status <> 'left'")).rows) {
+          await notify(c, s.id, 'tool_due', `Job ${row.job_number} is done: ${tools.map(t => `${t.name} (${t.full_name})`).join(', ')} to be signed back.`, { jobId: row.id });
+        }
+      }
     });
   });
 }
@@ -421,6 +430,8 @@ export async function cardView(c: Q, jobId: string) {
       parts_reports: await reportsOn(c, jobId),
       // Workshop repairs: where the machine is, loan machines out, every move, and the workshop itself.
       ...(await repairView(c, jobId, card)),
+      // Tools from the stockroom's tool store booked out for this job.
+      tools_out: await toolsOnJob(c, jobId),
     };
   }
 }

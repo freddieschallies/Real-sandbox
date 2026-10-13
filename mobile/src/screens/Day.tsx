@@ -31,7 +31,9 @@ export function Day() {
   const ts = useMyTimesheets();
   const ins = useSafeAreaInsets();
   const [pulling, setPulling] = useState(false);
-  useEffect(() => { s.refresh(); }, []);
+  // Tools and ladders from the stockroom's tool store on his name.
+  const [storeTools, setStoreTools] = useState<{ id: string; name: string; serial: string | null; jobNumber: number | null; due: string; overdue: boolean }[]>([]);
+  useEffect(() => { s.refresh(); s.ask({ method: 'GET', path: '/me/tools' }).then(r => { if (r?.status === 200) setStoreTools(r.body); }).catch(() => {}); }, []);
 
   const t = s.cache.today;
   const jobs = [...(t?.jobs ?? [])].sort((a, b) => rank(a) - rank(b));
@@ -113,6 +115,18 @@ export function Day() {
           <Text style={[st.body, { fontWeight: '800' }]}>Quotes</Text>
           <Text style={st.small}>Quote work you found: on a job, or new with a job card for reference.</Text>
         </Card>
+
+        {storeTools.length ? (
+          <Card style={{ borderColor: storeTools.some(x => x.overdue) ? C.bad : C.line }} accessibilityLabel="From the tool store">
+            <Text style={[st.body, { fontWeight: '800' }]}>From the tool store ({storeTools.length})</Text>
+            {storeTools.map(x => (
+              <Text key={x.id} style={[st.small, x.overdue ? { color: C.bad, fontWeight: '700' } : null]}>
+                {x.name}{x.serial ? ` (${x.serial})` : ''}{x.jobNumber ? ` · job ${x.jobNumber}` : ''} · {x.overdue ? 'LATE: sign it back at the stockroom' : `back ${x.due}`}
+              </Text>
+            ))}
+            <Text style={st.small}>The stockroom signs it back in with you when the job is done.</Text>
+          </Card>
+        ) : null}
 
         <Card onPress={() => nav.push({ name: 'kit' })} accessibilityLabel="My tools and PPE">
           <Text style={[st.body, { fontWeight: '800' }]}>My tools and PPE</Text>

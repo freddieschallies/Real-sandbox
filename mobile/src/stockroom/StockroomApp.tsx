@@ -1,6 +1,7 @@
 // The stock controller's app. Phone: tabs at the bottom, list then detail. Desktop (wide screen):
 // menu, list and the open request side by side. Nothing leaves or enters the stockroom without this.
 import { KitPeople, StockPersonView, type StockPerson } from '../staff/Staff.tsx';
+import { ToolStore } from './ToolStore.tsx';
 import { OrderList, PartDetail, Thumb, useOrderList } from './Parts.tsx';
 import { WorkshopAdd, WorkshopItem, WorkshopList, useWorkshop } from '../fleet/Workshop.tsx';
 import { BottomTabs } from '../BottomTabs.tsx';
@@ -21,7 +22,7 @@ import type { StockRequest, StockReturn } from '../types.ts';
 // The stockroom's own colour, so nobody confuses it with the technician app.
 const K = { band: '#1E6F6A', bandText: '#E8FFFB', tick: '#3FB57A' };
 
-type Tab = 'issue' | 'receive' | 'room' | 'order' | 'people' | 'workshop' | 'live' | 'items';
+type Tab = 'issue' | 'receive' | 'room' | 'order' | 'people' | 'workshop' | 'tools' | 'live' | 'items';
 type Sel = { kind: 'issue'; id: string } | { kind: 'return'; id: string } | { kind: 'item'; id: string } | { kind: 'delivery' } | { kind: 'ws'; id: string } | { kind: 'wsadd' } | { kind: 'part'; id: string } | { kind: 'kit'; id: string; p: StockPerson } | null;
 type Photo = { id: string; uri: string; mime: string };
 
@@ -48,6 +49,7 @@ export function StockroomApp() {
     { key: 'order', label: 'To order', count: ol.d?.toOrder.length },
     { key: 'people', label: 'People' },
     { key: 'workshop', label: 'Workshop', count: ws.data?.belowMin },
+    { key: 'tools', label: 'Tool store' },
     { key: 'live', label: 'Live', count: (room.ctl.activity ?? []).filter(a => !room.ctl.seenActivityAt || a.at > room.ctl.seenActivityAt).length },
     { key: 'items', label: 'New items', count: o?.newItems ?? room.ctl.room.filter(i => i.needsReview).length },
   ];
@@ -60,6 +62,7 @@ export function StockroomApp() {
       {tab === 'order' ? <OrderList ol={ol} open={id => setSel({ kind: 'part', id })} /> : null}
       {tab === 'people' ? <KitPeople open={p => setSel({ kind: 'kit', id: p.id, p })} selected={sel?.kind === 'kit' ? sel.id : null} tick={kitTick} /> : null}
       {tab === 'workshop' ? <WorkshopList ws={ws} role="controller" open={id => setSel({ kind: 'ws', id })} onAdd={() => setSel({ kind: 'wsadd' })} /> : null}
+      {tab === 'tools' ? <ToolStore /> : null}
       {tab === 'live' ? <LiveFeed items={room.ctl.activity ?? []} seen={room.ctl.seenActivityAt ?? null} invoices={room.ctl.invoices} /> : null}
       {tab === 'items' ? <NewItemList items={room.ctl.room.filter(i => i.needsReview)} open={id => setSel({ kind: 'item', id })} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} disabled={s.waiting > 0} /> : null}

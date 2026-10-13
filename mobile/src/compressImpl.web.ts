@@ -30,7 +30,9 @@ export async function compressImage(uri: string, mime: string, kind: PictureKind
         if (best && best.size <= p.targetBytes) break;
       }
     }
-    if (!best || best.size >= original.size) return { uri, mime, bytes: original.size, width: img.naturalWidth, height: img.naturalHeight };
+    // Keep the original only when it did not need making smaller on screen and is smaller in bytes.
+    const resized = width !== img.naturalWidth || height !== img.naturalHeight;
+    if (!best || (!resized && best.size >= original.size)) return { uri, mime, bytes: original.size, width: img.naturalWidth, height: img.naturalHeight };
     return { uri: await toDataUrl(best), mime: png ? 'image/png' : 'image/jpeg', bytes: best.size, width, height };
   } catch {
     return { uri, mime, bytes: null, width: null, height: null }; // could not read it: send as it is

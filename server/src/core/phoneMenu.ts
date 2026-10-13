@@ -18,11 +18,11 @@ export const MENU_TABS: Record<MenuApp, { key: string; label: string }[]> = {
   stockroom: [
     { key: 'issue', label: 'To issue' }, { key: 'receive', label: 'To receive' }, { key: 'room', label: 'Stock' },
     { key: 'order', label: 'To order' }, { key: 'people', label: 'People' }, { key: 'workshop', label: 'Workshop' },
-    { key: 'live', label: 'Live' }, { key: 'items', label: 'New items' },
+    { key: 'tools', label: 'Tool store' }, { key: 'live', label: 'Live' }, { key: 'items', label: 'New items' },
   ],
   fleet: [
     { key: 'vehicles', label: 'Vehicles' }, { key: 'map', label: 'Map' }, { key: 'bookings', label: 'Booked' },
-    { key: 'faults', label: 'Faults' }, { key: 'jobs', label: 'Jobs' }, { key: 'stock', label: 'Stock' }, { key: 'techs', label: 'Techs' },
+    { key: 'faults', label: 'Faults' }, { key: 'jobs', label: 'Jobs' }, { key: 'stock', label: 'Stock' }, { key: 'techs', label: 'Techs' }, { key: 'codes', label: 'Barcodes' },
   ],
 };
 

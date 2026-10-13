@@ -5,6 +5,7 @@ import { DemoWorkshop, seedWorkshop, type DemoWorkshopState } from './demoWorksh
 import { DemoDocs, seedDocs, type DemoDocsState } from './demoDocs.ts';
 import { DemoVan, seedVan, type DemoVanState } from './demoVan.ts';
 import { DemoTimes, type DemoTimesState } from './demoTimes.ts';
+import { DemoTools, seedTools, type DemoToolsState } from './demoTools.ts';
 import { DEMO_LOGO } from './demoLogo.ts';
 import { EXAMPLE_TECH, REAL, realDeep } from './demoReal.ts';
 import { APP_OF, MAX_PINNED, MENU_LABEL, MENU_LEVELS, MENU_TABS, cleanPinned, usualTabs } from '../../server/src/core/phoneMenu.ts';
@@ -60,6 +61,7 @@ export interface DemoState {
   fleetDuty?: Record<string, boolean>;
   workshop?: DemoWorkshopState;
   repairs?: DemoRepairs;
+  toolStore?: DemoToolsState;
   office?: DemoOfficeState;
   docs?: DemoDocsState;
   queries?: { id: string; from: string; to: string; job_id: string | null; subject: string; created_at: string; read: Record<string, string>; messages: { id: string; from: string; body: string; at: string }[] }[];
@@ -178,7 +180,41 @@ export class DemoTransport implements Transport {
       parts_report_required: this.vans().partsReport(j.meta.lead_id ?? 'me'),
       parts_reports: this.reportsOn(j.meta.id),
       ...this.repairView(j),
+      tools_out: this.tools().onJob(j.meta.id),
     };
+  }
+
+  // ---- The stockroom's tool store --------------------------------------------------------------
+  private tools(): DemoTools {
+    const st = this.state.toolStore ?? (this.state.toolStore = seedTools());
+    return new DemoTools(st, this.state.flags, id => { const j = this.findJob(id); return j ? { status: j.card.status as string, closedAt: (j as { closedAt?: string }).closedAt ?? null } : null; },
+      id => (this.state.office ? this.office().name(id) : id === 'me' ? 'Thabo Mkhize' : ''));
+  }
+  private openJobsOf(userId: string) {
+    return this.state.jobs.filter(j => !['closed', 'cancelled'].includes(j.card.status as string) && ((j.meta.lead_id ?? 'me') === userId || (j.meta.helper_ids ?? []).includes(userId)))
+      .map(j => ({ id: j.meta.id, job_number: j.meta.job_number, store: j.meta.store, fault_reported: j.meta.fault_reported, people: [j.meta.lead_id ?? 'me', ...(j.meta.helper_ids ?? [])] }));
+  }
+  private toolRoute(p: string, req: Request, b: any): Response | null {
+    let m: RegExpMatchArray | null;
+    if (p === '/me/tools') { const r = this.tools().mine(this.who.id); this.persist(this.state); return ok(r); }
+    if (!p.startsWith('/tool-store')) return null;
+    if (!this.does('stockroom')) return refuse(403, 'the stockroom keeps the tool store');
+    const t = this.tools();
+    const done = (r: { ok: true; body: unknown; status?: number } | { ok: false; status: number; reasons: string[] }) => { this.persist(this.state); return r.ok ? ok(r.body, r.status ?? 200) : refuse(r.status, ...r.reasons); };
+    if (p === '/tool-store' && req.method === 'GET') {
+      const people = this.office().o.people.filter(x => !['director', 'creator'].includes(x.login_level)).map(x => ({ id: x.id, full_name: x.full_name, login_level: x.login_level })).sort((a, c) => a.full_name.localeCompare(c.full_name));
+      const ids = new Set(people.map(x => x.id));
+      const jobs = [...new Map(people.flatMap(x => this.openJobsOf(x.id)).map(j => [j.id, j])).values()].map(j => ({ ...j, people: j.people.filter(x => ids.has(x)) }));
+      const list = t.list(); this.persist(this.state);
+      return ok({ tools: list, people, jobs });
+    }
+    if (p === '/tool-store' && req.method === 'POST') return done(t.add(b));
+    if (p === '/tool-store/find') return done(t.find(new URLSearchParams(req.path.split('?')[1] ?? '').get('code') ?? ''));
+    if ((m = p.match(/^\/tool-store\/([^/]+)\/history$/))) return ok(t.history(m[1]));
+    if ((m = p.match(/^\/tool-store\/([^/]+)\/book-out$/))) return done(t.bookOut(m[1], b, this.who.name, id => this.openJobsOf(id)));
+    if ((m = p.match(/^\/tool-store\/([^/]+)\/return$/))) return done(t.signBack(m[1], b, this.who.name));
+    if ((m = p.match(/^\/tool-store\/([^/]+)$/)) && req.method === 'PUT') return done(t.edit(m[1], b));
+    return refuse(404, 'demo: not available');
   }
 
   // ---- Workshop repairs: the workshop, loan machines, machines uplifted ----------------------
@@ -1047,6 +1083,8 @@ export class DemoTransport implements Transport {
     if (rr) return rr;
     const wr = this.repairRoute(p, req, b);
     if (wr) return wr;
+    const tl = this.toolRoute(p, req, b);
+    if (tl) return tl;
     const ceoLevel = ['director', 'creator'].includes(this.office().levelOf(this.who.id) ?? this.who.level);
     if (p === '/company/brand') return ok({ name: 'ZSP (demo)', logoPhotoId: this.state.logoPhotoId ?? null, logoDataUri: this.state.logoPhotoId ? null : DEMO_LOGO,
       accent: this.state.themeAccent ?? 'orange', canTheme: ceoLevel });
@@ -1221,6 +1259,21 @@ export class DemoTransport implements Transport {
       if (p === '/fleet/workshop/count') return done(ws.count(b, this.who.name));
     }
     if (p.startsWith('/fleet') && !this.does('fleet')) return refuse(403, 'mechanic only');
+    // Vehicle barcode stickers.
+    if (p === '/fleet/barcodes' || /^\/fleet\/vehicles\/[^/]+\/barcode$/.test(p)) {
+      const vs = this.fleet().s.vehicles as (typeof this.fleet extends () => { s: { vehicles: (infer V)[] } } ? V & { barcode?: string } : never)[];
+      vs.forEach((v, i) => { v.barcode ??= v.registration === 'ND 412-778' ? 'ZSP-V07' : `ZSP-V${String(i + 10).padStart(2, '0')}`; });
+      if (p === '/fleet/barcodes') { this.persist(this.state); return ok({ vehicles: vs.map(v => ({ id: v.id, registration: v.registration, description: v.description ?? null, make: v.make, model: v.model, barcode: v.barcode })), canEdit: true }); }
+      const v = vs.find(x => p === `/fleet/vehicles/${x.id}/barcode`);
+      if (!v) return refuse(404, 'no such vehicle');
+      const code = b?.code ? String(b.code).trim().toUpperCase() : `V-${Math.random().toString(36).slice(2, 8).toUpperCase().replace(/[01OI]/g, 'X')}`;
+      if (!/^[A-Z0-9][A-Z0-9-]{2,23}$/.test(code)) return refuse(400, 'a code of 3 to 24 letters, digits or dashes');
+      const other = vs.find(x => x.barcode === code && x.id !== v.id);
+      if (other) return refuse(409, `that code is already on ${other.registration}`);
+      const previous = v.barcode;
+      v.barcode = code; this.persist(this.state);
+      return ok({ id: v.id, registration: v.registration, barcode: code, previous });
+    }
     if (p === '/fleet/daily-checks') return ok(this.fleet().checksFor());
     if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/daily-check$/))) {
       const r = this.fleet().dailyCheck(m[1], b);

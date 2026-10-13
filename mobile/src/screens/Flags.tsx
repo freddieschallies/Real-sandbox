@@ -14,7 +14,7 @@ export const TITLE: Record<string, string> = {
   open_supply_run: 'Supply run', new_supplier: 'New supplier',
   vehicle_new_damage: 'New damage found on a vehicle you handed over', handover_not_signed: 'Vehicle handover not signed',
   stock_return_short: 'Stock sent back short', van_stock_short: 'Van short of the van stock list', workshop_stock_short: 'Workshop stock counted short', duplicate_supplier_invoice: 'Supplier invoice scanned twice',
-  supplier_invoice_changed: 'Supplier invoice lines changed by hand', timesheet_missing: 'Timesheet not submitted',
+  supplier_invoice_changed: 'Supplier invoice lines changed by hand', timesheet_missing: 'Timesheet not submitted', tool_not_returned: 'Stockroom tool not signed back',
 };
 
 export function Flags() {

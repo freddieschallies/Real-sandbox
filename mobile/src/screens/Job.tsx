@@ -72,6 +72,10 @@ export function Job({ jobId }: { jobId: string }) {
       {reasons ? <Notice tone="bad" title="Not yet. Still needed:" lines={reasons} /> : null}
 
       <MachineMoves v={v} />
+      {(v.tools_out ?? []).length ? (
+        <Notice tone={state === 'closed' ? 'bad' : 'info'} title={state === 'closed' ? 'Sign these back in at the stockroom' : 'From the tool store for this job'}
+          lines={(v.tools_out ?? []).map(t => `${t.name}${t.serial ? ` (${t.serial})` : ''} · ${t.full_name}${state === 'closed' ? '' : ': sign it back when the job is done'}`)} />
+      ) : null}
 
       {between ? (
         <>

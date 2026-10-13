@@ -28,6 +28,7 @@ import type { InvoiceReader } from './invoiceReader.ts';
 import { mailerFromEnv, type Mailer } from './mailer.ts';
 import { registerReportRoutes } from './routes/reports.ts';
 import { registerRepairRoutes } from './routes/repairs.ts';
+import { registerToolStoreRoutes } from './routes/toolStore.ts';
 
 /** db must connect as the app's own database role (no superuser, no row-level-security bypass). */
 export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boolean; corsOrigins?: string[]; invoiceReader?: InvoiceReader | null; mailer?: Mailer | null }) {
@@ -56,6 +57,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerMenuRoutes(app);
   registerReportRoutes(app, opts.mailer === undefined ? mailerFromEnv() : opts.mailer);
   registerRepairRoutes(app);
+  registerToolStoreRoutes(app);
   registerAccessRoutes(app, db);
   registerPlatformRoutes(app, db);
   registerStockRoutes(app, db, opts.invoiceReader ?? null);

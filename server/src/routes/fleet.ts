@@ -9,6 +9,7 @@ import * as F from '../core/fleet.ts';
 import { DateOnly, Iso, Refused, Uuid, parse } from '../http.ts';
 import { managerOf, notify } from './field.ts';
 import { useFromWorkshop } from '../stockRepo.ts';
+import { newVehicleCode, validVehicleCode } from '../core/code128.ts';
 
 const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
 
@@ -104,6 +105,33 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
       licenceDue: F.licenceDue(v.licence_expiry ? toDate(v.licence_expiry) : null, t),
       faults, jobs, km: km.map((k: { km: number }) => ({ ...k, km: Number(k.km) })), inspections, dailyChecks,
     };
+  });
+
+  // ---- Barcode stickers ---------------------------------------------------------------------
+  // Each vehicle's own code, printed as a Code 128 sticker that technicians scan to drive it.
+  app.get('/fleet/barcodes', async req => {
+    viewer(req);
+    const { rows } = await req.db.query('SELECT id, registration, description, make, model, barcode FROM vehicles WHERE active ORDER BY registration');
+    return { vehicles: rows, canEdit: can(req.actor, 'manage_fleet') };
+  });
+
+  // A new code for a vehicle (the old sticker stops working), or the code of a sticker already on it.
+  app.post('/fleet/vehicles/:id/barcode', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    mechanic(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ code: z.string().trim().toUpperCase().optional() }), req.body ?? {});
+    if (b.code !== undefined && !validVehicleCode(b.code)) throw new Refused(400, ['a code of 3 to 24 letters, digits or dashes']);
+    return tx(req.db, async c => {
+      const v = (await c.query('SELECT registration, barcode FROM vehicles WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!v) throw new Refused(404, ['no such vehicle']);
+      let code = b.code ?? newVehicleCode();
+      for (let i = 0; !b.code && i < 5 && (await c.query('SELECT 1 FROM vehicles WHERE barcode = $1', [code])).rowCount; i++) code = newVehicleCode();
+      const other = (await c.query('SELECT registration FROM vehicles WHERE barcode = $1 AND id <> $2', [code, id])).rows[0];
+      if (other) throw new Refused(409, [`that code is already on ${other.registration}`]);
+      await c.query('UPDATE vehicles SET barcode = $2 WHERE id = $1', [id, code]);
+      await audit(c, req.actor.id, 'vehicle_barcode_changed', 'vehicle', id, { from: v.barcode, to: code });
+      return { id, registration: v.registration, barcode: code, previous: v.barcode };
+    });
   });
 
   // ---- Vehicle details, status and km --------------------------------------------------

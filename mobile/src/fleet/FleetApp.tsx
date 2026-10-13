@@ -1,6 +1,7 @@
 // The mechanic's app: the fleet only. Everything hangs off a vehicle: its details, km, faults and
 // the mechanic's own job cards. Phone: tabs at the bottom. Desktop: menu, list and detail side by side.
 import { BottomTabs } from '../BottomTabs.tsx';
+import { VehicleBarcodes } from './Barcodes.tsx';
 import { usePhoneMenu } from '../menu.tsx';
 import { ModeToggle } from '../appearance.tsx';
 import { BrandLogo } from '../brand.tsx';
@@ -19,7 +20,7 @@ import { DUE, K, SEV, STATUS, TYPE_LABEL, dayName, km, today, when, SLOT_LABEL }
 import { WorkshopItem, WorkshopList, useWorkshop } from './Workshop.tsx';
 import { AssignScreen, BookingScreen, BookingsList, DailyCheckHistory, DailyCheckScreen, DailyChecksCard, FleetMap, NewBooking, TechList } from './FleetExtra.tsx';
 
-type Tab = 'vehicles' | 'map' | 'bookings' | 'faults' | 'jobs' | 'stock' | 'techs';
+type Tab = 'vehicles' | 'map' | 'bookings' | 'faults' | 'jobs' | 'stock' | 'techs' | 'codes';
 export type Sel = { kind: 'vehicle'; id: string } | { kind: 'job'; id: string } | { kind: 'newjob'; vehicleId: string; bookingId?: string } | { kind: 'report'; vehicleId: string }
   | { kind: 'booking'; id: string } | { kind: 'check'; vehicleId: string } | { kind: 'wsitem'; id: string } | { kind: 'newbooking'; vehicleId?: string } | { kind: 'assign'; techId?: string; vehicleId?: string };
 
@@ -49,6 +50,7 @@ export function FleetApp() {
     { key: 'jobs', label: 'Jobs', count: f.d.jobs.length },
     { key: 'stock', label: 'Stock', count: ws.data?.belowMin },
     { key: 'techs', label: 'Techs' },
+    { key: 'codes', label: 'Barcodes' },
   ];
 
   const list = (
@@ -59,6 +61,7 @@ export function FleetApp() {
       {tab === 'map' ? <FleetMap f={f} open={open} /> : null}
       {tab === 'bookings' ? <BookingsList f={f} due={due.filter(x => !booked.has(x.id))} open={open} /> : null}
       {tab === 'techs' ? <TechList f={f} open={open} /> : null}
+      {tab === 'codes' ? <VehicleBarcodes /> : null}
       {tab === 'stock' ? <WorkshopList ws={ws} role="mechanic" open={id => open({ kind: 'wsitem', id })} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} disabled={s.waiting > 0} /> : null}
       <Text style={st.small}>{f.d.loadedAt ? `Updated ${when(f.d.loadedAt)}` : f.loading ? 'Loading…' : 'Needs signal to load.'}</Text>

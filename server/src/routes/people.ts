@@ -121,6 +121,9 @@ export function registerTerminationRoutes(app: FastifyInstance) {
       if (['director', 'creator'].includes(u.login_level)) throw new Refused(403, ['the CEO\'s position is not ended here']);
       const open = (await c.query("SELECT job_number FROM jobs WHERE lead_technician_id = $1 AND status NOT IN ('closed', 'cancelled') ORDER BY job_number", [id])).rows.map(r => r.job_number);
       if (open.length) throw new Refused(409, [`give ${u.full_name.split(' ')[0]}'s open jobs to someone else first: ${open.map(n => `#${n}`).join(', ')}`]);
+      // Tools and ladders from the tool store come back (signed) before employment ends.
+      const tools = (await c.query('SELECT t.name, t.serial FROM tool_bookings b JOIN store_tools t ON t.id = b.tool_id WHERE b.user_id = $1 AND b.returned_at IS NULL', [id])).rows;
+      if (tools.length) throw new Refused(409, [`the stockroom signs back the tools ${u.full_name.split(' ')[0]} has from the tool store first: ${tools.map(t => `${t.name}${t.serial ? ` (${t.serial})` : ''}`).join(', ')}`]);
       // What is still on his name, for the stockroom to collect.
       const kit = (await c.query("SELECT kind, name, detail, qty::float AS qty FROM person_kit WHERE user_id = $1 AND status = 'issued' ORDER BY kind, name", [id])).rows;
       const van = [...(await vanOf(c, id)).entries()].filter(([, q]) => q > 0);

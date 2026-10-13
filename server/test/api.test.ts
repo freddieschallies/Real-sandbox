@@ -1753,6 +1753,52 @@ test('workshop repairs: uplifted from site with a signature, a loan machine left
   assert.equal(wv.machine_at, 'site'); assert.equal(wv.moves[0].place, 'workshop');
 });
 
+test('vehicle barcodes: the mechanic gives a vehicle a new sticker code (the old one stops working) or keeps the one on it', async () => {
+  const list = await call('mech', 'GET', '/fleet/barcodes');
+  assert.equal(list.status, 200); assert.equal(list.body.canEdit, true);
+  const v = list.body.vehicles[0];
+  const fresh = await call('mech', 'POST', `/fleet/vehicles/${v.id}/barcode`, {});
+  assert.equal(fresh.status, 200); assert.match(fresh.body.barcode, /^V-[A-Z2-9]{6}$/); assert.equal(fresh.body.previous, v.barcode);
+  assert.equal((await call('tech2', 'GET', `/vehicles/lookup?barcode=${fresh.body.barcode}`)).body.vehicle.registration, v.registration, 'the new sticker scans');
+  if (v.barcode !== v.registration) assert.equal((await call('tech2', 'GET', `/vehicles/lookup?barcode=${encodeURIComponent(v.barcode)}`)).status, 404, 'the old sticker no longer works');
+  assert.equal((await call('mech', 'POST', `/fleet/vehicles/${v.id}/barcode`, { code: 'bad code!' })).status, 400);
+  const other = list.body.vehicles[1];
+  if (other) assert.equal((await call('mech', 'POST', `/fleet/vehicles/${other.id}/barcode`, { code: fresh.body.barcode })).status, 409, 'one code, one vehicle');
+  assert.equal((await call('tech', 'POST', `/fleet/vehicles/${v.id}/barcode`, {})).status, 403, 'the mechanic only');
+});
+
+test('tool store: tools and ladders with serials and barcodes, booked out for a job with a signature, signed back with their condition', async () => {
+  assert.equal((await call('tech', 'GET', '/tool-store')).status, 403, 'the stockroom keeps it');
+  const ladder = await call('stock', 'POST', '/tool-store', { name: 'Step ladder 2.4 m', kind: 'ladder', serial: 'LAD-2401' });
+  assert.equal(ladder.status, 201, JSON.stringify(ladder.body)); assert.match(ladder.body.barcode, /^T-/);
+  assert.equal((await call('stock', 'POST', '/tool-store', { name: 'Another ladder', kind: 'ladder', serial: 'lad-2401' })).status, 409, 'one serial number, one tool');
+  const drill = (await call('stock', 'POST', '/tool-store', { name: 'Core drill', barcode: 'zsp-t-0099' })).body;
+  assert.equal(drill.barcode, 'ZSP-T-0099', 'an existing sticker kept');
+  assert.equal((await call('stock', 'GET', `/tool-store/find?code=${ladder.body.barcode}`)).body.id, ladder.body.id, 'scanning the sticker finds it');
+  assert.equal((await call('stock', 'GET', '/tool-store/find?code=lad-2401')).body.id, ladder.body.id, 'so does the serial number');
+  const job = (await call('admin', 'POST', '/jobs', { jobType: 'breakdown', storeId: ids.store, faultReported: 'Light fittings out in the warehouse', scheduledDate: '2026-10-30', leadTechnicianId: ids.tech })).body;
+  const sig = async () => (await upload('stock', '/photos', { kind: 'tool_signature', takenAt: '2026-10-30T07:00:00+02:00' }, 'image/png')).body.id as string;
+  const out = { userId: ids.tech, jobId: job.id, signaturePhotoId: await sig() };
+  assert.equal((await call('stock', 'POST', `/tool-store/${ladder.body.id}/book-out`, { ...out, signaturePhotoId: '00000000-0000-4000-8000-000000000001' })).status, 409, 'he signs first');
+  assert.equal((await call('stock', 'POST', `/tool-store/${ladder.body.id}/book-out`, { ...out, userId: ids.tech2 })).status, 400, 'the job must be his');
+  const booked = await call('stock', 'POST', `/tool-store/${ladder.body.id}/book-out`, out);
+  assert.equal(booked.status, 200, JSON.stringify(booked.body)); assert.equal(booked.body.out.jobNumber, job.job_number); assert.equal(booked.body.out.overdue, false);
+  assert.equal((await call('stock', 'POST', `/tool-store/${ladder.body.id}/book-out`, { ...out, signaturePhotoId: await sig() })).status, 409, 'already out');
+  const mine = (await call('tech', 'GET', '/me/tools')).body;
+  assert.equal(mine.length, 1); assert.equal(mine[0].name, 'Step ladder 2.4 m'); assert.equal(mine[0].due, 'when the job is done');
+  assert.equal((await call('tech', 'GET', `/jobs/${job.id}`)).body.tools_out[0].name, 'Step ladder 2.4 m', 'on his job card');
+  assert.equal((await call('stock', 'PUT' as 'POST', `/tool-store/${ladder.body.id}`, { active: false })).status, 409, 'cannot retire it while out');
+  // Sign back: damaged needs a word.
+  assert.equal((await call('stock', 'POST', `/tool-store/${ladder.body.id}/return`, { condition: 'damaged', signaturePhotoId: await sig() })).status, 400);
+  const back = await call('stock', 'POST', `/tool-store/${ladder.body.id}/return`, { condition: 'damaged', note: 'Bottom rung bent', signaturePhotoId: await sig() });
+  assert.equal(back.status, 200); assert.equal(back.body.out, null); assert.equal(back.body.condition, 'damaged');
+  assert.equal((await call('tech', 'GET', '/me/tools')).body.length, 0);
+  const hist = (await call('stock', 'GET', `/tool-store/${ladder.body.id}/history`)).body;
+  assert.equal(hist.length, 1); assert.equal(hist[0].return_condition, 'damaged'); assert.ok(hist[0].out_signature_photo_id && hist[0].return_signature_photo_id);
+  await assert.rejects(db.query('UPDATE tool_bookings SET return_note = $1 WHERE id = $2', ['changed', hist[0].id]), 'kept as signed');
+  await assert.rejects(db.query('DELETE FROM tool_bookings WHERE id = $1', [hist[0].id]));
+});
+
 test('phone menus: the CEO or an admin pins tabs per position; everyone gets their own position\'s choice', async () => {
   assert.deepEqual((await call('stock', 'GET', '/me/phone-menu')).body, { pinned: null, canEdit: false }, 'automatic until chosen');
   assert.equal((await call('stock', 'GET', '/phone-menus')).status, 403, 'not the stock controller');
