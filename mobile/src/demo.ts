@@ -10,7 +10,8 @@ import { DEMO_LOGO } from './demoLogo.ts';
 import { EXAMPLE_TECH, REAL, realDeep } from './demoReal.ts';
 import { APP_OF, MAX_PINNED, MENU_LABEL, MENU_LEVELS, MENU_TABS, cleanPinned, usualTabs } from '../../server/src/core/phoneMenu.ts';
 import type { LoginLevel } from '../../server/src/core/permissions.ts';
-import { DemoOffice, END_REASONS, seedOffice, terminate, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
+import { DemoOffice, END_REASONS, HR_POSITIONS, POSITION_LABEL, seedOffice, terminate, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
+import { DemoLogins, type DemoLoginsState } from './demoLogins.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
 import { normReg, registrationCandidates } from '../../server/src/core/vehicleCode.ts';
@@ -63,6 +64,8 @@ export interface DemoState {
   repairs?: DemoRepairs;
   toolStore?: DemoToolsState;
   office?: DemoOfficeState;
+  /** Own logins: setup codes and the passwords people chose (this browser only). */
+  logins?: DemoLoginsState;
   docs?: DemoDocsState;
   queries?: { id: string; from: string; to: string; job_id: string | null; subject: string; created_at: string; read: Record<string, string>; messages: { id: string; from: string; body: string; at: string }[] }[];
 }
@@ -207,7 +210,7 @@ export class DemoTransport implements Transport {
     }
     if (p === '/me/tools') { const r = this.tools().mine(this.who.id); this.persist(this.state); return ok(r); }
     if (!p.startsWith('/tool-store')) return null;
-    if (!this.does('stockroom')) return refuse(403, 'the stockroom keeps the tool store');
+    if (!this.does('stockroom') && !this.covers()) return refuse(403, 'the stockroom keeps the tool store');
     const t = this.tools();
     const done = (r: { ok: true; body: unknown; status?: number } | { ok: false; status: number; reasons: string[] }) => { this.persist(this.state); return r.ok ? ok(r.body, r.status ?? 200) : refuse(r.status, ...r.reasons); };
     if (p === '/tool-store' && req.method === 'GET') {
@@ -220,8 +223,8 @@ export class DemoTransport implements Transport {
     if (p === '/tool-store' && req.method === 'POST') return done(t.add(b));
     if (p === '/tool-store/find') return done(t.find(new URLSearchParams(req.path.split('?')[1] ?? '').get('code') ?? ''));
     if ((m = p.match(/^\/tool-store\/([^/]+)\/history$/))) return ok(t.history(m[1]));
-    if ((m = p.match(/^\/tool-store\/([^/]+)\/book-out$/))) return done(t.bookOut(m[1], b, this.who.name, id => this.openJobsOf(id)));
-    if ((m = p.match(/^\/tool-store\/([^/]+)\/return$/))) return done(t.signBack(m[1], b, this.who.name));
+    if ((m = p.match(/^\/tool-store\/([^/]+)\/book-out$/))) return done(t.bookOut(m[1], b, this.who.name, id => this.openJobsOf(id), this.standIn()));
+    if ((m = p.match(/^\/tool-store\/([^/]+)\/return$/))) return done(t.signBack(m[1], b, this.who.name, this.standIn()));
     if ((m = p.match(/^\/tool-store\/([^/]+)$/)) && req.method === 'PUT') return done(t.edit(m[1], b));
     return refuse(404, 'demo: not available');
   }
@@ -408,6 +411,22 @@ export class DemoTransport implements Transport {
     if (area === 'fleet' && this.who.level === 'mechanic') return true;
     if (area === 'stockroom' && this.who.level === 'stockroom') return true;
     return this.office().workOf(this.who.id, this.who.level)[area];
+  }
+
+  /** Own logins in the test drive. */
+  private loginBook(): DemoLogins {
+    return new DemoLogins((this.state.logins ??= { logins: {}, codes: {}, log: [] }), () => this.office().loginPeople());
+  }
+
+  /** The admin stands in for the stock controller when he is out: issuing stock and tools (unless the CEO switched the stockroom off for her). */
+  private covers(): boolean {
+    const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
+    return lvl === 'admin' && this.office().o.work?.[this.who.id]?.stockroom !== false;
+  }
+  /** Who is doing stockroom work when it is not a stock controller: their position, e.g. "Admin". */
+  private standIn(): string | null {
+    const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
+    return lvl === 'stockroom' ? null : POSITION_LABEL[lvl] ?? lvl;
   }
 
   /** Daily timesheets: the technician's own, and HR's export. */
@@ -630,7 +649,7 @@ export class DemoTransport implements Transport {
     let m: RegExpMatchArray | null;
     const office = ['admin', 'management', 'hr', 'director', 'creator'].includes(this.who.level);
     const isOffice = p.startsWith('/office') || p === '/jobs' || p.startsWith('/flags') && !p.endsWith('/explain') || p.startsWith('/vehicles/inspections') || p === '/access/positions'
-      || p === '/people' || /^\/people\/[^/]+(\/profile|\/terminate|\/record(\/[^/]+)?)?$/.test(p) || /^\/access\/users\/[^/]+\/(position|work|trade)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
+      || p === '/people' || /^\/people\/[^/]+(\/profile|\/terminate|\/record(\/[^/]+)?|\/login(\/(code|stop|allow|sign-out))?)?$/.test(p) || /^\/access\/users\/[^/]+\/(position|work|trade)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
     if (!isOffice) return null;
     if (!office) return refuse(403, 'office only');
     if (!this.does('jobs') && (p === '/office/overview' || p === '/jobs' || p === '/office/stores' || p === '/office/technicians') && req.method === 'GET') return refuse(403, 'office only');
@@ -645,7 +664,43 @@ export class DemoTransport implements Transport {
     const manages = this.does('access');
     // The CEO and HR edit profiles, end employment and keep the terminated staff.
     const hrOrCeo = manages || this.does('hr');
-    if (p === '/people') return ok(o.people(manages, manages || this.does('hr')));
+    if (p === '/people' && req.method === 'POST') {
+      if (!hrOrCeo) return refuse(403, 'only HR or the CEO looks after logins');
+      const vn = this.vans();
+      const dept = b.departmentId ? vn.v.departments.find(d => d.id === b.departmentId) : undefined;
+      if (b.departmentId && !dept) return refuse(400, 'unknown department');
+      const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
+      const r = o.addPerson(b, manages, lvl === 'creator', dept?.name ?? '');
+      if (r.ok && dept) vn.v.memberOf[(r.body as { id: string }).id] = dept.id;
+      return done(r);
+    }
+    if (p === '/people') {
+      const list = o.people(manages, manages || this.does('hr')) as ReturnType<DemoOffice['people']> & { canAdd?: boolean; addPositions?: string[] };
+      if (hrOrCeo) {
+        const L = this.loginBook();
+        const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
+        list.canAdd = true;
+        list.addPositions = manages ? Object.keys(POSITION_LABEL).filter(x => x !== 'creator' || lvl === 'creator') : HR_POSITIONS;
+        list.people = list.people.map(x => ({ ...x, login: L.listState(x.id) }));
+      }
+      return ok(list);
+    }
+    if ((m = p.match(/^\/people\/([^/]+)\/login(?:\/(code|stop|allow|sign-out))?$/))) {
+      if (!hrOrCeo) return refuse(403, 'only HR or the CEO looks after logins');
+      const L = this.loginBook();
+      const id = m[1];
+      const left = (this.state.office!.leavers ?? []).some(l => l.person.id === id);
+      const target = this.state.office!.people.find(x => x.id === id);
+      if (!target && !left) return refuse(404, 'no such person');
+      const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
+      const may = !!target && L.manages({ id: this.who.id, level: lvl, ceo: manages, hr: this.does('hr') }, target);
+      if (!m[2]) return ok(L.info(id, may, id === this.who.id, left));
+      if (id === this.who.id) return refuse(403, 'change your own password under "Change my password"');
+      if (!may) return refuse(403, manages ? "only the Creator looks after the Creator's login" : `HR looks after the logins of technicians, admin, department managers and stock controllers; ${target?.full_name.split(' ')[0] ?? 'this'}'s is the CEO's`);
+      const r = m[2] === 'code' ? L.issueCode(id, this.who.name, REAL ? REAL.company.name : 'ZSP')
+        : m[2] === 'stop' ? L.stop(id, this.who.name) : m[2] === 'allow' ? L.allow(id, this.who.name) : L.signOutAll(id, this.who.name);
+      return done(r);
+    }
     if (p === '/people/terminated') {
       if (!hrOrCeo) return refuse(403, 'terminated staff are kept by HR');
       return ok((this.state.office!.leavers ?? []).map(l => ({ id: l.person.id, full_name: l.person.full_name, photo_id: null, date: l.date, reason: l.reason, reasonLabel: END_REASONS[l.reason], note: l.note,
@@ -1048,6 +1103,18 @@ export class DemoTransport implements Transport {
     const p = req.path.split('?')[0];
     let m: RegExpMatchArray | null;
 
+    // Own logins: someone HR or the CEO added and gave a setup code signs in as themselves.
+    if ((p === '/auth/login' && String(b.email ?? '').includes('@')) || p === '/auth/setup') {
+      const L = this.loginBook();
+      const r = p === '/auth/setup' ? L.setup(String(b.email ?? ''), String(b.code ?? ''), String(b.password ?? '')) : L.login(String(b.email ?? ''), String(b.password ?? ''));
+      this.persist(this.state);
+      if (!r.ok) return refuse(r.status, ...r.reasons);
+      const id = (r.body as { id: string }).id;
+      const person = this.office().o.people.find(x => x.id === id);
+      if (!person) return refuse(401, 'wrong email or password');
+      this.who = { id, name: person.full_name, level: person.login_level };
+      return ok({ token: `demo-${id}`, user: this.who, company: { id: 'demo', name: REAL ? REAL.company.name : 'ZSP (demo)' }, signedInFor: b.remember ? '30 days' : '12 hours' });
+    }
     if (p === '/auth/login') {
       // The same pretend company seen as the technician or as the stock controller.
       const pick = b.email === 'stock' ? { id: 'stock', name: 'Lindiwe Zulu', level: 'stockroom' }
@@ -1110,7 +1177,14 @@ export class DemoTransport implements Transport {
       const level = this.office().levelOf(this.who.id) ?? this.who.level;
       const work = this.office().workOf(this.who.id, level);
       this.persist(this.state);
-      return ok({ id: this.who.id, full_name: this.who.name, login_level: level, work, fleetDuty: work.fleet && level !== 'mechanic', stockDuty: work.stockroom && level !== 'stockroom' });
+      return ok({ id: this.who.id, full_name: this.who.name, login_level: level, work, fleetDuty: work.fleet && level !== 'mechanic', stockDuty: work.stockroom && level !== 'stockroom',
+        stockCover: !work.stockroom && this.covers() });
+    }
+    if (p === '/me/password') {
+      const pr = this.office().loginPeople().find(x => x.id === this.who.id);
+      const r = this.loginBook().change(this.who.id, this.who.name, pr?.email ?? '', String(b.current ?? ''), String(b.password ?? ''));
+      this.persist(this.state);
+      return r.ok ? ok({ ...(r.body as object), user: this.who, company: { id: 'demo', name: REAL ? REAL.company.name : 'ZSP (demo)' } }) : refuse(r.status, ...r.reasons);
     }
     if ((m = p.match(/^\/access\/users\/([^/]+)\/fleet-duty$/))) {
       // The CEO's switch; in the test build anyone may flip it (the tester's "small company" switch).
@@ -1120,7 +1194,9 @@ export class DemoTransport implements Transport {
     }
     if (p === '/me/today') {
       this.repairs();
-      const jobs: TodayJob[] = this.state.jobs.filter(j => (j.card.status as string) !== 'cancelled' && !(j.card.status === 'closed' && j.meta.scheduled_date < today()) && ((j.meta.lead_id ?? 'me') === 'me' || (j.meta.helper_ids ?? []).includes('me'))).map(j => ({
+      // Someone added under People who signed in with their own login has their own (new, empty) day.
+      const meId = this.who.id.startsWith('p-') ? this.who.id : 'me';
+      const jobs: TodayJob[] = this.state.jobs.filter(j => (j.card.status as string) !== 'cancelled' && !(j.card.status === 'closed' && j.meta.scheduled_date < today()) && ((j.meta.lead_id ?? 'me') === meId || (j.meta.helper_ids ?? []).includes(meId))).map(j => ({
         id: j.meta.id, job_number: j.meta.job_number, job_type: j.meta.job_type, priority: j.meta.priority as TodayJob['priority'],
         status: j.card.status, scheduled_date: j.meta.scheduled_date, fault_reported: j.meta.fault_reported, store: j.meta.store,
         address: j.meta.store_address, i_am_lead: true,
@@ -1134,7 +1210,7 @@ export class DemoTransport implements Transport {
     if (p === '/me/inventory') { const r = this.stock().inventory(); this.persist(this.state); return ok(r); }
     if (p === '/stock/catalogue') return ok(this.stock().catalogue());
     {
-      const kitWrite = this.does('stockroom');
+      const kitWrite = this.does('stockroom') || this.covers();
       const office = ['admin', 'management', 'hr', 'director', 'creator'].includes(this.who.level);
       if (p === '/me/kit') { const k = this.stock().kitFor(this.who.id, false); this.persist(this.state); return ok(k); }
       if (p === '/kit/people') return kitWrite ? ok((() => { const v = this.vans(); return this.stock().kitPeople(this.office().stockroomPeople()).map(x => ({ ...x, van_short: v.shortCount(x.id) })); })()) : refuse(403, 'the stockroom keeps tools and PPE');
@@ -1166,8 +1242,8 @@ export class DemoTransport implements Transport {
     // Stock controller
     if (p === '/stock/overview') return ok(this.stock().overview());
     if (p === '/stock/issues') return ok(this.stock().requests(new URLSearchParams(req.path.split('?')[1] ?? '').get('status') ?? 'pending'));
-    if ((m = p.match(/^\/stock\/issues\/([^/]+)\/issue$/))) return this.stockResult(this.stock().issue(m[1], b));
-    if ((m = p.match(/^\/stock\/issues\/([^/]+)\/reject$/))) return this.stockResult(this.stock().reject(m[1], b.reason));
+    if ((m = p.match(/^\/stock\/issues\/([^/]+)\/issue$/))) return this.stockResult(this.stock().issue(m[1], b, this.who.name, this.standIn()));
+    if ((m = p.match(/^\/stock\/issues\/([^/]+)\/reject$/))) return this.stockResult(this.stock().reject(m[1], b.reason, this.who.name, this.standIn()));
     if (p === '/stock/returns') {
       const st = new URLSearchParams(req.path.split('?')[1] ?? '').get('status') ?? 'pending';
       return ok(this.stock().s.returns.filter(r => r.status === st));

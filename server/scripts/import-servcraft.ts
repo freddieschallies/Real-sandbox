@@ -70,8 +70,10 @@ try {
     const email = x.email?.trim().toLowerCase() || null;
     const known = email ? (await c.query('SELECT id FROM users WHERE lower(email) = $1', [email])).rows[0] : null;
     if (known) { knownStaff++; await c.query('UPDATE users SET phone = COALESCE(phone, $2) WHERE id = $1', [known.id, phone(x.phone)]); continue; }
-    await c.query(`INSERT INTO users (full_name, email, phone, login_level, password_hash, login_enabled) VALUES ($1, $2, $3, 'technician', '!', false)`,
-      [clean(x.full_name), email, phone(x.phone)]);
+    const id = (await c.query(`INSERT INTO users (full_name, email, phone, login_level, password_hash, login_enabled) VALUES ($1, $2, $3, 'technician', '!', false) RETURNING id`,
+      [clean(x.full_name), email, phone(x.phone)])).rows[0].id;
+    // Their email is their sign-in name; they choose a password with a setup code from the office.
+    if (email) await c.query('INSERT INTO logins (email, user_id, company_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [email, id, login.company_id]);
     newStaff++;
   }
 

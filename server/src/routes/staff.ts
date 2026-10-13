@@ -4,7 +4,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { audit, tx, type Q } from '../db.ts';
-import { notify } from './field.ts';
+import { notify, tellStockroom } from './field.ts';
 import { POSITION_LABEL, TRADES, can, seesPeople, type Actor, type LoginLevel, type Trade } from '../core/permissions.ts';
 import { DateOnly, Refused, Uuid, parse } from '../http.ts';
 
@@ -164,6 +164,7 @@ export function registerStaffRoutes(app: FastifyInstance) {
       }
       await audit(c, req.actor.id, 'kit_issued', 'user', id, { kind: b.kind, name, qty: b.qty });
       await notify(c, id, 'kit_issued', `${b.kind === 'ppe' ? 'PPE' : 'A tool'} was put on your name: ${name}${b.qty !== 1 ? ` × ${b.qty}` : ''}.`, { kitId: k.id });
+      await tellStockroom(c, req.actor.id, `issued ${name}${b.qty !== 1 ? ` × ${b.qty}` : ''} to ${u.full_name}${b.stockItemId ? ' from the stockroom' : ''}.`, { userId: id, kitId: k.id });
       return { id: k.id };
     });
   });
@@ -183,6 +184,7 @@ export function registerStaffRoutes(app: FastifyInstance) {
           [k.stock_item_id, k.qty, kitId, `Returned by ${k.full_name}`, req.actor.id]);
       }
       await audit(c, req.actor.id, `kit_${b.status}`, 'user', k.user_id, { kitId, note: b.note ?? null });
+      await tellStockroom(c, req.actor.id, `marked ${k.full_name}'s ${k.name} as ${b.status}${b.status === 'returned' && k.stock_item_id && b.backToStock ? ' (back into stock)' : ''}${b.note ? `: ${b.note}` : ''}.`, { userId: k.user_id, kitId });
       return { id: kitId, status: b.status };
     });
   });

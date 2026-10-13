@@ -40,7 +40,7 @@ const at = (h: number, m = 0) => `2026-10-12T${String(h).padStart(2, '0')}:${Str
 const STORE = { lat: -28.7807, lng: 32.0383 };
 const SAFE = { areaSafe: true, isolated: true, publicClear: true };
 
-async function call(who: string, method: 'GET' | 'POST' | 'PATCH', url: string, body?: object, extra: Record<string, string> = {}) {
+async function call(who: string, method: 'GET' | 'POST' | 'PATCH' | 'PUT', url: string, body?: object, extra: Record<string, string> = {}) {
   const res = await app.inject({ method, url, payload: body, headers: { ...(tokens[who] ? { authorization: `Bearer ${tokens[who]}` } : {}), ...extra } });
   return { status: res.statusCode, body: res.json(), headers: res.headers };
 }
@@ -1076,8 +1076,9 @@ test('the CEO assigns each person a position; it takes effect at once and is log
   assert.equal((await call('director', 'PUT', `/access/users/${ids.tech2}/fleet-duty`, { on: false })).status, 200);
   assert.equal((await call('admin', 'GET', '/fleet')).status, 403, 'taken away at once');
 
-  // A chosen Admin also runs the stockroom, with full access; other Admins do not.
-  assert.equal((await call('admin', 'GET', '/stock/issues')).status, 403);
+  // A chosen Admin also runs the stockroom, with full access; other Admins only stand in to issue.
+  assert.equal((await call('admin', 'GET', '/stock/stockroom')).status, 403);
+  assert.equal((await call('admin', 'GET', '/stock/issues')).status, 200, 'any admin issues when the stock controller is out');
   assert.equal((await call('manager', 'PUT', `/access/users/${ids.admin}/stock-duty`, { on: true })).status, 403, 'only whoever manages access');
   assert.equal((await call('director', 'PUT', `/access/users/${ids.stock}/stock-duty`, { on: true })).status, 409, 'already a stock controller');
   assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/stock-duty`, { on: true })).status, 200);
@@ -1089,7 +1090,7 @@ test('the CEO assigns each person a position; it takes effect at once and is log
   assert.equal((await call('admin', 'GET', '/stock/stockroom')).status, 200);
   assert.ok((await call('director', 'GET', '/access/positions')).body.people.find((x: { id: string }) => x.id === ids.admin).does_stock);
   assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/stock-duty`, { on: false })).status, 200);
-  assert.equal((await call('admin', 'GET', '/stock/issues')).status, 403, 'taken away at once');
+  assert.equal((await call('admin', 'GET', '/stock/stockroom')).status, 403, 'taken away at once');
 
   // People: the Admin sees everyone; only someone given positions and access changes them.
   const pp = (await call('admin', 'GET', '/people')).body;
@@ -1173,7 +1174,7 @@ test('tools and PPE: the stockroom keeps each person\'s list; stock goes out and
   const boots = (await db.query("INSERT INTO stock_items (code, description, category) VALUES ('PPE-BOOT', 'Safety boots', 'ppe') RETURNING id")).rows[0].id;
   await db.query("INSERT INTO stock_movements (stock_item_id, qty, kind, to_stockroom, created_by) VALUES ($1, 4, 'receive', true, $2)", [boots, ids.stock]);
   const onHand = async () => Number((await db.query('SELECT qty FROM stockroom_stock WHERE stock_item_id = $1', [boots])).rows[0].qty);
-  assert.equal((await call('admin', 'POST', `/people/${ids.tech}/kit`, { kind: 'tool', name: 'Fluke multimeter' })).status, 403, 'only the stockroom');
+  assert.equal((await call('manager', 'POST', `/people/${ids.tech}/kit`, { kind: 'tool', name: 'Fluke multimeter' })).status, 403, 'only the stockroom (or whoever stands in)');
   const meter = await call('stock', 'POST', `/people/${ids.tech}/kit`, { kind: 'tool', name: 'Fluke multimeter', detail: 'Serial 4471' });
   assert.equal(meter.status, 200);
   const b = await call('stock', 'POST', `/people/${ids.tech}/kit`, { kind: 'ppe', stockItemId: boots, detail: 'Size 9', replaceBy: '2026-01-01' });
@@ -1964,4 +1965,128 @@ test('a suspended company is locked out at once', async () => {
 test('a disabled login stops working immediately', async () => {
   await db.query('UPDATE users SET login_enabled = false WHERE id = $1', [ids.tech2]);
   assert.equal((await call('tech2', 'GET', '/jobs')).status, 401);
+});
+
+test('own logins: HR adds a person, gives a setup code; he chooses his own password and stays signed in 30 days', async () => {
+  // HR adds a technician (not a director: that is the CEO's).
+  assert.equal((await call('hr', 'POST', '/people', { fullName: 'Sizwe Dlamini', email: 'sizwe@zsp.test', position: 'director' })).status, 403);
+  assert.equal((await call('tech', 'POST', '/people', { fullName: 'Sizwe Dlamini', email: 'sizwe@zsp.test', position: 'technician' })).status, 403, 'not a technician\'s work');
+  const add = await call('hr', 'POST', '/people', { fullName: 'Sizwe Dlamini', email: 'Sizwe@zsp.test', position: 'technician', trade: 'electrician', departmentId: ids.dept });
+  assert.equal(add.status, 200, JSON.stringify(add.body));
+  const sizwe = add.body.id as string;
+  assert.equal((await call('hr', 'POST', '/people', { fullName: 'Someone Else', email: 'sizwe@zsp.test', position: 'technician' })).status, 409, 'one email, one person');
+  const list = (await call('hr', 'GET', '/people')).body;
+  assert.equal(list.canAdd, true);
+  assert.equal(list.people.find((p: { id: string }) => p.id === sizwe).login, 'none', 'no login yet');
+  // Without a password he cannot sign in at all.
+  assert.equal((await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: '!' })).status, 401);
+
+  // The code: shown once, ready to send. Only its hash is kept.
+  const code = await call('hr', 'POST', `/people/${sizwe}/login/code`, {});
+  assert.equal(code.status, 200, JSON.stringify(code.body));
+  assert.match(code.body.code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+  assert.match(code.body.message, /sizwe@zsp\.test/);
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM login_codes WHERE code_hash = $1', [code.body.code])).rows[0].n, 0, 'not stored as typed');
+  assert.equal((await call('hr', 'GET', '/people')).body.people.find((p: { id: string }) => p.id === sizwe).login, 'code');
+
+  // A weak password, a wrong code: refused. The code is case and dash insensitive.
+  assert.equal((await call('', 'POST', '/auth/setup', { email: 'sizwe@zsp.test', code: code.body.code, password: 'short' })).status, 400);
+  assert.equal((await call('', 'POST', '/auth/setup', { email: 'sizwe@zsp.test', code: code.body.code, password: 'sizwe1234' })).status, 400, 'not his email name');
+  assert.equal((await call('', 'POST', '/auth/setup', { email: 'sizwe@zsp.test', code: 'AAAA-AAAA', password: 'Ladder-77-blue' })).status, 401);
+  const typed = code.body.code.toLowerCase().replace('-', ' ');
+  const set = await call('', 'POST', '/auth/setup', { email: 'SIZWE@zsp.test', code: typed, password: 'Ladder-77-blue', remember: true });
+  assert.equal(set.status, 200, JSON.stringify(set.body));
+  assert.equal(set.body.signedInFor, '30 days');
+  const claims = JSON.parse(Buffer.from(set.body.token.split('.')[1], 'base64url').toString());
+  assert.ok(claims.exp - claims.iat >= 30 * 86400 - 5, 'signed in for 30 days on his phone');
+  assert.equal((await call('', 'POST', '/auth/setup', { email: 'sizwe@zsp.test', code: code.body.code, password: 'Another-88-red' })).status, 401, 'the code works once');
+  tokens.sizwe = set.body.token;
+  assert.equal((await call('sizwe', 'GET', '/me')).status, 200);
+  // Signing in normally: 12 hours unless he keeps it signed in on his own phone.
+  const short = await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: 'Ladder-77-blue' });
+  assert.equal(short.status, 200);
+  const c2 = JSON.parse(Buffer.from(short.body.token.split('.')[1], 'base64url').toString());
+  assert.ok(c2.exp - c2.iat <= 12 * 3600);
+  // Nobody in the office knows his password: HR sees the log, not the password.
+  const info = (await call('hr', 'GET', `/people/${sizwe}/login`)).body;
+  assert.equal(info.state, 'on');
+  assert.ok(info.lastSignIn);
+  assert.ok(info.history.some((h: { change: string }) => /own password/.test(h.change)));
+  assert.equal((await call('hr', 'GET', `/people/${ids.creator}/login`)).body.canManage, false, 'HR does not touch the CEO\'s login');
+  assert.equal((await call('hr', 'POST', `/people/${ids.creator}/login/code`, {})).status, 403);
+  assert.equal((await call('hr', 'POST', `/people/${ids.hr}/login/stop`, {})).status, 403, 'not your own');
+});
+
+test('own logins: wrong passwords lock it; a lost phone is signed out; a stopped login stops at once', async () => {
+  const sizwe = (await db.query("SELECT id FROM users WHERE email = 'sizwe@zsp.test'")).rows[0].id;
+  for (let i = 0; i < 5; i++) assert.equal((await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: `wrong-${i}` })).status, 401);
+  const locked = await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: 'Ladder-77-blue' });
+  assert.equal(locked.status, 429, 'locked after five wrong passwords, even with the right one');
+  assert.match(locked.body.reasons[0], /15 minutes/);
+  assert.equal((await call('hr', 'GET', '/people')).body.people.find((p: { id: string }) => p.id === sizwe).login, 'locked', 'HR sees it is locked');
+  // A new code unlocks; the old password still works until he uses it.
+  const code = (await call('hr', 'POST', `/people/${sizwe}/login/code`, {})).body.code;
+  assert.equal((await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: 'Ladder-77-blue' })).status, 200);
+  // A code is cancelled after five wrong tries.
+  for (let i = 0; i < 5; i++) await call('', 'POST', '/auth/setup', { email: 'sizwe@zsp.test', code: 'ZZZZ-ZZZZ', password: 'Ladder-77-blue' });
+  assert.equal((await call('', 'POST', '/auth/setup', { email: 'sizwe@zsp.test', code, password: 'Ladder-77-blue' })).status, 401);
+
+  // Lost phone: every phone signed in as him is signed out; he signs in again with his password.
+  assert.equal((await call('sizwe', 'GET', '/me')).status, 200);
+  assert.equal((await call('hr', 'POST', `/people/${sizwe}/login/sign-out`, {})).status, 200);
+  assert.equal((await call('sizwe', 'GET', '/me')).status, 401);
+  tokens.sizwe = (await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: 'Ladder-77-blue', remember: true })).body.token;
+  assert.equal((await call('sizwe', 'GET', '/me')).status, 200);
+
+  // He changes his password: this phone stays in (a new token), others are out.
+  const old = tokens.sizwe;
+  assert.equal((await call('sizwe', 'POST', '/me/password', { current: 'nope', password: 'Bucket-42-green' })).status, 403);
+  const ch = await call('sizwe', 'POST', '/me/password', { current: 'Ladder-77-blue', password: 'Bucket-42-green' });
+  assert.equal(ch.status, 200);
+  assert.equal((await call('sizwe', 'GET', '/me')).status, 401, 'the old sign-in is gone');
+  tokens.sizwe = ch.body.token;
+  assert.equal((await call('sizwe', 'GET', '/me')).status, 200);
+  assert.equal(JSON.parse(Buffer.from(ch.body.token.split('.')[1], 'base64url').toString()).r, true, 'still kept signed in on his phone');
+
+  // Stopped: at once, on every phone; the right password is told it is stopped.
+  assert.equal((await call('hr', 'POST', `/people/${sizwe}/login/stop`, { reason: 'On suspension' })).status, 200);
+  assert.equal((await call('sizwe', 'GET', '/me')).status, 401);
+  assert.equal((await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: 'Bucket-42-green' })).status, 403);
+  assert.equal((await call('hr', 'GET', '/people')).body.people.find((p: { id: string }) => p.id === sizwe).login, 'stopped');
+  assert.equal((await call('hr', 'POST', `/people/${sizwe}/login/allow`, {})).status, 200);
+  assert.equal((await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: 'Bucket-42-green' })).status, 200);
+
+  // His email changes: he signs in with the new one.
+  assert.equal((await call('hr', 'PUT', `/people/${sizwe}/profile`, { email: 'sizwe.d@zsp.test' })).status, 200);
+  assert.equal((await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: 'Bucket-42-green' })).status, 401);
+  assert.equal((await call('', 'POST', '/auth/login', { email: 'sizwe.d@zsp.test', password: 'Bucket-42-green' })).status, 200);
+  assert.equal((await call('hr', 'PUT', `/people/${sizwe}/profile`, { email: 'creator@zsp.test' })).status, 409, 'someone else\'s sign-in');
+  // Someone without an email gets one before a code.
+  const noMail = (await call('creator', 'POST', '/people', { fullName: 'Vusi Mkhize', position: 'mechanic' })).body.id;
+  assert.equal((await call('creator', 'POST', `/people/${noMail}/login/code`, {})).status, 409);
+});
+
+test('the stock controller is out: admin issues stock and tools, and it is noted who did', async () => {
+  const job = (await db.query("SELECT id FROM jobs WHERE lead_technician_id = $1 AND status NOT IN ('closed', 'cancelled') LIMIT 1", [ids.tech])).rows[0];
+  assert.ok(job, 'the technician has an open job');
+  const req = await call('tech', 'POST', `/jobs/${job.id}/stock-out`, { at: NOW, lines: [{ stockItemId: ids.seal, qty: 1 }] });
+  assert.ok(req.status < 300, JSON.stringify(req.body));
+  const me = (await call('admin', 'GET', '/me')).body;
+  assert.equal(me.stockCover, true, 'admin can open the stockroom to stand in');
+  assert.equal(me.stockDuty, false);
+  const waiting = (await call('admin', 'GET', '/stock/issues')).body;
+  const mine = waiting.find((i: { id: string }) => i.id === req.body.id);
+  assert.ok(mine, 'admin sees what is waiting');
+  const r = await call('admin', 'POST', `/stock/issues/${mine.id}/issue`, { at: NOW, lines: mine.lines.map((l: { lineId: string }) => ({ lineId: l.lineId, qtyIssued: 1 })) });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.issuedBy, 'admin (Admin)');
+  const reg = (await call('stock', 'GET', '/stock/issues?status=issued')).body.find((i: { id: string }) => i.id === mine.id);
+  assert.equal(reg.decided_by, 'admin');
+  assert.equal(reg.decidedByStandIn, 'Admin');
+  const told = (await db.query("SELECT message FROM notifications WHERE recipient_id = $1 AND kind = 'stockroom_cover' ORDER BY created_at DESC LIMIT 1", [ids.stock])).rows[0];
+  assert.match(told.message, /^admin \(Admin\) issued stock to tech/);
+  assert.equal((await call('admin', 'POST', '/stock/deliveries', { id: crypto.randomUUID(), at: NOW, supplierName: 'X', reference: 'R1', lines: [] })).status, 403, 'receiving stays with the stockroom');
+  // The stock controller's own issues are not "stood in".
+  const reg2 = (await call('stock', 'GET', '/stock/issues?status=issued')).body.filter((i: { decided_by: string }) => i.decided_by === 'stock');
+  assert.ok(reg2.every((i: { decidedByStandIn: string | null }) => i.decidedByStandIn === null));
 });

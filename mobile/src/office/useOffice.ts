@@ -24,12 +24,12 @@ export interface Inspection {
   id: string; registration: string; driver: string; previous_driver: string | null; inspected_at: string; odometer_km: number; fuel_level: string;
   problems: string[]; new_problems: string[]; handover_by: string; handed_over_by_name: string | null; remote_reason: string | null; status: string;
 }
-export interface Person { id: string; full_name: string; login_level: string; position: string; does_fleet?: boolean; work?: Record<string, boolean>; trade?: string | null; tradeLabel?: string | null; department?: string | null; photo_id?: string | null }
+export interface Person { id: string; full_name: string; login_level: string; position: string; does_fleet?: boolean; work?: Record<string, boolean>; trade?: string | null; tradeLabel?: string | null; department?: string | null; photo_id?: string | null; login?: 'on' | 'code' | 'stopped' | 'none' | 'locked' }
 export interface JobChange { changed_at: string; by: string; field: string; old_value: string | null; new_value: string | null; reason: string | null }
 
 export interface OfficeData {
   overview: Overview | null; jobs: OfficeJob[]; stores: Store[]; techs: Tech[]; flags: OfficeFlag[]; handovers: Inspection[];
-  people: { canManage?: boolean; canSetPositions?: boolean; settablePositions?: string[]; positions: { level: string; label: string }[]; trades?: { key: string; label: string }[]; areas?: { key: string; label: string }[]; people: Person[] } | null; loadedAt: string | null;
+  people: { canManage?: boolean; canSetPositions?: boolean; settablePositions?: string[]; canAdd?: boolean; addPositions?: string[]; positions: { level: string; label: string }[]; trades?: { key: string; label: string }[]; areas?: { key: string; label: string }[]; people: Person[] } | null; loadedAt: string | null;
 }
 const EMPTY: OfficeData = { overview: null, jobs: [], stores: [], techs: [], flags: [], handovers: [], people: null, loadedAt: null };
 

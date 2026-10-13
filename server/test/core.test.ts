@@ -31,7 +31,10 @@ test('admin cannot see flags, employee log or driving markers', () => {
   assert.ok(!can(admin, 'view_live_driving_markers'));
   assert.ok(!can(admin, 'view_flags', techInD1));
   assert.ok(!can(admin, 'view_employee_log', techInD1));
-  assert.ok(!can(admin, 'assign_stock'));
+  // Admin stands in for the stock controller (issuing), but does not receive or count stock.
+  assert.ok(can(admin, 'assign_stock'));
+  assert.ok(!can(admin, 'manage_stockroom'));
+  assert.ok(!can(admin, 'run_stocktake'));
 });
 
 test('stockroom is admin level plus stock functions', () => {

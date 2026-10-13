@@ -3,7 +3,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Db, Q } from '../db.ts';
 import { audit, tx } from '../db.ts';
-import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, POSITION_LABEL, TRADES, WORK_AREAS, can, isScoped, workOf, type Action, type LoginLevel, type Trade, type WorkArea, seesPeople, HR_POSITIONS } from '../core/permissions.ts';
+import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, POSITION_LABEL, TRADES, WORK_AREAS, can, isScoped, workOf, type Action, type LoginLevel, type Trade, type WorkArea, seesPeople, HR_POSITIONS, editsProfiles } from '../core/permissions.ts';
+import { LOGIN_STATE_SQL } from './logins.ts';
 import { Refused, Uuid, parse } from '../http.ts';
 import { loadActor } from '../auth.ts';
 import { notify } from './field.ts';
@@ -59,7 +60,7 @@ async function checkDepartments(c: Q, ch: ChangeT) {
 }
 
 /** Nobody may remove the last way in: at least one active login must keep "manage_access". */
-async function ensureSomeoneCanManageAccess(c: Q) {
+export async function ensureSomeoneCanManageAccess(c: Q) {
   const users = await c.query("SELECT id FROM users WHERE login_enabled AND status = 'active'");
   for (const u of users.rows) {
     const a = await loadActor(c, u.id);
@@ -115,16 +116,19 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
   app.get('/people', async req => {
     if (!seesPeople(req.actor)) throw new Refused(403, ['people are not part of your work']);
     const manage = can(req.actor, 'manage_access');
+    const logins = editsProfiles(req.actor);
     const { rows } = await req.db.query(
-      `SELECT u.id, u.full_name, u.login_level, u.trade, d.name AS department, u.status, p.photo_id
+      `SELECT u.id, u.full_name, u.login_level, u.trade, d.name AS department, u.status, p.photo_id, ${LOGIN_STATE_SQL} AS login
          FROM users u LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.status <> 'left' ORDER BY u.full_name`);
     const people = [];
     for (const r of rows) {
       const a = await loadActor(req.db, r.id);
-      people.push({ ...r, position: POSITION_LABEL[r.login_level as LoginLevel], tradeLabel: r.trade ? TRADES[r.trade as Trade] : null, work: workOf(a?.perms ?? {}) });
+      people.push({ ...r, login: logins ? r.login : undefined, position: POSITION_LABEL[r.login_level as LoginLevel], tradeLabel: r.trade ? TRADES[r.trade as Trade] : null, work: workOf(a?.perms ?? {}) });
     }
     return {
       canManage: manage,
+      // HR and the CEO add people and give them their logins.
+      canAdd: logins, addPositions: logins ? (manage ? LEVELS.filter(l => l !== 'creator' || req.actor.level === 'creator') : HR_POSITIONS) : [],
       canSetPositions: manage || can(req.actor, 'set_positions'),
       settablePositions: manage ? LEVELS : can(req.actor, 'set_positions') ? HR_POSITIONS : [],
       positions: LEVELS.map(l => ({ level: l, label: POSITION_LABEL[l] })),

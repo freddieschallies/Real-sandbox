@@ -3,7 +3,7 @@
 import * as S from '../../server/src/core/stock.ts';
 import type { CatalogueLine, InventoryLine, JobStockLine, ReadLine, StockRequest, StockReturn, SupplierInvoice } from './types.ts';
 
-export interface Activity { id: string; at: string; kind: string; what: string; qty: number; code: string; description: string; unit: string; technician: string | null; by: string; jobNumber: number | null; store: string | null; unitCostCents: number | null; reference: string | null }
+export interface Activity { id: string; at: string; kind: string; what: string; qty: number; code: string; description: string; unit: string; technician: string | null; by: string; byStandIn?: string | null; jobNumber: number | null; store: string | null; unitCostCents: number | null; reference: string | null }
 export interface Holding { technicianId: string; technician: string; stockItemId: string; code: string; description: string; unit: string; holdingJobId: string | null; jobNumber: number | null; jobStatus: string | null; store: string | null; qty: number; pendingReturn: number; mustReturn: boolean }
 
 const ME = 'Thabo Mkhize';
@@ -307,7 +307,8 @@ export class DemoStock {
       .map(r => ({ ...r, lines: r.lines.map(l => ({ ...l, inStockroom: this.s.stockroom[l.stockItemId] ?? 0 })) }));
   }
 
-  issue(id: string, b: { lines: { lineId: string; qtyIssued: number }[]; note?: string }): Res {
+  /** `by` issues it; `standIn` is their position when they stand in for the stock controller (e.g. "Admin"). */
+  issue(id: string, b: { lines: { lineId: string; qtyIssued: number }[]; note?: string }, by = 'Lindiwe Zulu', standIn: string | null = null): Res {
     const r = (this.s.requests ?? []).find(x => x.id === id);
     if (!r) return bad(404, 'no such request');
     if (r.status !== 'pending') return bad(409, 'this request is already handled');
@@ -328,19 +329,20 @@ export class DemoStock {
         this.s.stockroom[l.stockItemId] -= g;
         this.add(l.stockItemId, r.job_id, g);
         if (r.job_id) this.log(r.job_id, l.stockItemId, 'booked', g);
-        this.record('assign', l.stockItemId, g, ME, 'Lindiwe Zulu', r.job_id);
+        this.record('assign', l.stockItemId, g, r.technician ?? ME, by, r.job_id);
+        if (standIn) this.s.activity![0].byStandIn = standIn;
       }
     }
-    Object.assign(r, { status: 'issued', decided_at: new Date().toISOString(), decided_by: 'Lindiwe Zulu', note: b.note ?? null });
+    Object.assign(r, { status: 'issued', decided_at: new Date().toISOString(), decided_by: by, decidedByStandIn: standIn, note: b.note ?? null });
     return good({ id, status: 'issued', short: r.lines.filter(l => (l.qtyIssued ?? 0) < l.qtyRequested).map(l => l.code) });
   }
 
-  reject(id: string, reason: string): Res {
+  reject(id: string, reason: string, by = 'Lindiwe Zulu', standIn: string | null = null): Res {
     const r = (this.s.requests ?? []).find(x => x.id === id);
     if (!r) return bad(404, 'no such request');
     if (r.status !== 'pending') return bad(409, 'this request is already handled');
     if (!reason || reason.trim().length < 5) return bad(400, 'say why the request is rejected');
-    Object.assign(r, { status: 'rejected', decided_at: new Date().toISOString(), note: reason.trim() });
+    Object.assign(r, { status: 'rejected', decided_at: new Date().toISOString(), decided_by: by, decidedByStandIn: standIn, note: reason.trim() });
     return good({ id, status: 'rejected' });
   }
 

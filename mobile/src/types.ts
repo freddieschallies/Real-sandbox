@@ -9,6 +9,7 @@ export interface Session {
     id: string; name: string; level: string;
     /** Also does the mechanic's work, on top of their position. */ fleetDuty?: boolean;
     /** Also has full stockroom access, on top of their position. */ stockDuty?: boolean;
+    /** Stands in for the stock controller when he is out: issues stock and tools (not receiving or counting). */ stockCover?: boolean;
     /** Which kinds of work the CEO switched on for this person. */ work?: Record<string, boolean>;
   };
   company: { id: string; name: string };
@@ -144,6 +145,7 @@ export interface StockReturn {
 export interface StockRequest {
   id: string; technician_id?: string; technician?: string; job_id: string | null; job_number: number | null; store: string | null;
   status: 'pending' | 'issued' | 'rejected'; requested_at: string; decided_at: string | null; note: string | null; decided_by?: string | null;
+  /** Issued by someone standing in for the stock controller: their position (e.g. "Admin"). */ decidedByStandIn?: string | null;
   lines: { lineId: string; stockItemId: string; code: string; description: string; unit: string; qtyRequested: number; qtyIssued: number | null; inStockroom: number }[];
 }
 

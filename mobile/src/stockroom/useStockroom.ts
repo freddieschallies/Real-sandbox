@@ -18,7 +18,7 @@ export interface Overview { toIssue: number; toReceive: number; newItems: number
 export interface BookedInvoice { id: string; technician?: string; job_number?: number | null; supplier_name: string | null; invoice_number: string | null; total_cents: number | null; confirmed_at: string | null; changed_from_read?: boolean; lines?: { description: string; qty: number; unitPriceCents: number | null }[] | null }
 
 export interface Holding { technicianId: string; technician: string; stockItemId: string; code: string; description: string; unit: string; holdingJobId: string | null; jobNumber: number | null; jobStatus: string | null; store: string | null; qty: number; pendingReturn: number; mustReturn: boolean }
-export interface Activity { id: string; at: string; kind: string; what: string; qty: number; code: string; description: string; unit: string; technician: string | null; by: string; jobNumber: number | null; store: string | null; unitCostCents: number | null; reference: string | null }
+export interface Activity { id: string; at: string; kind: string; what: string; qty: number; code: string; description: string; unit: string; technician: string | null; by: string; byStandIn?: string | null; jobNumber: number | null; store: string | null; unitCostCents: number | null; reference: string | null }
 
 export interface Ctl {
   issues: StockRequest[]; returns: StockReturn[]; room: RoomItem[]; invoices: BookedInvoice[]; overview: Overview | null; loadedAt: string | null;

@@ -12,6 +12,7 @@ import { useQueries } from '../queries/Queries.tsx';
 import { useMyTimesheets } from '../timesheets/Timesheet.tsx';
 import { C, S } from '../theme.ts';
 import type { TodayJob } from '../types.ts';
+import { ChangePassword } from './MyPassword.tsx';
 
 const STATUS: Record<TodayJob['status'], { text: string; tone: 'info' | 'good' | 'warn' | 'quiet' }> = {
   assigned: { text: 'Not started', tone: 'quiet' },
@@ -202,6 +203,7 @@ export function Day() {
             <Text style={st.small}>Work saves on the phone and sends when you switch this off.</Text>
           </Card>
         ) : null}
+        <ChangePassword />
         <Button label="Sign out" kind="quiet" onPress={s.signOut} disabled={s.waiting > 0} />
         {s.waiting > 0 ? <Text style={st.small}>You can sign out once everything waiting has been sent.</Text> : null}
       </ScrollView>

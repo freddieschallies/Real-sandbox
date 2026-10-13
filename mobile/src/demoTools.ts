@@ -5,6 +5,7 @@ import { mayHaveIncidents, EXAMPLE_TECH, REAL } from './demoReal.ts';
 
 export interface DemoTool { id: string; name: string; kind: 'tool' | 'ladder' | 'equipment'; serial: string | null; barcode: string; notes: string | null; condition: 'good' | 'damaged' | 'lost'; active: boolean; photo_id?: string | null }
 export interface DemoBooking { id: string; toolId: string; userId: string; userName: string; jobId: string | null; jobNumber: number | null; outAt: string; outBy: string; note: string | null;
+  /** Booked out / signed back by someone standing in for the stock controller: their position. */ outByStandIn?: string | null; returnedByStandIn?: string | null;
   returnedAt?: string; returnedBy?: string; condition?: 'good' | 'damaged' | 'lost'; returnNote?: string | null }
 export interface DemoToolsState { tools: DemoTool[]; bookings: DemoBooking[] }
 type Res = { ok: true; body: unknown; status?: number } | { ok: false; status: number; reasons: string[] };
@@ -52,7 +53,7 @@ export class DemoTools {
 
   view(t: DemoTool) {
     const b = this.s.bookings.find(x => x.toolId === t.id && !x.returnedAt);
-    return { ...t, out: b ? { bookingId: b.id, userId: b.userId, userName: this.name(b.userId) || b.userName, jobId: b.jobId, jobNumber: b.jobNumber, outAt: b.outAt, outBy: b.outBy, note: b.note, ...this.due(b) } : null };
+    return { ...t, out: b ? { bookingId: b.id, userId: b.userId, userName: this.name(b.userId) || b.userName, jobId: b.jobId, jobNumber: b.jobNumber, outAt: b.outAt, outBy: b.outBy, outByStandIn: b.outByStandIn ?? null, note: b.note, ...this.due(b) } : null };
   }
 
   list() {
@@ -76,7 +77,7 @@ export class DemoTools {
   history(id: string) {
     return this.s.bookings.filter(b => b.toolId === id).sort((a, b) => b.outAt.localeCompare(a.outAt)).map(b => ({
       id: b.id, out_at: b.outAt, returned_at: b.returnedAt ?? null, return_condition: b.condition ?? null, return_note: b.returnNote ?? null, out_note: b.note,
-      user_name: this.name(b.userId) || b.userName, job_number: b.jobNumber, out_by: b.outBy, returned_by: b.returnedBy ?? null }));
+      user_name: this.name(b.userId) || b.userName, job_number: b.jobNumber, out_by: b.outBy, returned_by: b.returnedBy ?? null, out_by_stand_in: b.outByStandIn ?? null, returned_by_stand_in: b.returnedBy ? b.returnedByStandIn ?? null : null }));
   }
 
   add(b: { name?: string; kind?: DemoTool['kind']; serial?: string; barcode?: string }): Res {
@@ -99,7 +100,7 @@ export class DemoTools {
     return good(this.view(t));
   }
 
-  bookOut(id: string, b: { userId?: string; jobId?: string; signaturePhotoId?: string; note?: string }, by: string, openJobsOf: (userId: string) => { id: string; job_number: number }[]): Res {
+  bookOut(id: string, b: { userId?: string; jobId?: string; signaturePhotoId?: string; note?: string }, by: string, openJobsOf: (userId: string) => { id: string; job_number: number }[], standIn: string | null = null): Res {
     const t = this.s.tools.find(x => x.id === id && x.active);
     if (!t) return bad(404, 'no such tool in the tool store');
     if (t.condition === 'lost') return bad(409, `${t.name} is written off as lost`);
@@ -109,18 +110,18 @@ export class DemoTools {
     const job = b.jobId ? openJobsOf(b.userId).find(j => j.id === b.jobId) : null;
     if (b.jobId && !job) return bad(400, `that job is not one of ${this.name(b.userId)}'s open jobs`);
     if (!b.signaturePhotoId) return bad(409, `${this.name(b.userId)} signs for it first`);
-    this.s.bookings.push({ id: nid('tb'), toolId: id, userId: b.userId, userName: this.name(b.userId), jobId: job?.id ?? null, jobNumber: job?.job_number ?? null, outAt: new Date().toISOString(), outBy: by, note: b.note ?? null });
+    this.s.bookings.push({ id: nid('tb'), toolId: id, userId: b.userId, userName: this.name(b.userId), jobId: job?.id ?? null, jobNumber: job?.job_number ?? null, outAt: new Date().toISOString(), outBy: by, outByStandIn: standIn, note: b.note ?? null });
     return good(this.view(t));
   }
 
-  signBack(id: string, b: { condition?: 'good' | 'damaged' | 'lost'; note?: string; signaturePhotoId?: string }, by: string): Res {
+  signBack(id: string, b: { condition?: 'good' | 'damaged' | 'lost'; note?: string; signaturePhotoId?: string }, by: string, standIn: string | null = null): Res {
     const t = this.s.tools.find(x => x.id === id);
     const bk = this.s.bookings.find(x => x.toolId === id && !x.returnedAt);
     if (!t || !bk) return bad(409, 'this tool is not booked out');
     const cond = b.condition ?? 'good';
     if (cond !== 'good' && (!b.note || b.note.trim().length < 5)) return bad(400, `say what happened (${cond})`);
     if (!b.signaturePhotoId) return bad(409, 'the signature first');
-    Object.assign(bk, { returnedAt: new Date().toISOString(), returnedBy: by, condition: cond, returnNote: b.note?.trim() || null });
+    Object.assign(bk, { returnedAt: new Date().toISOString(), returnedBy: by, returnedByStandIn: standIn, condition: cond, returnNote: b.note?.trim() || null });
     t.condition = cond;
     for (const f of this.flags) if (f.flag_type === 'tool_not_returned' && f.details?.bookingId === bk.id && f.status !== 'resolved') Object.assign(f, { status: 'resolved', resolution_note: `Signed back (${cond})` });
     return good(this.view(t));

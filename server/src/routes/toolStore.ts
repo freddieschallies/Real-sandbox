@@ -5,10 +5,10 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { audit, raiseFlag, tx, type Q } from '../db.ts';
-import { can } from '../core/permissions.ts';
+import { POSITION_LABEL, can, type LoginLevel } from '../core/permissions.ts';
 import { newCode, validCode } from '../core/qr.ts';
 import { Refused, Uuid, parse } from '../http.ts';
-import { notify } from './field.ts';
+import { notify, tellStockroom } from './field.ts';
 
 type P = { Params: { id: string } };
 const KINDS = ['tool', 'ladder', 'equipment'] as const;
@@ -23,11 +23,14 @@ export function toolDue(o: { outAt: Date; jobId: string | null; jobClosedAt: Dat
   return { due: o.jobId ? 'now: the job is done' : 'today', overdue: now >= next, dueBy: next.toISOString() };
 }
 
+/** Someone who is not a stock controller, by position (they stood in while he was out); null for the stockroom. */
+const standIn = (level: string | null) => (level && level !== 'stockroom' ? POSITION_LABEL[level as LoginLevel] ?? level : null);
+
 async function tools(c: Q, where = 'TRUE', args: unknown[] = []) {
   const { rows } = await c.query(
     `SELECT t.id, t.name, t.kind, t.serial, t.barcode, t.notes, t.condition, t.active, t.photo_id,
             b.id AS booking_id, b.user_id, u.full_name AS user_name, b.job_id, j.job_number, j.status::text AS job_status, j.closed_at AS job_closed_at,
-            b.out_at, ob.full_name AS out_by_name, b.out_note
+            b.out_at, ob.full_name AS out_by_name, ob.login_level AS out_by_level, b.out_note
        FROM store_tools t
        LEFT JOIN tool_bookings b ON b.tool_id = t.id AND b.returned_at IS NULL
        LEFT JOIN users u ON u.id = b.user_id LEFT JOIN users ob ON ob.id = b.out_by LEFT JOIN jobs j ON j.id = b.job_id
@@ -37,7 +40,7 @@ async function tools(c: Q, where = 'TRUE', args: unknown[] = []) {
     id: r.id, name: r.name, kind: r.kind, serial: r.serial, barcode: r.barcode, notes: r.notes, condition: r.condition, active: r.active, photo_id: r.photo_id as string | null,
     out: r.booking_id ? {
       bookingId: r.booking_id, userId: r.user_id, userName: r.user_name, jobId: r.job_id, jobNumber: r.job_number, jobStatus: r.job_status,
-      outAt: new Date(r.out_at).toISOString(), outBy: r.out_by_name, note: r.out_note,
+      outAt: new Date(r.out_at).toISOString(), outBy: r.out_by_name, outByStandIn: standIn(r.out_by_level), note: r.out_note,
       ...toolDue({ outAt: new Date(r.out_at), jobId: r.job_id, jobClosedAt: r.job_closed_at ? new Date(r.job_closed_at) : null, jobOpen: !!r.job_id && !['closed', 'cancelled'].includes(r.job_status) }, now),
     } : null,
   }));
@@ -86,10 +89,10 @@ export function registerToolStoreRoutes(app: FastifyInstance) {
     const id = parse(Uuid, req.params.id);
     const { rows } = await req.db.query(
       `SELECT b.id, b.out_at, b.returned_at, b.return_condition, b.return_note, b.out_note, u.full_name AS user_name, j.job_number,
-              ob.full_name AS out_by, rb.full_name AS returned_by, b.out_signature_photo_id, b.return_signature_photo_id
+              ob.full_name AS out_by, ob.login_level AS out_by_level, rb.full_name AS returned_by, rb.login_level AS returned_by_level, b.out_signature_photo_id, b.return_signature_photo_id
          FROM tool_bookings b JOIN users u ON u.id = b.user_id JOIN users ob ON ob.id = b.out_by LEFT JOIN users rb ON rb.id = b.returned_by LEFT JOIN jobs j ON j.id = b.job_id
         WHERE b.tool_id = $1 ORDER BY b.out_at DESC LIMIT 100`, [id]);
-    return rows;
+    return rows.map(({ out_by_level, returned_by_level, ...r }) => ({ ...r, out_by_stand_in: standIn(out_by_level), returned_by_stand_in: r.returned_by ? standIn(returned_by_level) : null }));
   });
 
   const ToolIn = z.object({
@@ -160,6 +163,7 @@ export function registerToolStoreRoutes(app: FastifyInstance) {
       await c.query('INSERT INTO tool_bookings (tool_id, user_id, job_id, out_by, out_signature_photo_id, out_note) VALUES ($1, $2, $3, $4, $5, $6)',
         [id, b.userId, b.jobId ?? null, req.actor.id, b.signaturePhotoId, b.note || null]);
       await audit(c, req.actor.id, 'tool_booked_out', 'store_tool', id, { userId: b.userId, jobId: b.jobId ?? null });
+      await tellStockroom(c, req.actor.id, `booked out ${t.name}${t.serial ? ` (${t.serial})` : ''} to ${u.full_name}.`, { toolId: id });
       await notify(c, b.userId, 'tool_booked_out', `${t.name}${t.serial ? ` (${t.serial})` : ''} is booked out to you from the stockroom. Sign it back when the job is done.`, { toolId: id });
       return (await tools(c, 't.id = $1', [id]))[0];
     });
@@ -183,6 +187,7 @@ export function registerToolStoreRoutes(app: FastifyInstance) {
       await c.query(`UPDATE flags SET status = 'resolved', resolved_by = $1, resolved_at = now(), resolution_note = $2
                       WHERE flag_type = 'tool_not_returned' AND details->>'bookingId' = $3 AND status <> 'resolved'`, [req.actor.id, `Signed back (${b.condition})`, t.out.bookingId]);
       await audit(c, req.actor.id, 'tool_signed_back', 'store_tool', id, { bookingId: t.out.bookingId, condition: b.condition });
+      await tellStockroom(c, req.actor.id, `signed back ${t.name}${t.serial ? ` (${t.serial})` : ''} from ${t.out.userName} (${b.condition}).`, { toolId: id });
       if (b.condition !== 'good') {
         for (const o of (await c.query("SELECT id FROM users WHERE login_level IN ('admin', 'director', 'creator') AND status <> 'left'")).rows) {
           await notify(c, o.id, 'tool_damaged', `${t.name}${t.serial ? ` (${t.serial})` : ''} came back ${b.condition} from ${t.out.userName}: ${b.note}`, { toolId: id });

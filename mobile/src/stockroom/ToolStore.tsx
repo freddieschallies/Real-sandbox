@@ -16,10 +16,10 @@ import { C } from '../theme.ts';
 
 export interface StoreTool {
   id: string; name: string; kind: 'tool' | 'ladder' | 'equipment'; serial: string | null; barcode: string; notes: string | null; condition: 'good' | 'damaged' | 'lost'; active: boolean; photo_id?: string | null;
-  out: null | { bookingId: string; userId: string; userName: string; jobId: string | null; jobNumber: number | null; jobStatus: string | null; outAt: string; outBy: string; note: string | null; due: string; overdue: boolean };
+  out: null | { bookingId: string; userId: string; userName: string; jobId: string | null; jobNumber: number | null; jobStatus: string | null; outAt: string; outBy: string; outByStandIn?: string | null; note: string | null; due: string; overdue: boolean };
 }
 interface Data { tools: StoreTool[]; people: { id: string; full_name: string; login_level: string }[]; jobs: { id: string; job_number: number; store: string; fault_reported: string; people: string[] }[] }
-interface Hist { id: string; out_at: string; returned_at: string | null; return_condition: string | null; return_note: string | null; out_note: string | null; user_name: string; job_number: number | null; out_by: string; returned_by: string | null }
+interface Hist { id: string; out_at: string; returned_at: string | null; return_condition: string | null; return_note: string | null; out_note: string | null; user_name: string; job_number: number | null; out_by: string; returned_by: string | null; out_by_stand_in?: string | null; returned_by_stand_in?: string | null }
 
 const KIND: Record<StoreTool['kind'], string> = { tool: 'Tool', ladder: 'Ladder', equipment: 'Equipment' };
 const FILTERS = ['all', 'out', 'late', 'in', 'ladder'] as const;
@@ -87,7 +87,7 @@ export function ToolStore() {
               {!t.active ? <Pill text="Retired" tone="quiet" /> : t.out ? <Pill text={t.out.overdue ? 'Late' : 'Out'} tone={t.out.overdue ? 'bad' : 'warn'} /> : <Pill text="In" tone="good" />}
             </View>
             <Text style={st.small}>{t.serial ? `S/N ${t.serial} · ` : ''}{t.barcode}</Text>
-            {t.out ? <Text style={[st.small, { color: t.out.overdue ? C.bad : C.text }]}>With {t.out.userName}{t.out.jobNumber ? ` · job ${t.out.jobNumber}${t.out.jobStatus === 'closed' ? ' (done)' : ''}` : ''} · since {when(t.out.outAt)} · due back {t.out.due}{t.out.overdue ? ' · LATE' : ''}</Text> : null}
+            {t.out ? <Text style={[st.small, { color: t.out.overdue ? C.bad : C.text }]}>With {t.out.userName}{t.out.jobNumber ? ` · job ${t.out.jobNumber}${t.out.jobStatus === 'closed' ? ' (done)' : ''}` : ''} · since {when(t.out.outAt)}{t.out.outByStandIn ? ` · booked out by ${t.out.outBy} (${t.out.outByStandIn}, standing in)` : ''} · due back {t.out.due}{t.out.overdue ? ' · LATE' : ''}</Text> : null}
           </Pressable>
           {open === t.id && d ? <ToolPanel t={t} d={d} print={() => print([t])} changed={(tone, text) => { setMsg({ tone, text }); load(); }} /> : null}
         </Card>
@@ -122,7 +122,7 @@ function ToolPanel({ t, d, print, changed }: { t: StoreTool; d: Data; print: () 
       {!hist ? <Body quiet>Loading…</Body> : !hist.length ? <Body quiet>Never booked out yet.</Body> : hist.slice(0, 12).map(h => (
         <View key={h.id} style={{ borderTopWidth: 1, borderTopColor: C.line, paddingTop: 6 }}>
           <Text style={st.body}>{h.user_name}{h.job_number ? ` · job ${h.job_number}` : ''}</Text>
-          <Text style={st.small}>Out {when(h.out_at)} (by {h.out_by}){h.returned_at ? ` · back ${when(h.returned_at)} (${h.returned_by}) · ${h.return_condition}${h.return_note ? `: ${h.return_note}` : ''}` : ' · still out'}</Text>
+          <Text style={st.small}>Out {when(h.out_at)} (by {h.out_by}{h.out_by_stand_in ? `, ${h.out_by_stand_in}, standing in` : ''}){h.returned_at ? ` · back ${when(h.returned_at)} (${h.returned_by}${h.returned_by_stand_in ? `, ${h.returned_by_stand_in}, standing in` : ''}) · ${h.return_condition}${h.return_note ? `: ${h.return_note}` : ''}` : ' · still out'}</Text>
         </View>
       ))}
     </View>

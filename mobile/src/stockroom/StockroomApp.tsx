@@ -18,6 +18,7 @@ import { C, S } from '../theme.ts';
 import { CATEGORY_LABEL, useStockroom, type Activity, type Category, type Holding, type RoomItem } from './useStockroom.ts';
 import { Choice } from '../ui.tsx';
 import type { StockRequest, StockReturn } from '../types.ts';
+import { ChangePassword } from '../screens/MyPassword.tsx';
 
 // The stockroom's own colour, so nobody confuses it with the technician app.
 const K = { band: '#1E6F6A', bandText: '#E8FFFB', tick: '#3FB57A' };
@@ -41,8 +42,12 @@ export function StockroomApp() {
   const [sel, setSel] = useState<Sel>(null);
   const [kitTick, setKitTick] = useState(0);
   const o = room.ctl.overview;
+  // Standing in for the stock controller (an admin, when he is out): issuing stock and tools only.
+  const u = s.session?.user;
+  const cover = !!u && u.level !== 'stockroom' && !u.stockDuty && !!u.stockCover;
+  const COVER: Tab[] = ['issue', 'tools', 'people'];
 
-  const tabs: { key: Tab; label: string; count?: number }[] = [
+  const allTabs: { key: Tab; label: string; count?: number }[] = [
     { key: 'issue', label: 'To issue', count: room.ctl.issues.length },
     { key: 'receive', label: 'To receive', count: room.ctl.returns.length },
     { key: 'room', label: 'Stock' },
@@ -53,9 +58,24 @@ export function StockroomApp() {
     { key: 'live', label: 'Live', count: (room.ctl.activity ?? []).filter(a => !room.ctl.seenActivityAt || a.at > room.ctl.seenActivityAt).length },
     { key: 'items', label: 'New items', count: o?.newItems ?? room.ctl.room.filter(i => i.needsReview).length },
   ];
+  const tabs = cover ? allTabs.filter(t => COVER.includes(t.key)) : allTabs;
+  // What others did in the stockroom while the stock controller was out: since his own last stockroom
+  // movement, in the last three days.
+  const acts = room.ctl.activity ?? [];
+  const mineLast = acts.filter(a => a.by === u?.name && !a.byStandIn).reduce((m, a) => (a.at > m ? a.at : m), '');
+  const since = new Date(Date.now() - 3 * 86_400_000).toISOString();
+  const away = cover ? [] : acts.filter(a => a.byStandIn && a.at > mineLast && a.at > since);
 
   const list = (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 40 }}>
+      {cover ? <Notice tone="info" title="Standing in for the stock controller" lines={[
+        'What you issue, book out or sign back is under your name, and the stock controller is told.',
+        'Receiving deliveries and returns, and stock counts, wait for him.',
+      ]} /> : null}
+      {away.length ? (
+        <Notice tone="warn" title={`While you were out: ${[...new Set(away.map(a => `${a.by} (${a.byStandIn})`))].join(', ')}`}
+          lines={[`${away.length} stockroom movement${away.length > 1 ? 's' : ''} under their name: see Live. Their issues are marked in the Issued register.`]} />
+      ) : null}
       {tab === 'issue' ? <IssueTab waiting={room.ctl.issues} issued={room.ctl.issued ?? []} open={id => setSel({ kind: 'issue', id })} selected={sel?.kind === 'issue' ? sel.id : null} /> : null}
       {tab === 'receive' ? <ReturnList items={room.ctl.returns} open={id => setSel({ kind: 'return', id })} selected={sel?.kind === 'return' ? sel.id : null} /> : null}
       {tab === 'room' ? <RoomList items={room.ctl.room} holdings={room.ctl.holdings ?? []} onDelivery={() => setSel({ kind: 'delivery' })} onPart={id => setSel({ kind: 'part', id })} /> : null}
@@ -65,6 +85,7 @@ export function StockroomApp() {
       {tab === 'tools' ? <ToolStore /> : null}
       {tab === 'live' ? <LiveFeed items={room.ctl.activity ?? []} seen={room.ctl.seenActivityAt ?? null} invoices={room.ctl.invoices} /> : null}
       {tab === 'items' ? <NewItemList items={room.ctl.room.filter(i => i.needsReview)} open={id => setSel({ kind: 'item', id })} /> : null}
+      <ChangePassword />
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} disabled={s.waiting > 0} /> : null}
       {room.ctl.loadedAt ? <Text style={st.small}>Updated {when(room.ctl.loadedAt)}</Text> : <Text style={st.small}>{room.loading ? 'Loading…' : 'Needs signal to load.'}</Text>}
     </ScrollView>
@@ -104,7 +125,7 @@ export function StockroomApp() {
       ) : null}
       <BrandLogo height={wide ? 36 : 28} />
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text numberOfLines={1} style={{ color: K.bandText, fontSize: wide ? 22 : 19, fontWeight: '800' }}>Stockroom</Text>
+        <Text numberOfLines={1} style={{ color: K.bandText, fontSize: wide ? 22 : 19, fontWeight: '800' }}>Stockroom{cover ? ' · standing in' : ''}</Text>
         <Text numberOfLines={1} style={{ color: K.bandText, opacity: 0.8 }}>{s.session?.user.name} · {s.session?.company.name}</Text>
       </View>
       <SyncPill />
@@ -185,6 +206,7 @@ function IssuedRegister({ items }: { items: StockRequest[] }) {
             <Text style={st.small}>{r.decided_at ? when(r.decided_at) : ''}</Text>
           </View>
           <Text style={st.small}>{r.job_number ? `Job #${r.job_number}${r.store ? ` · ${r.store}` : ''}` : 'Van stock'} · issued by {r.decided_by ?? '–'}</Text>
+          {r.decidedByStandIn ? <Pill text={`${r.decidedByStandIn}, standing in for the stockroom`} tone="warn" /> : null}
           {r.lines.map(l => (
             <Text key={l.lineId} style={[st.body, (l.qtyIssued ?? 0) < l.qtyRequested && { color: C.warn }]}>
               {l.qtyIssued ?? 0}{(l.qtyIssued ?? 0) < l.qtyRequested ? ` of ${l.qtyRequested}` : ''} × {l.description} <Text style={st.small}>{l.code}</Text>
@@ -433,6 +455,7 @@ function LiveFeed({ items, seen, invoices }: { items: Activity[]; seen: string |
               <Text style={st.small}>{when(a.at)}</Text>
             </View>
             <Text style={[st.body, { fontWeight: '700' }]}>{a.qty} × {a.description}</Text>
+            {a.byStandIn ? <Text style={[st.small, { color: C.warn, fontWeight: '700' }]}>By {a.by} ({a.byStandIn}, standing in)</Text> : null}
             <Text style={st.small}>
               {[a.code, a.technician, a.jobNumber ? `job #${a.jobNumber}${a.store ? ` ${a.store}` : ''}` : null, a.reference, a.unitCostCents != null ? `@ ${rand(a.unitCostCents)}` : null].filter(Boolean).join(' · ')}
             </Text>

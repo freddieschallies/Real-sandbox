@@ -19,7 +19,7 @@ export async function createCompany(db: Db, name: string, creator: { name: strin
     const companyId = (await c.query('INSERT INTO companies (name) VALUES ($1) RETURNING id', [name])).rows[0].id;
     await c.query("SELECT set_config('app.company_id', $1, true)", [companyId]);
     const userId = (await c.query(
-      "INSERT INTO users (full_name, email, login_level, password_hash) VALUES ($1, $2, 'creator', $3) RETURNING id",
+      "INSERT INTO users (full_name, email, login_level, password_hash, password_set_at) VALUES ($1, $2, 'creator', $3, now()) RETURNING id",
       [creator.name, email, await hashPassword(creator.password)],
     )).rows[0].id;
     await c.query('INSERT INTO logins (email, user_id, company_id) VALUES ($1, $2, $3)', [email, userId, companyId]);

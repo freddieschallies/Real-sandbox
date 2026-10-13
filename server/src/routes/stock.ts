@@ -7,14 +7,14 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Db, Q } from '../db.ts';
 import { audit, raiseFlag, tx } from '../db.ts';
-import { can } from '../core/permissions.ts';
+import { POSITION_LABEL, can, type LoginLevel } from '../core/permissions.ts';
 import * as S from '../core/stock.ts';
 import { isOnJob } from '../jobsRepo.ts';
 import { holdingsOf, stockroomQty } from '../stockRepo.ts';
 import { checkVan } from '../vanRepo.ts';
 import { DateOnly, Iso, Refused, Uuid, parse } from '../http.ts';
 import type { InvoiceReader, ReadInvoice } from '../invoiceReader.ts';
-import { managerOf, notify } from './field.ts';
+import { managerOf, notify, tellStockroom } from './field.ts';
 import { keepIfRefused } from '../tenancy.ts';
 
 const lock = (c: Q, technicianId: string) => c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`stock:${technicianId}`]);
@@ -397,7 +397,10 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
       const short = lines.filter(l => given.get(l.id)!.qtyIssued < Number(l.qty_requested)).map(l => l.code);
       await notify(c, i.technician_id, 'stock_issued', short.length ? `Stock issued to you, but short on ${short.join(', ')}` : 'Your stock request was issued: it is on your name now', { issueId: id });
       await audit(c, me, 'stock_issued', 'stock_issue', id, { lines: b.lines });
-      return { id, status: 'issued', short };
+      const tech = (await c.query('SELECT u.full_name, j.job_number FROM users u LEFT JOIN jobs j ON j.id = $2 WHERE u.id = $1', [i.technician_id, i.job_id])).rows[0];
+      const what = lines.filter(l => given.get(l.id)!.qtyIssued > 0).map(l => `${l.code} × ${given.get(l.id)!.qtyIssued}`).join(', ');
+      const by = await tellStockroom(c, me, `issued stock to ${tech?.full_name}${tech?.job_number ? ` for job #${tech.job_number}` : ''}: ${what}.`, { issueId: id });
+      return { id, status: 'issued', short, issuedBy: by };
     });
   });
 
@@ -412,6 +415,8 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
       await c.query("UPDATE stock_issues SET status = 'rejected', decided_by = $2, decided_at = $3, note = $4 WHERE id = $1", [id, req.actor.id, b.at, b.reason]);
       await notify(c, i.technician_id, 'stock_rejected', `Your stock request was rejected: ${b.reason}`, { issueId: id });
       await audit(c, req.actor.id, 'stock_request_rejected', 'stock_issue', id, { reason: b.reason });
+      const tech = (await c.query('SELECT full_name FROM users WHERE id = $1', [i.technician_id])).rows[0];
+      await tellStockroom(c, req.actor.id, `rejected ${tech?.full_name}'s stock request: ${b.reason}`, { issueId: id });
       return { id, status: 'rejected' };
     });
   });
@@ -591,7 +596,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
     const q = parse(z.object({ since: Iso.optional(), limit: z.coerce.number().int().min(1).max(300).default(100) }), req.query);
     const { rows } = await req.db.query(
       `SELECT m.id, to_json(m.created_at) #>> '{}' AS created_at, m.kind, m.qty, i.code, i.description, i.unit,
-              COALESCE(tt.full_name, ft.full_name) AS technician, cb.full_name AS by_name,
+              COALESCE(tt.full_name, ft.full_name) AS technician, cb.full_name AS by_name, cb.login_level AS by_level, (m.from_stockroom OR m.to_stockroom) AS stockroom_move,
               COALESCE(j.job_number, hj.job_number) AS job_number, COALESCE(js.name, hs.name) AS store,
               m.unit_cost_cents, d.supplier_name AS delivery_supplier, d.reference AS delivery_ref,
               si.supplier_name AS invoice_supplier, si.invoice_number
@@ -615,7 +620,8 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
     };
     return rows.map(r => ({
       id: r.id, at: r.created_at, kind: r.kind, what: what[r.kind] ?? r.kind, qty: Number(r.qty), code: r.code, description: r.description, unit: r.unit,
-      technician: r.technician, by: r.by_name, jobNumber: r.job_number, store: r.store, unitCostCents: r.unit_cost_cents,
+      // Someone standing in for the stock controller (stock in or out of the stockroom by someone else).
+      technician: r.technician, by: r.by_name, byStandIn: r.stockroom_move && r.by_level !== 'stockroom' ? POSITION_LABEL[r.by_level as LoginLevel] ?? r.by_level : null, jobNumber: r.job_number, store: r.store, unitCostCents: r.unit_cost_cents,
       reference: r.kind === 'receive' ? `${r.delivery_supplier} ${r.delivery_ref}` : r.kind === 'supplier_invoice' ? `${r.invoice_supplier} ${r.invoice_number}` : null,
     }));
   });
@@ -698,17 +704,18 @@ async function jobStock(c: Q, jobId: string) {
 async function issuesWhere(c: Q, where: string, params: unknown[], order = 'i.requested_at', limit = 100) {
   const { rows } = await c.query(
     `SELECT i.id, i.technician_id, u.full_name AS technician, i.job_id, j.job_number, s.name AS store, i.status, i.requested_at, i.decided_at, i.note,
-            db.full_name AS decided_by,
+            db.full_name AS decided_by, db.login_level AS decided_by_level,
             json_agg(json_build_object('lineId', l.id, 'stockItemId', l.stock_item_id, 'code', it.code, 'description', it.description, 'unit', it.unit,
                      'qtyRequested', l.qty_requested, 'qtyIssued', l.qty_issued, 'inStockroom', COALESCE(ss.qty, 0)) ORDER BY it.code) AS lines
        FROM stock_issues i JOIN users u ON u.id = i.technician_id LEFT JOIN users db ON db.id = i.decided_by
        JOIN stock_issue_lines l ON l.issue_id = i.id JOIN stock_items it ON it.id = l.stock_item_id
        LEFT JOIN stockroom_stock ss ON ss.stock_item_id = l.stock_item_id
        LEFT JOIN jobs j ON j.id = i.job_id LEFT JOIN stores s ON s.id = j.store_id
-      WHERE ${where} GROUP BY i.id, u.full_name, db.full_name, j.job_number, s.name ORDER BY ${order} LIMIT ${limit}`,
+      WHERE ${where} GROUP BY i.id, u.full_name, db.full_name, db.login_level, j.job_number, s.name ORDER BY ${order} LIMIT ${limit}`,
     params,
   );
-  return rows.map(r => ({ ...r, lines: r.lines.map((l: Record<string, unknown>) => ({ ...l, qtyRequested: Number(l.qtyRequested), qtyIssued: l.qtyIssued == null ? null : Number(l.qtyIssued), inStockroom: Number(l.inStockroom) })) }));
+  // Who issued it: the stock controller, or (while he was out) someone standing in, by position.
+  return rows.map(({ decided_by_level: lvl, ...r }) => ({ ...r, decidedByStandIn: r.decided_by && lvl !== 'stockroom' ? POSITION_LABEL[lvl as LoginLevel] ?? lvl : null, lines: r.lines.map((l: Record<string, unknown>) => ({ ...l, qtyRequested: Number(l.qtyRequested), qtyIssued: l.qtyIssued == null ? null : Number(l.qtyIssued), inStockroom: Number(l.inStockroom) })) }));
 }
 
 async function returnsWhere(c: Q, where: string, params: unknown[]) {

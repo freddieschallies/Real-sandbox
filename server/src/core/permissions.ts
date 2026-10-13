@@ -96,8 +96,10 @@ const officeWork: Permissions = {
   view_live_map_positions: true, view_all_fuel: true,
   view_quotes_invoices_stock: true, prepare_quotes_invoices: true,
 };
-// The admin also arranges the phone menus (with the CEO).
-const admin: Permissions = { ...officeWork, set_phone_menu: true };
+// The admin also arranges the phone menus (with the CEO), and stands in for the stock controller
+// when he is out: issuing stock and tools and signing tools back (receiving deliveries and stock
+// counts stay with the stockroom). The stock controller is told who did what.
+const admin: Permissions = { ...officeWork, set_phone_menu: true, assign_stock: true };
 const stockroom: Permissions = { ...officeWork, manage_stockroom: true, assign_stock: true, run_stocktake: true };
 // A department manager runs his technicians: monitors them, assigns jobs, checks job cards and sets
 // his department's van stock list. Quotes, invoices and the stockroom are not part of it unless the

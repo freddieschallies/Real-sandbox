@@ -54,7 +54,10 @@ export interface Store {
   syncing: boolean;
   lastSentAt: string | null;
   demoNoSignal: boolean;
-  signIn(mode: 'demo' | 'server', baseUrl: string, email: string, password: string): Promise<ActionResult>;
+  /** `setupCode`: first sign-in (or a forgotten password), choosing `password` as the new one. `remember`: 30 days on this phone. */
+  signIn(mode: 'demo' | 'server', baseUrl: string, email: string, password: string, opts?: { remember?: boolean; setupCode?: string }): Promise<ActionResult>;
+  /** After changing your own password: the new sign-in for this phone (every other phone is signed out). */
+  replaceToken(token: string): Promise<void>;
   signOut(): Promise<void>;
   policy(): Promise<Policy | null>;
   acknowledge(policyId: string): Promise<ActionResult>;
@@ -152,9 +155,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const me = await call({ method: 'GET', path: '/me' });
       const level = me.status === 200 ? (me.body.login_level ?? me.body.user?.level) : null;
       const cur = sessionRef.current?.user;
-      const extra = me.status === 200 ? { fleetDuty: !!me.body.fleetDuty, stockDuty: !!me.body.stockDuty, work: me.body.work ?? undefined }
-        : { fleetDuty: cur?.fleetDuty, stockDuty: cur?.stockDuty, work: cur?.work };
-      const same = cur && level === cur.level && JSON.stringify([extra.fleetDuty, extra.stockDuty, extra.work]) === JSON.stringify([cur.fleetDuty, cur.stockDuty, cur.work]);
+      const extra = me.status === 200 ? { fleetDuty: !!me.body.fleetDuty, stockDuty: !!me.body.stockDuty, stockCover: !!me.body.stockCover, work: me.body.work ?? undefined }
+        : { fleetDuty: cur?.fleetDuty, stockDuty: cur?.stockDuty, stockCover: cur?.stockCover, work: cur?.work };
+      const same = cur && level === cur.level && JSON.stringify([extra.fleetDuty, extra.stockDuty, extra.stockCover, extra.work]) === JSON.stringify([cur.fleetDuty, cur.stockDuty, cur.stockCover, cur.work]);
       if (level && sessionRef.current && !same) {
         const s2 = { ...sessionRef.current, user: { ...sessionRef.current.user, level, ...extra } };
         sessionRef.current = s2; setSession(s2); await save(K.session, s2);
@@ -205,14 +208,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return () => { sub.remove(); clearInterval(timer); };
   }, [outbox, syncNow]);
 
-  const signIn = useCallback(async (mode: 'demo' | 'server', baseUrl: string, email: string, password: string): Promise<ActionResult> => {
+  const signIn = useCallback(async (mode: 'demo' | 'server', baseUrl: string, email: string, password: string, opts: { remember?: boolean; setupCode?: string } = {}): Promise<ActionResult> => {
     httpRef.current = mode === 'server' ? new HttpTransport(baseUrl) : null;
     // Signing in (or switching who you are in the test drive) always starts with signal.
     if (demoRef.current) demoRef.current.noSignal = false;
     setDemoNoSignalState(false);
     sessionRef.current = { mode, baseUrl, token: '', user: { id: '', name: '', level: '' }, company: { id: '', name: '' } };
     try {
-      const r = await transport().send({ method: 'POST', path: '/auth/login', json: { email, password } });
+      const r = opts.setupCode
+        ? await transport().send({ method: 'POST', path: '/auth/setup', json: { email, code: opts.setupCode, password, remember: !!opts.remember } })
+        : await transport().send({ method: 'POST', path: '/auth/login', json: { email, password, remember: !!opts.remember } });
       if (r.status !== 200) { sessionRef.current = null; return { ok: false, reasons: reasonsOf(r) }; }
       const s: Session = { mode, baseUrl, token: r.body.token, user: r.body.user, company: r.body.company };
       if (s.user.level !== 'technician') {
@@ -231,6 +236,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       throw e;
     }
   }, [outbox, refresh, setCacheAndSave, transport]);
+
+  const replaceToken = useCallback(async (token: string) => {
+    if (!sessionRef.current) return;
+    const s2 = { ...sessionRef.current, token };
+    sessionRef.current = s2; setSession(s2); await save(K.session, s2);
+  }, []);
 
   const signOut = useCallback(async () => {
     sessionRef.current = null;
@@ -328,7 +339,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     waiting: outbox.waiting, blocked: outbox.blocked, lastSentAt: outbox.lastSentAt,
     online: session?.mode === 'demo' ? !demoNoSignal : net.isConnected !== false,
     syncing, demoNoSignal,
-    signIn, signOut, policy, acknowledge, refresh, loadCard, jobAction, queue,
+    signIn, replaceToken, signOut, policy, acknowledge, refresh, loadCard, jobAction, queue,
     newId: randomUUID, ask, patchToday, patchCache, adjustStock, syncNow, discardBlocked, setDemoNoSignal, resetDemo,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

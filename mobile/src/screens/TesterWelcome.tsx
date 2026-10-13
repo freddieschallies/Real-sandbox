@@ -5,6 +5,7 @@ import { useStore } from '../state.tsx';
 import { Body, Button, Card, Heading, Label, Notice, Screen, st } from '../ui.tsx';
 import { C } from '../theme.ts';
 import { REAL, realText as R } from '../demoReal.ts';
+import { Login } from './Login.tsx';
 
 /** Why the last switch in the bar at the top did not work, shown on this screen. */
 let switchError: string[] | null = null;
@@ -70,6 +71,8 @@ const STEPS: [string, string[]][] = [
     'Departments: tap Edit on a department to rename it or give it a logo; the new name and logo show everywhere at once.',
     'People: open anyone and edit their contact and personal details. At the bottom, "End … employment": they come off every list, their login stops, and they move to Terminated staff (bottom of People) with their record and what was still on their name.',
     'Staff records: open anyone under People to add an issue or a warning, or delete one (a line keeps who deleted it and when).',
+    'Own logins: People → "Add a person" (name, email, position). On the person, "Login" → "Give a setup code": a one-time code to send by WhatsApp. Then tap "Back to the test guide", "Sign in with your own login", "I have a setup code": the email, the code, and a password only that person knows. Every person signs in as themselves; the CEO can also do this for the positions that are the CEO\'s.',
+    'Login on anyone\'s profile: give a new code when they forget the password, "Sign out of every phone" when a phone is lost, or stop the login. Five wrong passwords lock it for 15 minutes. Everything is logged.',
     'She does not see jobs, quotes or the stockroom.',
   ]],
   ['As the office admin (Zanele)', [
@@ -83,6 +86,7 @@ const STEPS: [string, string[]][] = [
     'Workshop: machines in the workshop (being repaired, or ready to go back), the loan machines and which store each one is at, and where the workshop is. Jobs → "Workshop & loans" filters the job list the same way. A workshop repair (a machine the client brings in) is a job type on New job.',
     'Stores: add a store by pasting its point from Google Maps.',
     'QR codes: print every QR sticker: the vehicles, and the tool store\'s tools and ladders (all, ladders only, or only the ones you tick). On a phone, Tech → Vehicle scans a sticker with the camera, also in the phone\'s browser.',
+    'Lindiwe is not in? Zanele stands in: the Stockroom tab at the top has To issue, Tool store and People. Issue Thabo\'s stock request or book out a ladder; it is under Zanele\'s name ("Admin, standing in") and Lindiwe sees it on her Live screen and To issue when she is back. Receiving deliveries and stock counts stay with Lindiwe.',
     'Ask the CEO to give her the stockroom: a Stockroom tab appears at the top and she has the stock controller\'s full screens.',
   ]],
   ['As the CEO (Lilanie)', [
@@ -100,11 +104,13 @@ const STEPS: [string, string[]][] = [
 
 export function TesterWelcome() {
   const s = useStore();
+  const [own, setOwn] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [reset, setReset] = useState(false);
   const [why, setWhy] = useState<string[] | null>(() => switchError);
   React.useEffect(() => { const f = (e: string[] | null) => setWhy(e); switchListeners.add(f); return () => { switchListeners.delete(f); }; }, []);
   const go = async (who: 'demo' | 'stock' | 'mech' | 'office' | 'admin' | 'manager' | 'hr') => { setBusy(who); setWhy(null); const r = await s.signIn('demo', '', who, 'demo'); setBusy(null); if (!r.ok) setWhy(r.reasons); };
+  if (own) return <Login demo back={() => setOwn(false)} />;
   return (
     <Screen title="Real Sandbox" sub={`Test drive · ${REAL ? REAL.company.name : 'ZSP'} job cards and stock`}>
       <View style={{ gap: 6 }}>
@@ -125,6 +131,8 @@ export function TesterWelcome() {
       <Button label={R('Open as HR (Precious)')} kind="secondary" onPress={() => go('hr')} busy={busy === 'hr'} />
       <Button label={R('Open as office admin (Zanele)')} kind="secondary" onPress={() => go('admin')} busy={busy === 'admin'} />
       <Button label={R('Open as CEO (Lilanie)')} kind="secondary" onPress={() => go('office')} busy={busy === 'office'} />
+      <Button label="Sign in with your own login" kind="quiet" onPress={() => setOwn(true)} />
+      <Text style={st.small}>For someone HR or the CEO added under People and gave a setup code: the email and the password they chose (first time: "I have a setup code").</Text>
       {STEPS.map(([title, lines]) => (
         <Card key={title}>
           <Heading>{R(title)}</Heading>

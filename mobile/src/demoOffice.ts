@@ -359,9 +359,33 @@ export class DemoOffice {
       dateOfBirth: 'date_of_birth', homeAddress: 'home_address', startDate: 'start_date', notes: 'notes', photoId: 'photo_id' };
     for (const k of ['dateOfBirth', 'startDate']) if (b[k] && !/^\d{4}-\d{2}-\d{2}$/.test(b[k]!)) return bad(400, `${k === 'dateOfBirth' ? 'date of birth' : 'start date'} must look like 2021-03-31`);
     if (b.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(b.email)) return bad(400, 'that email address does not look right');
+    if (b.email && Object.entries(this.profiles()).some(([k, v]) => k !== id && (v.email ?? '').toLowerCase() === b.email!.toLowerCase())) return bad(409, 'that email is already someone else\'s sign-in: use another one');
     for (const [k, col] of Object.entries(map)) if (k in b) (f as unknown as Record<string, string | null>)[col] = b[k] === '' ? null : (b[k] ?? null);
     this.o.changes.unshift({ at: new Date().toISOString(), by: this.name('office'), person: p.full_name, action: 'profile', change: 'Profile details updated' });
     return good({ userId: id });
+  }
+
+  /** HR or the CEO adds a person (no login until they get a setup code). `full`: the CEO, who adds any position. */
+  addPerson(b: { fullName?: string; email?: string; phone?: string; position?: string; trade?: string | null }, full: boolean, creator: boolean, department: string): Res {
+    const name = (b.fullName ?? '').trim();
+    if (name.length < 3) return bad(400, 'their full name');
+    if (!b.position || !POSITION_LABEL[b.position]) return bad(400, 'their position');
+    if (!full && !HR_POSITIONS.includes(b.position)) return bad(403, "HR adds technicians, admin, department managers and stock controllers; the other positions are the CEO's");
+    if (b.position === 'creator' && !creator) return bad(403, 'only the Creator adds another Creator');
+    if (this.o.people.some(p => p.full_name.toLowerCase() === name.toLowerCase())) return bad(409, `${name} is already under People`);
+    const email = (b.email ?? '').trim().toLowerCase() || null;
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return bad(400, 'a valid email');
+    if (email && Object.values(this.profiles()).some(v => (v.email ?? '').toLowerCase() === email)) return bad(409, "that email is already someone else's");
+    const id = `p-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+    this.o.people.push({ id, full_name: name, login_level: b.position, department, trade: b.position === 'technician' && b.trade && b.trade in TRADES ? b.trade as keyof typeof TRADES : null });
+    this.profiles()[id] = { ...blank(), email, phone: (b.phone ?? '').trim() || null, start_date: new Date().toISOString().slice(0, 10) };
+    this.o.changes.unshift({ at: new Date().toISOString(), by: this.name('office'), person: name, action: 'added', change: `Added as ${POSITION_LABEL[b.position]}` });
+    return good({ id, full_name: name, position: POSITION_LABEL[b.position] });
+  }
+
+  /** Name, position, email and phone of everyone (for the logins). */
+  loginPeople() {
+    return this.o.people.map(p => ({ id: p.id, full_name: p.full_name, login_level: p.login_level, email: this.profiles()[p.id]?.email ?? null, phone: this.profiles()[p.id]?.phone ?? null }));
   }
 
   setTrade(id: string, trade: keyof typeof TRADES | null): Res {

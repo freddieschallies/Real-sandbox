@@ -8,6 +8,7 @@ import { vanOf } from '../vanRepo.ts';
 import { notify } from './field.ts';
 import { DateOnly, Refused, Uuid, parse } from '../http.ts';
 import { kitAllowed, recordsAllowed } from './staff.ts';
+import { registerEmail } from './logins.ts';
 
 export function registerPeopleRoutes(app: FastifyInstance) {
   const office = (req: FastifyRequest) => {
@@ -84,6 +85,12 @@ export function registerPeopleRoutes(app: FastifyInstance) {
       if (!(await c.query("SELECT 1 FROM users WHERE id = $1 AND status <> 'left'", [id])).rowCount) throw new Refused(404, ['no such person']);
       if (b.photoId && !(await c.query("SELECT 1 FROM photos WHERE id = $1 AND kind = 'profile'", [b.photoId])).rowCount) throw new Refused(409, ['upload the picture first']);
       if (b.email && (await c.query('SELECT 1 FROM users WHERE lower(email) = lower($1) AND id <> $2', [b.email, id])).rowCount) throw new Refused(409, ['that email is already someone else\'s login']);
+      // The email is also the person's sign-in: the sign-in directory follows it.
+      if (b.email !== undefined) {
+        const has = (await c.query("SELECT login_enabled AND password_hash LIKE '$2%' AS on FROM users WHERE id = $1", [id])).rows[0]?.on;
+        if (!b.email && has) throw new Refused(409, ['this person signs in with the email: give a new one, or stop the login first']);
+        await registerEmail(c, req.companyId, id, b.email ? b.email.toLowerCase() : null);
+      }
       if (b.phone !== undefined || b.email !== undefined) {
         await c.query('UPDATE users SET phone = COALESCE($2, phone), email = CASE WHEN $3::text IS NULL THEN email ELSE NULLIF($3, \'\') END WHERE id = $1',
           [id, b.phone === undefined ? null : (b.phone || null), b.email === undefined ? null : b.email]);
@@ -132,7 +139,8 @@ export function registerTerminationRoutes(app: FastifyInstance) {
       await c.query(`INSERT INTO terminations (user_id, terminated_on, reason, note, position, department, on_name, terminated_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [id, b.date, b.reason, b.note || null, POSITION_LABEL[u.login_level as LoginLevel], u.department, JSON.stringify({ kit, stock }), req.actor.id]);
       await c.query("UPDATE departments SET manager_id = NULL WHERE manager_id = $1", [id]);
-      await c.query("UPDATE users SET status = 'left', login_enabled = false, department_id = NULL WHERE id = $1", [id]);
+      await c.query("UPDATE users SET status = 'left', login_enabled = false, department_id = NULL, session_epoch = session_epoch + 1 WHERE id = $1", [id]);
+      await c.query("UPDATE login_codes SET cancelled_at = now(), cancel_reason = 'employment ended' WHERE user_id = $1 AND used_at IS NULL AND cancelled_at IS NULL", [id]);
       await c.query('INSERT INTO access_changes (changed_by, user_id, action, change) VALUES ($1, $2, $3, $4)', [req.actor.id, id, 'terminated', `Employment ended ${b.date}: ${REASONS[b.reason]}`]);
       await audit(c, req.actor.id, 'employment_ended', 'user', id, { date: b.date, reason: b.reason });
       if (kit.length || stock.length) {

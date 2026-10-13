@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { Db, Q } from '../db.ts';
 import { audit, raiseFlag, tx } from '../db.ts';
-import { can, departmentsFor } from '../core/permissions.ts';
+import { POSITION_LABEL, can, departmentsFor, type LoginLevel } from '../core/permissions.ts';
 import { fuelProblems } from '../core/rules.ts';
 import * as H from '../core/handover.ts';
 import { registrationCandidates } from '../core/vehicleCode.ts';
@@ -26,6 +26,22 @@ export async function notify(c: Q | Db, recipientId: string | null, kind: string
   if (!recipientId) return;
   await c.query('INSERT INTO notifications (recipient_id, kind, message, details) VALUES ($1, $2, $3, $4)',
     [recipientId, kind, message, JSON.stringify(details)]);
+}
+
+/**
+ * Someone other than the stock controller (an admin, the CEO) issued or took back stock or a tool
+ * while the stock controller was out: the work carries on, and the stock controller is told who did
+ * what, so the stockroom's records stay his. Returns who it was, e.g. "Zanele Khoza (Admin)", or null
+ * when it was a stock controller.
+ */
+export async function tellStockroom(c: Q, actorId: string, what: string, details: object = {}): Promise<string | null> {
+  const a = (await c.query('SELECT full_name, login_level FROM users WHERE id = $1', [actorId])).rows[0];
+  if (!a || a.login_level === 'stockroom') return null;
+  const who = `${a.full_name} (${POSITION_LABEL[a.login_level as LoginLevel] ?? a.login_level})`;
+  for (const s of (await c.query("SELECT id FROM users WHERE login_level = 'stockroom' AND status <> 'left' AND id <> $1", [actorId])).rows) {
+    await notify(c, s.id, 'stockroom_cover', `${who} ${what}`, { ...details, by: actorId });
+  }
+  return who;
 }
 
 async function nameOf(c: Q, userId: string): Promise<string> {

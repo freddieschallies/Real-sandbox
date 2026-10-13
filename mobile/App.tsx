@@ -95,7 +95,8 @@ function Switchable() {
   if (!u || s.needsPolicy) return <Root />;
   const views: { k: View3; label: string }[] = [
     { k: 'main', label: isOffice(u.level) ? 'Office' : 'My work' },
-    ...(u.stockDuty && u.level !== 'stockroom' ? [{ k: 'stock' as View3, label: 'Stockroom' }] : []),
+    // Full stockroom work, or standing in for the stock controller (issuing) when he is out.
+    ...((u.stockDuty || u.stockCover) && u.level !== 'stockroom' ? [{ k: 'stock' as View3, label: 'Stockroom' }] : []),
     ...(u.fleetDuty && u.level !== 'mechanic' ? [{ k: 'fleet' as View3, label: 'Fleet' }] : []),
   ];
   if (views.length < 2) return <Root />;
