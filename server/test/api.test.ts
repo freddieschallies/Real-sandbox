@@ -1797,6 +1797,17 @@ test('tool store: tools and ladders with serials and barcodes, booked out for a 
   assert.equal(hist.length, 1); assert.equal(hist[0].return_condition, 'damaged'); assert.ok(hist[0].out_signature_photo_id && hist[0].return_signature_photo_id);
   await assert.rejects(db.query('UPDATE tool_bookings SET return_note = $1 WHERE id = $2', ['changed', hist[0].id]), 'kept as signed');
   await assert.rejects(db.query('DELETE FROM tool_bookings WHERE id = $1', [hist[0].id]));
+  // A picture of how it looks: the tool, and the vehicle's profile picture; everyone can see them.
+  const tp = (await upload('stock', '/photos', { kind: 'tool', takenAt: '2026-10-30T08:00:00+02:00' })).body.id;
+  assert.equal((await call('stock', 'PUT' as 'POST', `/tool-store/${ladder.body.id}`, { photoId: hist[0].out_signature_photo_id })).status, 409, 'a picture of the tool');
+  assert.equal((await call('stock', 'PUT' as 'POST', `/tool-store/${ladder.body.id}`, { photoId: tp })).body.photo_id, tp);
+  const veh = (await call('mech', 'GET', '/fleet/barcodes')).body.vehicles[0];
+  const vp = (await upload('mech', '/photos', { kind: 'vehicle_profile', takenAt: '2026-10-30T08:00:00+02:00' })).body.id;
+  assert.equal((await call('tech', 'POST', `/fleet/vehicles/${veh.id}/photo`, { photoId: vp })).status, 403);
+  assert.equal((await call('mech', 'POST', `/fleet/vehicles/${veh.id}/photo`, { photoId: vp })).status, 200);
+  assert.equal((await call('mech', 'GET', `/fleet/vehicles/${veh.id}`)).body.vehicle.photo_id, vp, 'on the vehicle');
+  assert.equal((await call('tech2', 'GET', `/vehicles/lookup?barcode=${encodeURIComponent(veh.barcode)}`)).body.vehicle.photo_id, vp, 'the technician sees it when he scans');
+  assert.equal((await app.inject({ method: 'GET', url: `/photos/${vp}`, headers: { authorization: `Bearer ${tokens.tech2}` } })).statusCode, 200, 'and can open it');
   // The admin prints every sticker: vehicles and tools.
   const all = await call('admin', 'GET', '/barcodes');
   assert.equal(all.status, 200); assert.ok(all.body.vehicles.length >= 1); assert.ok(all.body.tools.some((t: { serial: string }) => t.serial === 'LAD-2401'));

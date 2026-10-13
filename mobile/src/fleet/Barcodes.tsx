@@ -6,8 +6,9 @@ import { Platform, Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { Body, Button, Card, Field, Heading, Notice, st } from '../ui.tsx';
 import { Barcode, printStickers } from '../barcode.tsx';
+import { Thumb } from '../ItemPicture.tsx';
 
-interface Row { id: string; registration: string; description: string | null; make: string | null; model: string | null; barcode: string }
+interface Row { id: string; registration: string; description: string | null; make: string | null; model: string | null; barcode: string; photo_id?: string | null }
 const reasons = (r: { status: number; body: unknown } | null | undefined) => (r?.body as { reasons?: string[] })?.reasons?.join('; ') ?? 'Needs signal: try again.';
 
 export function VehicleBarcodes() {
@@ -46,7 +47,8 @@ function VehicleCode({ v, canEdit, print, changed }: { v: Row; canEdit: boolean;
   };
   return (
     <Card>
-      <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <Thumb photoId={v.photo_id} label={v.registration} size={40} />
         <Text style={[st.body, { fontWeight: '800', fontSize: 18 }]}>{v.registration}</Text>
         <Text style={[st.small, { flex: 1 }]}>{[v.make, v.model].filter(Boolean).join(' ') || v.description}</Text>
       </View>

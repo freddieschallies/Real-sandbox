@@ -199,11 +199,11 @@ export class DemoTransport implements Transport {
     if (p === '/barcodes') {
       const lvl = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
       if (lvl === 'technician' || lvl === 'hr') return refuse(403, 'printing stickers is for the office, the mechanic and the stockroom');
-      const vs = this.fleet().s.vehicles as { id: string; registration: string; description?: string | null; make: string | null; model: string | null; barcode?: string }[];
+      const vs = this.fleet().s.vehicles as { id: string; registration: string; description?: string | null; make: string | null; model: string | null; barcode?: string; photo_id?: string | null }[];
       vs.forEach((v, i) => { v.barcode ??= v.registration === 'ND 412-778' ? 'ZSP-V07' : `ZSP-V${String(i + 10).padStart(2, '0')}`; });
       this.persist(this.state);
-      return ok({ vehicles: vs.map(v => ({ id: v.id, registration: v.registration, description: v.description ?? null, make: v.make, model: v.model, barcode: v.barcode })),
-        tools: this.tools().s.tools.filter(t => t.active).map(t => ({ id: t.id, name: t.name, kind: t.kind, serial: t.serial, barcode: t.barcode, condition: t.condition })) });
+      return ok({ vehicles: vs.map(v => ({ id: v.id, registration: v.registration, description: v.description ?? null, make: v.make, model: v.model, barcode: v.barcode, photo_id: v.photo_id ?? null })),
+        tools: this.tools().s.tools.filter(t => t.active).map(t => ({ id: t.id, name: t.name, kind: t.kind, serial: t.serial, barcode: t.barcode, condition: t.condition, photo_id: t.photo_id ?? null })) });
     }
     if (p === '/me/tools') { const r = this.tools().mine(this.who.id); this.persist(this.state); return ok(r); }
     if (!p.startsWith('/tool-store')) return null;
@@ -1197,7 +1197,7 @@ export class DemoTransport implements Transport {
       const van = this.van();
       const mode = new URLSearchParams(req.path.split('?')[1] ?? '').get('mode') ?? 'driving';
       return ok({
-        vehicle: { id: 'veh-1', registration: 'ND 412-778' },
+        vehicle: { id: 'veh-1', registration: 'ND 412-778', photo_id: (this.fleet().s.vehicles.find(x => x.id === 'veh-1') as { photo_id?: string | null } | undefined)?.photo_id ?? null },
         lastDriver: van.lastDriverMe ? { id: 'me', name: 'Thabo Mkhize' } : REAL ? { id: EXAMPLE_TECH, name: 'Ayanda Mthembu' } : { id: 'tech-2', name: 'Sipho Ndlovu' },
         lastInspection: { odometerKm: van.odometerKm, problems: van.problems, at: new Date(Date.now() - 86_400_000).toISOString(), by: 'Sipho Ndlovu' },
         needsInspection: H.needsInspection(mode as 'driving', van.lastDriverMe ? 'me' : REAL ? EXAMPLE_TECH : 'tech-2', 'me', true),
@@ -1268,11 +1268,18 @@ export class DemoTransport implements Transport {
       if (p === '/fleet/workshop/count') return done(ws.count(b, this.who.name));
     }
     if (p.startsWith('/fleet') && !this.does('fleet')) return refuse(403, 'mechanic only');
+    // A vehicle's profile picture.
+    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/photo$/))) {
+      const v = this.fleet().s.vehicles.find(x => x.id === m![1]) as ({ photo_id?: string | null } & object) | undefined;
+      if (!v) return refuse(404, 'no such vehicle');
+      v.photo_id = b?.photoId ?? null; this.persist(this.state);
+      return ok({ id: m[1], photo_id: v.photo_id });
+    }
     // Vehicle barcode stickers.
     if (p === '/fleet/barcodes' || /^\/fleet\/vehicles\/[^/]+\/barcode$/.test(p)) {
       const vs = this.fleet().s.vehicles as (typeof this.fleet extends () => { s: { vehicles: (infer V)[] } } ? V & { barcode?: string } : never)[];
       vs.forEach((v, i) => { v.barcode ??= v.registration === 'ND 412-778' ? 'ZSP-V07' : `ZSP-V${String(i + 10).padStart(2, '0')}`; });
-      if (p === '/fleet/barcodes') { this.persist(this.state); return ok({ vehicles: vs.map(v => ({ id: v.id, registration: v.registration, description: v.description ?? null, make: v.make, model: v.model, barcode: v.barcode })), canEdit: true }); }
+      if (p === '/fleet/barcodes') { this.persist(this.state); return ok({ vehicles: vs.map(v => ({ id: v.id, registration: v.registration, description: v.description ?? null, make: v.make, model: v.model, barcode: v.barcode, photo_id: (v as { photo_id?: string | null }).photo_id ?? null })), canEdit: true }); }
       const v = vs.find(x => p === `/fleet/vehicles/${x.id}/barcode`);
       if (!v) return refuse(404, 'no such vehicle');
       const code = b?.code ? String(b.code).trim().toUpperCase() : `V-${Math.random().toString(36).slice(2, 8).toUpperCase().replace(/[01OI]/g, 'X')}`;

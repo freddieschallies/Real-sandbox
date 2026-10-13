@@ -3,7 +3,7 @@ import type { Due, FaultSeverity, FleetJobType, FluidResult, TyreResult, Vehicle
 export interface FleetVehicle {
   id: string; registration: string; description: string | null; make: string | null; model: string | null; year: number | null;
   status: VehicleStatus; status_note: string | null; licence_expiry: string | null; next_service_km: number | null; next_service_at: string | null;
-  km: number | null; driver: string | null; open_faults: number; safety_faults: number;
+  km: number | null; driver: string | null; open_faults: number; safety_faults: number; photo_id?: string | null;
   open_job: { id: string; number: number; type: FleetJobType } | null;
   serviceDue: Due; licenceDue: Due;
   checked_today?: { oil: FluidResult; oilLitres: number | null; water: FluidResult; tyres: TyreResult; at: string } | null;

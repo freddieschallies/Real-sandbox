@@ -54,7 +54,7 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
   app.get('/fleet', async req => {
     viewer(req);
     const { rows } = await req.db.query(
-      `SELECT v.id, v.registration, v.description, v.make, v.model, v.year, v.status, v.status_note, v.licence_expiry, v.next_service_km, v.next_service_at,
+      `SELECT v.id, v.registration, v.description, v.make, v.model, v.year, v.status, v.status_note, v.licence_expiry, v.next_service_km, v.next_service_at, v.photo_id,
               (SELECT max(km) FROM odometer_readings o WHERE o.vehicle_id = v.id) AS km,
               (SELECT u.full_name FROM vehicle_scans s JOIN users u ON u.id = s.user_id
                 WHERE s.vehicle_id = v.id AND s.mode = 'driving' AND s.released_at IS NULL ORDER BY s.scanned_at DESC LIMIT 1) AS driver,
@@ -111,8 +111,20 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
   // Each vehicle's own code, printed as a QR sticker that technicians scan to drive it.
   app.get('/fleet/barcodes', async req => {
     viewer(req);
-    const { rows } = await req.db.query('SELECT id, registration, description, make, model, barcode FROM vehicles WHERE active ORDER BY registration');
+    const { rows } = await req.db.query('SELECT id, registration, description, make, model, barcode, photo_id FROM vehicles WHERE active ORDER BY registration');
     return { vehicles: rows, canEdit: can(req.actor, 'manage_fleet') };
+  });
+
+  // The vehicle's profile picture: the mechanic, or the office.
+  app.post('/fleet/vehicles/:id/photo', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    if (!can(req.actor, 'manage_fleet') && !can(req.actor, 'assign_jobs')) throw new Refused(403, ['the mechanic or the office sets the picture']);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ photoId: Uuid.nullable() }), req.body);
+    if (b.photoId && !(await req.db.query("SELECT 1 FROM photos WHERE id = $1 AND kind = 'vehicle_profile'", [b.photoId])).rowCount) throw new Refused(409, ['send the picture first']);
+    const r = await req.db.query('UPDATE vehicles SET photo_id = $2 WHERE id = $1 RETURNING registration', [id, b.photoId]);
+    if (!r.rowCount) throw new Refused(404, ['no such vehicle']);
+    await audit(req.db, req.actor.id, 'vehicle_photo_changed', 'vehicle', id, { photoId: b.photoId });
+    return { id, photo_id: b.photoId };
   });
 
   // A new code for a vehicle (the old sticker stops working), or the code of a sticker already on it.

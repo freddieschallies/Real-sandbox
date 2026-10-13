@@ -2,6 +2,7 @@
 // the mechanic's own job cards. Phone: tabs at the bottom. Desktop: menu, list and detail side by side.
 import { BottomTabs } from '../BottomTabs.tsx';
 import { VehicleBarcodes } from './Barcodes.tsx';
+import { ItemPicture, Thumb } from '../ItemPicture.tsx';
 import { usePhoneMenu } from '../menu.tsx';
 import { ModeToggle } from '../appearance.tsx';
 import { BrandLogo } from '../brand.tsx';
@@ -140,6 +141,7 @@ function VehicleCard({ x, onPress }: { x: FleetVehicle; onPress: () => void }) {
   return (
     <Card onPress={onPress} accessibilityLabel={`Vehicle ${x.registration}`} style={x.status !== 'in_service' ? { borderLeftWidth: 5, borderLeftColor: x.status === 'off_road' ? C.bad : C.warn } : undefined}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Thumb photoId={x.photo_id} label={x.registration} size={44} />
         <Text style={{ color: C.text, fontSize: 20, fontWeight: '800', letterSpacing: 1, flex: 1 }}>{x.registration}</Text>
         <Pill text={STATUS[x.status].text} tone={STATUS[x.status].tone} />
       </View>
@@ -209,6 +211,7 @@ function JobList({ jobs, open }: { jobs: FleetJob[]; open: (id: string) => void 
 // ---- One vehicle ---------------------------------------------------------------------------
 
 function VehicleScreen({ id, f, open }: { id: string; f: FleetHook; open: (s: Sel) => void }) {
+  const s = useStore();
   const d = f.d.details[id];
   const sum = f.d.vehicles.find(x => x.id === id);
   const [panel, setPanel] = useState<'none' | 'km' | 'status' | 'edit'>('none');
@@ -224,6 +227,7 @@ function VehicleScreen({ id, f, open }: { id: string; f: FleetHook; open: (s: Se
         <Pill text={STATUS[v.status].text} tone={STATUS[v.status].tone} />
       </View>
       <Body quiet>{[v.make, v.model, v.year].filter(Boolean).join(' ') || 'Make and model not recorded'}{sum.driver ? ` · driven by ${sum.driver}` : ''}</Body>
+      <ItemPicture photoId={v.photo_id} kind="vehicle_profile" label={v.registration} canEdit save={async pid => { const r = await s.ask({ method: 'POST', path: `/fleet/vehicles/${id}/photo`, json: { photoId: pid } }); if (r && r.status < 300) { f.load(); f.loadVehicle(id); return null; } return 'Not saved: needs signal.'; }} />
       {v.status_note ? <Notice tone={v.status === 'off_road' ? 'bad' : 'warn'} title={STATUS[v.status].text} lines={[v.status_note]} /> : null}
       <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
         <Card style={{ flex: 1, minWidth: 140 }}><Label>Odometer</Label><Text style={big}>{km(v.km)}</Text></Card>

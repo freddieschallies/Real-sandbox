@@ -25,7 +25,7 @@ export function toolDue(o: { outAt: Date; jobId: string | null; jobClosedAt: Dat
 
 async function tools(c: Q, where = 'TRUE', args: unknown[] = []) {
   const { rows } = await c.query(
-    `SELECT t.id, t.name, t.kind, t.serial, t.barcode, t.notes, t.condition, t.active,
+    `SELECT t.id, t.name, t.kind, t.serial, t.barcode, t.notes, t.condition, t.active, t.photo_id,
             b.id AS booking_id, b.user_id, u.full_name AS user_name, b.job_id, j.job_number, j.status::text AS job_status, j.closed_at AS job_closed_at,
             b.out_at, ob.full_name AS out_by_name, b.out_note
        FROM store_tools t
@@ -34,7 +34,7 @@ async function tools(c: Q, where = 'TRUE', args: unknown[] = []) {
       WHERE ${where} ORDER BY t.active DESC, t.kind, t.name`, args);
   const now = new Date();
   return rows.map(r => ({
-    id: r.id, name: r.name, kind: r.kind, serial: r.serial, barcode: r.barcode, notes: r.notes, condition: r.condition, active: r.active,
+    id: r.id, name: r.name, kind: r.kind, serial: r.serial, barcode: r.barcode, notes: r.notes, condition: r.condition, active: r.active, photo_id: r.photo_id as string | null,
     out: r.booking_id ? {
       bookingId: r.booking_id, userId: r.user_id, userName: r.user_name, jobId: r.job_id, jobNumber: r.job_number, jobStatus: r.job_status,
       outAt: new Date(r.out_at).toISOString(), outBy: r.out_by_name, note: r.out_note,
@@ -116,7 +116,7 @@ export function registerToolStoreRoutes(app: FastifyInstance) {
   app.put('/tool-store/:id', async (req: FastifyRequest<P>) => {
     keeper(req);
     const id = parse(Uuid, req.params.id);
-    const b = parse(ToolIn.partial().extend({ active: z.boolean().optional(), newBarcode: z.boolean().optional(), condition: z.enum(['good', 'damaged']).optional() }), req.body);
+    const b = parse(ToolIn.partial().extend({ active: z.boolean().optional(), newBarcode: z.boolean().optional(), condition: z.enum(['good', 'damaged']).optional(), photoId: Uuid.nullable().optional() }), req.body);
     return tx(req.db, async c => {
       const t = (await tools(c, 't.id = $1', [id]))[0];
       if (!t) throw new Refused(404, ['no such tool']);
@@ -128,8 +128,9 @@ export function registerToolStoreRoutes(app: FastifyInstance) {
         code = b.barcode;
       }
       if (code !== t.barcode && (await c.query('SELECT 1 FROM store_tools WHERE barcode = $1', [code])).rowCount) throw new Refused(409, ['that code is already on another tool']);
-      await c.query('UPDATE store_tools SET name = $2, kind = $3, serial = $4, barcode = $5, notes = $6, active = $7, condition = $8 WHERE id = $1',
-        [id, b.name ?? t.name, b.kind ?? t.kind, b.serial !== undefined ? b.serial || null : t.serial, code, b.notes !== undefined ? b.notes || null : t.notes, b.active ?? t.active, b.condition ?? t.condition]);
+      if (b.photoId && !(await c.query("SELECT 1 FROM photos WHERE id = $1 AND kind = 'tool'", [b.photoId])).rowCount) throw new Refused(409, ['send the picture first']);
+      await c.query('UPDATE store_tools SET name = $2, kind = $3, serial = $4, barcode = $5, notes = $6, active = $7, condition = $8, photo_id = $9 WHERE id = $1',
+        [id, b.name ?? t.name, b.kind ?? t.kind, b.serial !== undefined ? b.serial || null : t.serial, code, b.notes !== undefined ? b.notes || null : t.notes, b.active ?? t.active, b.condition ?? t.condition, b.photoId !== undefined ? b.photoId : t.photo_id]);
       await audit(c, req.actor.id, 'tool_changed', 'store_tool', id, { ...b, barcode: code });
       return (await tools(c, 't.id = $1', [id]))[0];
     });
@@ -198,8 +199,8 @@ export function registerToolStoreRoutes(app: FastifyInstance) {
     if (!(can(a, 'assign_jobs') || can(a, 'manage_fleet') || can(a, 'assign_stock') || ['director', 'creator'].includes(a.level))) {
       throw new Refused(403, ['printing stickers is for the office, the mechanic and the stockroom']);
     }
-    const vehicles = (await req.db.query('SELECT id, registration, description, make, model, barcode FROM vehicles WHERE active ORDER BY registration')).rows;
-    const tools = (await req.db.query('SELECT id, name, kind, serial, barcode, condition FROM store_tools WHERE active ORDER BY kind, name')).rows;
+    const vehicles = (await req.db.query('SELECT id, registration, description, make, model, barcode, photo_id FROM vehicles WHERE active ORDER BY registration')).rows;
+    const tools = (await req.db.query('SELECT id, name, kind, serial, barcode, condition, photo_id FROM store_tools WHERE active ORDER BY kind, name')).rows;
     return { vehicles, tools };
   });
 

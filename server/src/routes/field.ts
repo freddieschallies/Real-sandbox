@@ -48,13 +48,13 @@ const Inspection = z.object({
 type InspectionIn = z.infer<typeof Inspection>;
 
 /** The vehicle for a scanned code: our own sticker, or the licence disc / typed registration. */
-async function findVehicle(c: Q, code: string): Promise<{ id: string; registration: string; active: boolean } | null> {
-  const own = (await c.query('SELECT id, registration, active FROM vehicles WHERE barcode = $1', [code.trim()])).rows[0];
+async function findVehicle(c: Q, code: string): Promise<{ id: string; registration: string; active: boolean; photo_id: string | null } | null> {
+  const own = (await c.query('SELECT id, registration, active, photo_id FROM vehicles WHERE barcode = $1', [code.trim()])).rows[0];
   if (own) return own;
   const regs = registrationCandidates(code);
   if (!regs.length) return null;
   const { rows } = await c.query(
-    "SELECT id, registration, active FROM vehicles WHERE regexp_replace(upper(registration), '[^A-Z0-9]', '', 'g') = ANY($1)", [regs]);
+    "SELECT id, registration, active, photo_id FROM vehicles WHERE regexp_replace(upper(registration), '[^A-Z0-9]', '', 'g') = ANY($1)", [regs]);
   return rows.length === 1 ? rows[0] : null;
 }
 
@@ -167,7 +167,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
       kind: z.enum(['signature', 'fuel_slip', 'supplier_slip', 'bought_out_slip', 'vehicle_front', 'vehicle_back', 'vehicle_left',
         'vehicle_right', 'vehicle_dashboard', 'vehicle_damage', 'handover_signature', 'stock_item', 'delivery_note', 'profile',
         'fleet_before', 'fleet_after', 'fleet_fault', 'fleet_slip', 'logo', 'letterhead', 'report_machine', 'report_serial', 'report_part', 'report_extra',
-        'uplift', 'loan', 'delivery', 'tool_signature']),
+        'uplift', 'loan', 'delivery', 'tool_signature', 'vehicle_profile', 'tool']),
       takenAt: Iso, id: Uuid.optional(), jobId: Uuid.optional(),
     }), up.fields);
     if (['signature', 'uplift', 'loan', 'delivery'].includes(f.kind) && !f.jobId) throw new Refused(400, ['this photo belongs to a job: send jobId']);
@@ -191,8 +191,9 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
     const p = rows[0];
     if (!p) throw new Refused(404, ['no such photo']);
     if (p.purged_at) throw new Refused(410, [`this photo is no longer kept: ${p.purge_reason}`]);
-    // The company logo and letterhead are for everyone in the company; other photos for whoever took them, or the office.
-    if (!['logo', 'letterhead'].includes(p.kind) && p.taken_by !== req.actor.id && !can(req.actor, 'view_all_job_cards')) throw new Refused(403, ['not your photo']);
+    // The logo, letterhead and pictures of how things look (vehicles, tools, stock, people) are for everyone in the
+    // company; other photos for whoever took them, or the office.
+    if (!['logo', 'letterhead', 'vehicle_profile', 'tool', 'stock_item', 'profile'].includes(p.kind) && p.taken_by !== req.actor.id && !can(req.actor, 'view_all_job_cards')) throw new Refused(403, ['not your photo']);
     reply.header('content-type', p.content_type ?? 'image/jpeg').header('cache-control', 'private, max-age=86400');
     return reply.send(openFile(p.file_path));
   });
@@ -290,7 +291,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
     if (!v || !v.active) throw new Refused(404, ['unknown vehicle barcode']);
     const h = await handoverContext(req.db, v.id);
     return {
-      vehicle: { id: v.id, registration: v.registration },
+      vehicle: { id: v.id, registration: v.registration, photo_id: v.photo_id },
       lastDriver: h.lastDriver,
       lastInspection: h.prev ? { odometerKm: h.prev.odometerKm, problems: h.prev.problems, at: h.prevAt, by: h.prevBy } : null,
       needsInspection: H.needsInspection(q.mode, h.lastDriver?.id ?? null, req.actor.id, !!h.prev),

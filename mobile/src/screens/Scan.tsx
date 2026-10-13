@@ -1,11 +1,12 @@
 // Scan the barcode in the vehicle: tells the office (and the tracker) who is in which vehicle.
 // Taking over a vehicle as its driver means a handover inspection first (see Handover.tsx).
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Platform, Pressable, Text, View } from 'react-native';
 import type { BarcodeType } from 'expo-camera';
 import { describeCode, parseLicenceDisc } from '../../../server/src/core/vehicleCode.ts';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { CodeScanner } from '../CodeScanner.tsx';
+import { ItemPicture } from '../ItemPicture.tsx';
 import { useStore } from '../state.tsx';
 import { useNav } from '../nav.tsx';
 import { nowIso } from '../device.ts';
@@ -35,6 +36,16 @@ export function Scan() {
   const [handover, setHandover] = useState<Lookup | null>(null);
   const [torch, setTorch] = useState(false);
   const isDisc = !!parseLicenceDisc(code);
+  // As soon as a code is read: which vehicle it is, with its picture, so he knows it is the right one.
+  const [seen, setSeen] = useState<{ registration: string; photo_id: string | null } | null>(null);
+  useEffect(() => {
+    setSeen(null);
+    if (code.trim().length < 3) return;
+    const t = setTimeout(() => {
+      s.ask({ method: 'GET', path: `/vehicles/lookup?barcode=${encodeURIComponent(code.trim())}&mode=riding_along` }).then(r => { if (r?.status === 200) setSeen({ registration: r.body.vehicle.registration, photo_id: r.body.vehicle.photo_id ?? null }); }).catch(() => {});
+    }, 300);
+    return () => clearTimeout(t);
+  }, [code]);
   const v = s.cache.today?.vehicle;
 
   const details = () => {
@@ -107,7 +118,8 @@ export function Scan() {
 
       {code ? (
         <>
-          <Text style={{ color: C.good, fontWeight: '700', fontSize: 18 }}>{describeCode(code)}</Text>
+          {seen?.photo_id ? <ItemPicture photoId={seen.photo_id} kind="vehicle_profile" label={seen.registration} canEdit={false} save={async () => null} /> : null}
+          <Text style={{ color: C.good, fontWeight: '700', fontSize: 18 }}>{seen ? `${seen.registration} · ` : ''}{describeCode(code)}</Text>
           <Label>You are</Label>
           <Choice options={['driving', 'riding_along'] as const} value={mode} onChange={setMode} labels={{ driving: 'Driving', riding_along: 'Riding along' }} />
           <Label>Why this vehicle?</Label>

@@ -3,7 +3,7 @@
 import type { Flag } from './types.ts';
 import { mayHaveIncidents, EXAMPLE_TECH, REAL } from './demoReal.ts';
 
-export interface DemoTool { id: string; name: string; kind: 'tool' | 'ladder' | 'equipment'; serial: string | null; barcode: string; notes: string | null; condition: 'good' | 'damaged' | 'lost'; active: boolean }
+export interface DemoTool { id: string; name: string; kind: 'tool' | 'ladder' | 'equipment'; serial: string | null; barcode: string; notes: string | null; condition: 'good' | 'damaged' | 'lost'; active: boolean; photo_id?: string | null }
 export interface DemoBooking { id: string; toolId: string; userId: string; userName: string; jobId: string | null; jobNumber: number | null; outAt: string; outBy: string; note: string | null;
   returnedAt?: string; returnedBy?: string; condition?: 'good' | 'damaged' | 'lost'; returnNote?: string | null }
 export interface DemoToolsState { tools: DemoTool[]; bookings: DemoBooking[] }
@@ -89,13 +89,13 @@ export class DemoTools {
     return good(this.view(t), 201);
   }
 
-  edit(id: string, b: { name?: string; serial?: string; notes?: string; active?: boolean; newBarcode?: boolean; condition?: 'good' | 'damaged' }): Res {
+  edit(id: string, b: { name?: string; serial?: string; notes?: string; active?: boolean; newBarcode?: boolean; condition?: 'good' | 'damaged'; photoId?: string | null }): Res {
     const t = this.s.tools.find(x => x.id === id);
     if (!t) return bad(404, 'no such tool');
     const v = this.view(t);
     if (b.active === false && v.out) return bad(409, `${t.name} is out with ${v.out.userName}: sign it back first`);
     Object.assign(t, { name: b.name || t.name, serial: b.serial !== undefined ? b.serial || null : t.serial, notes: b.notes !== undefined ? b.notes || null : t.notes,
-      active: b.active ?? t.active, condition: b.condition ?? t.condition, barcode: b.newBarcode ? `T-${Math.random().toString(36).slice(2, 8).toUpperCase().replace(/[01OI]/g, 'X')}` : t.barcode });
+      active: b.active ?? t.active, condition: b.condition ?? t.condition, photo_id: b.photoId !== undefined ? b.photoId : t.photo_id ?? null, barcode: b.newBarcode ? `T-${Math.random().toString(36).slice(2, 8).toUpperCase().replace(/[01OI]/g, 'X')}` : t.barcode });
     return good(this.view(t));
   }
 

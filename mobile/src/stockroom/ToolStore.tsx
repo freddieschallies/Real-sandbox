@@ -6,6 +6,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { CodeScanner } from '../CodeScanner.tsx';
+import { ItemPicture, Thumb } from '../ItemPicture.tsx';
 import { useStore } from '../state.tsx';
 import { nowIso } from '../device.ts';
 import { SignaturePad, type SignaturePadHandle } from '../SignaturePad.tsx';
@@ -14,7 +15,7 @@ import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, Select
 import { C } from '../theme.ts';
 
 export interface StoreTool {
-  id: string; name: string; kind: 'tool' | 'ladder' | 'equipment'; serial: string | null; barcode: string; notes: string | null; condition: 'good' | 'damaged' | 'lost'; active: boolean;
+  id: string; name: string; kind: 'tool' | 'ladder' | 'equipment'; serial: string | null; barcode: string; notes: string | null; condition: 'good' | 'damaged' | 'lost'; active: boolean; photo_id?: string | null;
   out: null | { bookingId: string; userId: string; userName: string; jobId: string | null; jobNumber: number | null; jobStatus: string | null; outAt: string; outBy: string; note: string | null; due: string; overdue: boolean };
 }
 interface Data { tools: StoreTool[]; people: { id: string; full_name: string; login_level: string }[]; jobs: { id: string; job_number: number; store: string; fault_reported: string; people: string[] }[] }
@@ -79,6 +80,7 @@ export function ToolStore() {
         <Card key={t.id} style={open === t.id ? { borderColor: C.accent, borderWidth: 2 } : t.out?.overdue ? { borderColor: C.bad } : undefined}>
           <Pressable onPress={() => setOpen(open === t.id ? null : t.id)} accessibilityRole="button" accessibilityLabel={`Tool ${t.name}`} style={{ gap: 4 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <Thumb photoId={t.photo_id} label={t.name} size={40} />
               <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>{t.name}</Text>
               <Pill text={KIND[t.kind]} tone="quiet" />
               {t.condition !== 'good' ? <Pill text={t.condition === 'lost' ? 'Lost' : 'Damaged'} tone="bad" /> : null}
@@ -107,6 +109,7 @@ function ToolPanel({ t, d, print, changed }: { t: StoreTool; d: Data; print: () 
   };
   return (
     <View style={{ gap: 10, marginTop: 6 }}>
+      <ItemPicture photoId={t.photo_id} kind="tool" label={t.name} canEdit save={async pid => { const r = await s.ask({ method: 'PUT', path: `/tool-store/${t.id}`, json: { photoId: pid } }); if (r && r.status < 300) { changed('good', `Picture of ${t.name} saved.`); return null; } return reasons(r); }} />
       <Barcode value={t.barcode} size={120} />
       {t.notes ? <Text style={st.small}>{t.notes}</Text> : null}
       {t.active && t.condition !== 'lost' ? (t.out ? <SignBack t={t} changed={changed} /> : <BookOut t={t} d={d} changed={changed} />) : null}
