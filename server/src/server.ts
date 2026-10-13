@@ -5,6 +5,8 @@ import { ensureAppRole, migrate } from './migrate.ts';
 import { readerFromEnv } from './invoiceReader.ts';
 import { readPendingInvoices } from './routes/stock.ts';
 import { purgeOldPhotos } from './retention.ts';
+import { escalate, pollInboxes } from './intake.ts';
+import { breakdownReaderFromEnv } from './breakdownReader.ts';
 
 // Migrations run as the database owner; the app then runs as its own restricted user.
 const appUrl = process.env.DATABASE_URL ?? '';
@@ -25,6 +27,18 @@ await app.listen({ host: '0.0.0.0', port: Number(process.env.PORT ?? 8080) });
 
 // Supplier invoices that are still waiting to be read (e.g. after a restart) are picked up every minute.
 if (invoiceReader) setInterval(() => { readPendingInvoices(pool, invoiceReader).catch(e => app.log.error(e)); }, 60_000);
+
+// Breakdowns: new emails in the connected Gmail inboxes every minute; breakdowns nobody has logged
+// within the set time go to the CEO. One round at a time.
+const reader = breakdownReaderFromEnv();
+let reading = false;
+setInterval(() => {
+  if (reading) return;
+  reading = true;
+  pollInboxes(pool, reader).then(n => { if (n) app.log.info(`${n} new email(s) in the breakdowns queue`); })
+    .catch(e => app.log.error(e)).finally(() => { reading = false; });
+  escalate(pool).catch(e => app.log.error(e));
+}, 60_000);
 
 // Old vehicle photos past their keeping time: once at start, then every 6 hours.
 const purge = () => purgeOldPhotos(pool).then(n => { if (n) app.log.info(`removed ${n} old vehicle photos`); }).catch(e => app.log.error(e));

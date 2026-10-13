@@ -203,13 +203,15 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
 
   app.get('/photos/:id', async (req: FastifyRequest<{ Params: { id: string } }>, reply) => {
     const id = parse(Uuid, req.params.id);
-    const { rows } = await req.db.query('SELECT file_path, content_type, taken_by, purged_at, purge_reason, kind FROM photos WHERE id = $1', [id]);
+    const { rows } = await req.db.query('SELECT file_path, content_type, taken_by, purged_at, purge_reason, kind, job_id FROM photos WHERE id = $1', [id]);
     const p = rows[0];
     if (!p) throw new Refused(404, ['no such photo']);
     if (p.purged_at) throw new Refused(410, [`this photo is no longer kept: ${p.purge_reason}`]);
     // The logo, letterhead and pictures of how things look (vehicles, tools, stock, people) are for everyone in the
     // company; other photos for whoever took them, or the office.
-    if (!['logo', 'letterhead', 'vehicle_profile', 'tool', 'stock_item', 'profile'].includes(p.kind) && p.taken_by !== req.actor.id && !can(req.actor, 'view_all_job_cards')) throw new Refused(403, ['not your photo']);
+    // A picture that came in with a breakdown: also for the technicians on the job it became.
+    const onJob = p.kind === 'breakdown' && !!p.job_id && (await req.db.query('SELECT 1 FROM jobs j WHERE j.id = $1 AND (j.lead_technician_id = $2 OR EXISTS (SELECT 1 FROM job_helpers h WHERE h.job_id = j.id AND h.user_id = $2))', [p.job_id, req.actor.id])).rowCount;
+    if (!['logo', 'letterhead', 'vehicle_profile', 'tool', 'stock_item', 'profile'].includes(p.kind) && p.taken_by !== req.actor.id && !onJob && !can(req.actor, 'view_all_job_cards')) throw new Refused(403, ['not your photo']);
     reply.header('content-type', p.content_type ?? 'image/jpeg').header('cache-control', 'private, max-age=86400');
     return reply.send(openFile(p.file_path));
   });

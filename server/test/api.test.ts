@@ -16,6 +16,9 @@ import { buildApp } from '../src/app.ts';
 import { hashPassword } from '../src/auth.ts';
 import { ensureAppRole, migrate } from '../src/migrate.ts';
 import { createCompany } from '../src/routes/platform.ts';
+import { escalate, pollInboxes } from '../src/intake.ts';
+import { rulesReader } from '../src/breakdownReader.ts';
+import { callCentreMail, fakeImap, type FakeInbox } from './fakeImap.ts';
 
 const ADMIN_URL = process.env.TEST_DATABASE_ADMIN_URL ?? 'postgres://postgres@localhost:5433/postgres?host=/tmp';
 const TEST_DB = 'realsandbox_test';
@@ -31,6 +34,12 @@ let app: FastifyInstance;
 // What the pretend invoice reader 'sees' on the next photo.
 // Emails the server would send.
 let mailBox: { to: string[]; subject: string; html: string; pictures: { cid: string }[] }[] = [];
+// The pretend Gmail inbox the breakdown tests read, and the WhatsApp link's key.
+const inbox: FakeInbox = { user: 'breakdowns@zsp.test', pass: 'abcdefghijklmnop', uidValidity: 3, mails: [], logins: 0, fetched: [] };
+let imapPort = 0;
+let closeImap: (() => Promise<void>) | null = null;
+const BRIDGE = 'b'.repeat(32);
+const imapConnect = (user: string, pass: string) => ({ host: '127.0.0.1', port: imapPort, secure: false, user, pass });
 let fakeReader: InvoiceReader = async () => { throw new Error('no invoice expected'); };
 const ids: Record<string, string> = {};
 const tokens: Record<string, string> = {};
@@ -129,11 +138,14 @@ before(async () => {
   await db.query("INSERT INTO stock_movements (stock_item_id, qty, kind, from_stockroom, to_technician_id, created_by) VALUES ($1, 2, 'assign', true, $2, $3)", [ids.seal, ids.tech, ids.admin]);
   ids.policy = (await q("INSERT INTO policy_versions (version, body) VALUES ('1.0', 'Vehicle and App Monitoring Policy') RETURNING id", [])).id;
 
-  app = await buildApp(appDb, { jwtSecret: 'x'.repeat(40), invoiceReader: (img, mime) => fakeReader(img, mime), mailer: async m => { mailBox.push(m as never); } });
+  const srv = await fakeImap(inbox); imapPort = srv.port; closeImap = srv.close;
+  app = await buildApp(appDb, { jwtSecret: 'x'.repeat(40), invoiceReader: (img, mime) => fakeReader(img, mime), mailer: async m => { mailBox.push(m as never); },
+    intake: { reader: rulesReader, connect: imapConnect, bridgeKey: BRIDGE } });
 });
 
 after(async () => {
   await app?.close();
+  await closeImap?.();
   await db?.end();
   await appDb?.end();
   await owner?.end();
@@ -2089,4 +2101,100 @@ test('the stock controller is out: admin issues stock and tools, and it is noted
   // The stock controller's own issues are not "stood in".
   const reg2 = (await call('stock', 'GET', '/stock/issues?status=issued')).body.filter((i: { decided_by: string }) => i.decided_by === 'stock');
   assert.ok(reg2.every((i: { decidedByStandIn: string | null }) => i.decidedByStandIn === null));
+});
+
+test('breakdowns: Gmail inbox and the WhatsApp group feed one queue; one tap logs the job; the same call is one job', async () => {
+  const bridge = (method: 'GET' | 'POST', url: string, body?: object) => app.inject({ method, url, payload: body, headers: { 'x-bridge-key': BRIDGE } }).then(r => ({ status: r.statusCode, body: r.json() }));
+  assert.equal((await call('tech', 'GET', '/breakdowns')).status, 403, 'not a technician\'s');
+  assert.equal((await call('admin', 'GET', '/breakdowns')).status, 200);
+  // The CEO connects the Gmail inbox (checked by signing in) and the app's WhatsApp number.
+  assert.equal((await call('admin', 'POST', '/breakdowns/inboxes', { address: inbox.user, appPassword: inbox.pass })).status, 403, 'the CEO\'s');
+  const wrong = await call('creator', 'POST', '/breakdowns/inboxes', { address: inbox.user, appPassword: 'wrongwrongwrong1' });
+  assert.equal(wrong.status, 400);
+  assert.match(wrong.body.reasons[0], /refused the email address or app password/);
+  assert.equal((await call('creator', 'POST', '/breakdowns/inboxes', { address: inbox.user, appPassword: 'abcd efgh ijkl mnop' })).status, 200);
+  assert.ok(!JSON.stringify((await db.query('SELECT secret_enc FROM intake_sources')).rows).includes('abcdefgh'), 'the app password is kept scrambled');
+  assert.equal((await app.inject({ method: 'POST', url: '/internal/whatsapp/status', payload: { companyId: ids.company, state: 'connected' }, headers: { 'x-bridge-key': 'nope' } })).statusCode, 401);
+  const st = await bridge('POST', '/internal/whatsapp/status', { companyId: ids.company, state: 'connected', number: '27720000000', groups: [{ jid: '123@g.us', name: 'ZSP Breakdowns' }, { jid: '999@g.us', name: 'Braai club' }] });
+  assert.equal(st.status, 200);
+  assert.equal(st.body.groupJid, null, 'no group chosen yet');
+  assert.equal((await call('creator', 'PUT', '/breakdowns/whatsapp/group', { jid: '555@g.us' })).status, 400);
+  assert.equal((await call('creator', 'PUT', '/breakdowns/whatsapp/group', { jid: '123@g.us' })).status, 200);
+
+  // An email from the call centre with the log number, and an old one (only the last day is read the first time).
+  inbox.mails.push({ uid: 40, date: new Date(Date.now() - 5 * 86_400_000), raw: callCentreMail({ id: 'old@cc', from: 'calls@cc.test', subject: 'old', text: 'old breakdown' }) });
+  inbox.mails.push({ uid: 41, date: new Date(), raw: callCentreMail({ id: 'cc-784512@cc', from: '"Call Centre" <calls@cc.test>', subject: 'Call logged', text: 'Please attend: FreshMart Meerensee, ice machine not making ice. Urgent.\nLog no: 784512', picture: true }) });
+  assert.equal(await pollInboxes(appDb, rulesReader, { connect: imapConnect }), 1);
+  assert.equal(await pollInboxes(appDb, rulesReader, { connect: imapConnect }), 0, 'read once');
+  const q = (await call('admin', 'GET', '/breakdowns')).body;
+  const email = q.items.find((i: { channel: string }) => i.channel === 'email');
+  assert.equal(email.store_id, ids.store, 'the store found');
+  assert.equal(email.call_ref, '784512');
+  assert.equal(email.urgent, true);
+  assert.equal(email.photo_ids.length, 1, 'the picture kept');
+  assert.equal((await call('admin', 'GET', '/breakdowns/count')).body.breakdowns, 1);
+
+  // The app's number posts it in the group; its own post coming back is not a new breakdown.
+  const out = await bridge('GET', `/internal/whatsapp/outbox?companyId=${ids.company}`);
+  assert.equal(out.body.groupJid, '123@g.us');
+  assert.match(out.body.posts[0].text, /URGENT New breakdown \(email\)\nFreshMart Meerensee\n.*Call log 784512/);
+  assert.equal((await bridge('POST', '/internal/whatsapp/sent', { companyId: ids.company, id: out.body.posts[0].id, waId: 'WA-OWN-1' })).status, 200);
+  const own = await bridge('POST', '/internal/whatsapp/message', { companyId: ids.company, id: 'WA-OWN-1', groupJid: '123@g.us', at: new Date().toISOString(), text: out.body.posts[0].text });
+  assert.equal(own.body.breakdownId, null);
+  // Another group is not read.
+  assert.equal((await bridge('POST', '/internal/whatsapp/message', { companyId: ids.company, id: 'WA-X', groupJid: '999@g.us', at: new Date().toISOString(), text: 'Fridge broken at home' })).body.skipped, 'not the breakdowns group');
+  // Someone posts the same call in the group by hand.
+  const wa = await bridge('POST', '/internal/whatsapp/message', { companyId: ids.company, id: 'WA-2', groupJid: '123@g.us', at: new Date().toISOString(), senderName: 'Office', sender: '27720001111', text: 'FreshMart Meerensee ice machine broken, log no 784512' });
+  assert.ok(wa.body.breakdownId);
+
+  // One tap: the job, with the store, fault, log number; the WhatsApp copy goes with it.
+  const log = await call('admin', 'POST', `/breakdowns/${email.id}/log`, { jobType: 'breakdown', priority: 'urgent', storeId: ids.store, clientOrderRef: '784512', faultReported: 'Ice machine not making ice', scheduledDate: '2026-10-13', leadTechnicianId: ids.tech });
+  assert.equal(log.status, 201, JSON.stringify(log.body));
+  assert.equal(log.body.merged, 1, 'the same call from WhatsApp is the same job');
+  assert.equal((await call('admin', 'POST', `/breakdowns/${email.id}/log`, { jobType: 'breakdown', storeId: ids.store, faultReported: 'again', scheduledDate: '2026-10-13', leadTechnicianId: ids.tech })).status, 409, 'logged once');
+  const job = (await db.query('SELECT client_order_ref, priority FROM jobs WHERE id = $1', [log.body.jobId])).rows[0];
+  assert.deepEqual(job, { client_order_ref: '784512', priority: 'urgent' });
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM photos WHERE job_id = $1 AND kind = $2', [log.body.jobId, 'breakdown'])).rows[0].n, 1, 'the picture is on the job');
+  assert.equal((await call('admin', 'GET', '/breakdowns/count')).body.breakdowns, 0);
+  const posts = (await bridge('GET', `/internal/whatsapp/outbox?companyId=${ids.company}`)).body.posts;
+  assert.match(posts.at(-1).text, new RegExp(`Job #${log.body.jobNumber} logged · FreshMart Meerensee · Call log 784512\\nTechnician: tech`));
+
+  // A reminder email about the same store: the office sees it is already a job and adds it.
+  inbox.mails.push({ uid: 42, date: new Date(), raw: callCentreMail({ id: 'remind@x', from: 'manager@freshmart.test', subject: 'Re: ice machine', text: 'FreshMart Meerensee: when is the technician coming? The ice machine is still not working.' }) });
+  await pollInboxes(appDb, rulesReader, { connect: imapConnect });
+  const r = (await call('admin', 'GET', '/breakdowns')).body.items.find((i: { external_id?: string; subject: string }) => i.subject === 'Re: ice machine');
+  assert.equal(r.same.job_number, log.body.jobNumber, 'it points at the open job');
+  assert.equal((await call('admin', 'POST', `/breakdowns/${r.id}/merge`, { jobId: log.body.jobId })).status, 200);
+
+  // Not a job: a breakdown needs a reason; a sender can be ignored from then on.
+  inbox.mails.push({ uid: 43, date: new Date(), raw: callCentreMail({ id: 'stmt@x', from: 'accounts@supplier.test', subject: 'Statement', text: 'Your statement for September is attached. Remittance please.' }) });
+  await pollInboxes(appDb, rulesReader, { connect: imapConnect });
+  const stmt = (await call('admin', 'GET', '/breakdowns')).body.items.find((i: { subject: string }) => i.subject === 'Statement');
+  assert.equal(stmt.kind, 'other');
+  assert.equal((await call('admin', 'POST', `/breakdowns/${stmt.id}/ignore`, { alwaysIgnoreSender: true })).status, 200);
+  inbox.mails.push({ uid: 44, date: new Date(), raw: callCentreMail({ id: 'stmt2@x', from: 'accounts@supplier.test', subject: 'Statement Oct', text: 'Statement' }) });
+  await pollInboxes(appDb, rulesReader, { connect: imapConnect });
+  assert.ok(!(await call('admin', 'GET', '/breakdowns')).body.items.some((i: { subject: string }) => i.subject === 'Statement Oct'), 'an ignored sender stays out of the queue');
+
+  // Waiting too long: the CEO is told, once.
+  inbox.mails.push({ uid: 45, date: new Date(), raw: callCentreMail({ id: 'late@x', from: 'store@x.test', subject: 'Breakdown', text: 'Boxer oven not heating' }) });
+  await pollInboxes(appDb, rulesReader, { connect: imapConnect });
+  await db.query("UPDATE breakdowns SET received_at = now() - interval '20 minutes' WHERE external_id = 'late@x'");
+  await escalate(appDb);
+  await escalate(appDb);
+  assert.equal((await db.query("SELECT count(*)::int AS n FROM notifications WHERE recipient_id = $1 AND kind = 'breakdown_waiting'", [ids.creator])).rows[0].n, 1);
+  const late = (await call('admin', 'GET', '/breakdowns')).body.items.find((i: { subject: string }) => i.subject === 'Breakdown');
+  assert.equal((await call('admin', 'POST', `/breakdowns/${late.id}/ignore`, {})).status, 400, 'a breakdown needs a reason');
+  assert.equal((await call('admin', 'POST', `/breakdowns/${late.id}/ignore`, { note: 'Already fixed by the store' })).status, 200);
+  assert.equal((await call('admin', 'POST', `/breakdowns/${late.id}/reopen`, {})).status, 200);
+
+  // Settings: the CEO's; the app tells the group when the technician is on site, if switched on.
+  const set = (await call('creator', 'GET', '/breakdowns/settings')).body;
+  assert.equal(set.inboxes[0].address, inbox.user);
+  assert.equal(set.inboxes[0].last_error, null);
+  assert.equal(set.whatsapp.group_name, 'ZSP Breakdowns');
+  assert.equal(set.whatsapp.running, true);
+  assert.ok(set.settings.ignore_senders.includes('accounts@supplier.test'));
+  assert.equal((await call('creator', 'PUT', '/breakdowns/settings', { postNew: true, postLogged: true, postOnSite: true, postDone: true, escalateAfterMin: 20, ignoreSenders: [] })).status, 200);
+  assert.equal((await call('admin', 'GET', '/breakdowns/settings')).status, 403);
 });

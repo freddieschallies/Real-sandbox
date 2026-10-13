@@ -31,6 +31,10 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       INVOICE_MODEL: ${INVOICE_MODEL:-claude-sonnet-5-5}
+      # Reading breakdown emails and messages (the store, fault and call log number).
+      BREAKDOWN_MODEL: ${BREAKDOWN_MODEL:-claude-haiku-5-5}
+      # The WhatsApp link (below) signs in to the server with this key.
+      WA_BRIDGE_KEY: ${WA_BRIDGE_KEY:-}
     volumes:
       - uploads:/data/uploads
     ports:
@@ -63,6 +67,22 @@ services:
           sleep 30
         done
 
+  # The company's own WhatsApp number in the breakdowns group (see whatsapp-bridge/bridge.mjs).
+  # Start with:  docker compose --env-file .env --profile whatsapp up -d
+  # then scan the QR code under Settings → Breakdowns with the ZSP phone.
+  whatsapp:
+    build: ../whatsapp-bridge
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      API_URL: http://api:8080
+      WA_BRIDGE_KEY: ${WA_BRIDGE_KEY:?set WA_BRIDGE_KEY in .env}
+      COMPANY_ID: ${WA_COMPANY_ID:?set WA_COMPANY_ID in .env (Settings → Breakdowns shows it)}
+    volumes:
+      - wa-auth:/data
+    profiles: ["whatsapp"]
+
   # Secure link so phones can reach the server from anywhere, with no open ports on the office router.
   tunnel:
     image: cloudflare/cloudflared:latest
@@ -77,3 +97,4 @@ services:
 volumes:
   db-data:
   uploads:
+  wa-auth:

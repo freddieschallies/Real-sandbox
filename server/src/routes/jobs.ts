@@ -13,6 +13,7 @@ import { toolsOnJob } from './toolStore.ts';
 import { useOnJob } from '../stockRepo.ts';
 import { Iso, Point, Refused, Uuid, DateOnly, parse } from '../http.ts';
 import { readUpload, saveFile, removeFile } from '../uploads.ts';
+import { postJobUpdate } from '../intake.ts';
 
 export interface Ctx { c: Q; row: JobRow; card: J.JobCard; visitId?: string; actorId: string }
 
@@ -20,6 +21,43 @@ export interface Ctx { c: Q; row: JobRow; card: J.JobCard; visitId?: string; act
  * Runs one job card action: lock the card, check the person is on the job, ask the rules engine,
  * and only if it agrees, write the change. Returns the card as it now stands.
  */
+export const NewJob = z.object({
+  jobType: z.enum(['breakdown', 'planned_maintenance', 'installation', 'quote_visit', 'follow_up', 'workshop_repair']),
+  priority: z.enum(['urgent', 'normal', 'scheduled']).default('normal'),
+  storeId: Uuid,
+  clientOrderRef: z.string().max(100).optional(),
+  faultReported: z.string().min(3).max(2000),
+  scheduledDate: DateOnly,
+  leadTechnicianId: Uuid,
+  helperIds: z.array(Uuid).default([]),
+  maintenanceSteps: z.array(z.string().min(1)).default([]),
+});
+
+/** Opens a job (from the office's New job, or a breakdown from the queue). Returns its id. */
+export async function createJob(c: Q, actorId: string, b: z.infer<typeof NewJob>): Promise<string> {
+  if (b.jobType === 'planned_maintenance' && b.maintenanceSteps.length === 0) throw new Refused(400, ['planned maintenance needs its checklist steps']);
+  // Every id the phone or browser sends is checked through this company's own rows,
+  // so nothing can be linked to another company's records.
+  const store = await c.query('SELECT 1 FROM stores WHERE id = $1', [b.storeId]);
+  if (!store.rowCount) throw new Refused(400, ['unknown store']);
+  const techs = await c.query("SELECT id FROM users WHERE id = ANY($1) AND login_level = 'technician' AND status = 'active'", [[b.leadTechnicianId, ...b.helperIds]]);
+  const ok = new Set(techs.rows.map(r => r.id));
+  if (!ok.has(b.leadTechnicianId)) throw new Refused(400, ['lead technician must be an active technician']);
+  if (b.helperIds.some(h => !ok.has(h))) throw new Refused(400, ['every helper must be an active technician']);
+  const { rows } = await c.query(
+    `INSERT INTO jobs (job_type, priority, store_id, client_order_ref, fault_reported, scheduled_date, lead_technician_id, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, job_number`,
+    [b.jobType, b.priority, b.storeId, b.clientOrderRef ?? null, b.faultReported, b.scheduledDate, b.leadTechnicianId, actorId],
+  );
+  const jobId = rows[0].id;
+  // The first work item is the reported fault.
+  await c.query("INSERT INTO work_items (job_id, title, origin) VALUES ($1, $2, 'reported')", [jobId, b.faultReported.slice(0, 200)]);
+  for (const h of b.helperIds) await c.query('INSERT INTO job_helpers (job_id, user_id) VALUES ($1, $2)', [jobId, h]);
+  for (const st of b.maintenanceSteps) await c.query('INSERT INTO planned_maintenance_checks (job_id, step) VALUES ($1, $2)', [jobId, st]);
+  await audit(c, actorId, 'job_created', 'job', jobId, { jobNumber: rows[0].job_number });
+  return jobId;
+}
+
 export async function actOnJob(
   req: FastifyRequest<{ Params: { id: string } }>,
   rule: (card: J.JobCard) => J.Result,
@@ -43,44 +81,10 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
 
   // ---- Create, list, view ------------------------------------------------
 
-  const NewJob = z.object({
-    jobType: z.enum(['breakdown', 'planned_maintenance', 'installation', 'quote_visit', 'follow_up', 'workshop_repair']),
-    priority: z.enum(['urgent', 'normal', 'scheduled']).default('normal'),
-    storeId: Uuid,
-    clientOrderRef: z.string().max(100).optional(),
-    faultReported: z.string().min(3).max(2000),
-    scheduledDate: DateOnly,
-    leadTechnicianId: Uuid,
-    helperIds: z.array(Uuid).default([]),
-    maintenanceSteps: z.array(z.string().min(1)).default([]),
-  });
-
   app.post('/jobs', async (req, reply) => {
     if (!can(req.actor, 'assign_jobs')) throw new Refused(403, ['you do not have access to create jobs']);
     const b = parse(NewJob, req.body);
-    if (b.jobType === 'planned_maintenance' && b.maintenanceSteps.length === 0) throw new Refused(400, ['planned maintenance needs its checklist steps']);
-    const id = await tx(req.db, async c => {
-      // Every id the phone or browser sends is checked through this company's own rows,
-      // so nothing can be linked to another company's records.
-      const store = await c.query('SELECT 1 FROM stores WHERE id = $1', [b.storeId]);
-      if (!store.rowCount) throw new Refused(400, ['unknown store']);
-      const techs = await c.query("SELECT id FROM users WHERE id = ANY($1) AND login_level = 'technician' AND status = 'active'", [[b.leadTechnicianId, ...b.helperIds]]);
-      const ok = new Set(techs.rows.map(r => r.id));
-      if (!ok.has(b.leadTechnicianId)) throw new Refused(400, ['lead technician must be an active technician']);
-      if (b.helperIds.some(h => !ok.has(h))) throw new Refused(400, ['every helper must be an active technician']);
-      const { rows } = await c.query(
-        `INSERT INTO jobs (job_type, priority, store_id, client_order_ref, fault_reported, scheduled_date, lead_technician_id, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, job_number`,
-        [b.jobType, b.priority, b.storeId, b.clientOrderRef ?? null, b.faultReported, b.scheduledDate, b.leadTechnicianId, req.actor.id],
-      );
-      const jobId = rows[0].id;
-      // The first work item is the reported fault.
-      await c.query("INSERT INTO work_items (job_id, title, origin) VALUES ($1, $2, 'reported')", [jobId, b.faultReported.slice(0, 200)]);
-      for (const h of b.helperIds) await c.query('INSERT INTO job_helpers (job_id, user_id) VALUES ($1, $2)', [jobId, h]);
-      for (const s of b.maintenanceSteps) await c.query('INSERT INTO planned_maintenance_checks (job_id, step) VALUES ($1, $2)', [jobId, s]);
-      await audit(c, req.actor.id, 'job_created', 'job', jobId, { jobNumber: rows[0].job_number });
-      return jobId;
-    });
+    const id = await tx(req.db, c => createJob(c, req.actor.id, b));
     return reply.code(201).send(await cardView(req.db, id));
   });
 
@@ -150,6 +154,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
         if (res.flags?.includes('arrived_outside_geofence')) {
           await raiseFlag(c, { type: 'arrived_outside_geofence', technicianId: actorId, jobId: row.id, details: { position: b.position, reason: b.outsideReason } });
         }
+        await postJobUpdate(c, row.id, 'on_site');
       });
   });
 
@@ -333,7 +338,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
         for (const o of (await c.query("SELECT id FROM users WHERE login_level IN ('admin', 'management', 'director', 'creator') AND status <> 'left'")).rows) {
           await notify(c, o.id, 'ready_for_delivery', `Job ${row.job_number} (${j.name}): the machine ${what}.`, { jobId: row.id, by: actorId });
         }
-      }
+      } else await postJobUpdate(c, row.id, 'done');
     });
   });
 

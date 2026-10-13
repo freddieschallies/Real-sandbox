@@ -12,6 +12,7 @@ import { APP_OF, MAX_PINNED, MENU_LABEL, MENU_LEVELS, MENU_TABS, cleanPinned, us
 import type { LoginLevel } from '../../server/src/core/permissions.ts';
 import { DemoOffice, END_REASONS, HR_POSITIONS, POSITION_LABEL, seedOffice, terminate, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
 import { DemoLogins, type DemoLoginsState } from './demoLogins.ts';
+import { DemoBreakdowns, seedBreakdowns, type DemoBdState } from './demoBreakdowns.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
 import { normReg, registrationCandidates } from '../../server/src/core/vehicleCode.ts';
@@ -66,6 +67,8 @@ export interface DemoState {
   office?: DemoOfficeState;
   /** Own logins: setup codes and the passwords people chose (this browser only). */
   logins?: DemoLoginsState;
+  /** The Breakdowns queue: emails and WhatsApp group messages (pretend). */
+  breakdowns?: DemoBdState;
   docs?: DemoDocsState;
   queries?: { id: string; from: string; to: string; job_id: string | null; subject: string; created_at: string; read: Record<string, string>; messages: { id: string; from: string; body: string; at: string }[] }[];
 }
@@ -411,6 +414,67 @@ export class DemoTransport implements Transport {
     if (area === 'fleet' && this.who.level === 'mechanic') return true;
     if (area === 'stockroom' && this.who.level === 'stockroom') return true;
     return this.office().workOf(this.who.id, this.who.level)[area];
+  }
+
+  /** The Breakdowns queue (emails and the WhatsApp group). */
+  private bds(): DemoBreakdowns {
+    const stores = () => this.office().o.stores.map(s => ({ id: s.id, name: s.name, client: s.client, address: s.address }));
+    const company = REAL ? REAL.company.name : 'ZSP';
+    return new DemoBreakdowns((this.state.breakdowns ??= seedBreakdowns(stores(), company)), {
+      stores,
+      jobs: () => this.state.jobs.map(j => ({ id: j.meta.id, job_number: j.meta.job_number, status: j.card.status as string, store_id: (j.meta as { store_id?: string }).store_id ?? null, store: j.meta.store,
+        client_order_ref: (j.meta as { client_order_ref?: string | null }).client_order_ref ?? null, lead: j.meta.lead_technician })),
+    });
+  }
+
+  /** The office opens a job (New job, or a breakdown from the queue). */
+  private newOfficeJob(o: DemoOffice, b: any): Response {
+    const store = o.store(b.storeId);
+    const missing = [!store ? 'which store' : null, !b.faultReported || b.faultReported.trim().length < 3 ? 'what the fault is' : null, !b.scheduledDate ? 'the date' : null,
+      !b.leadTechnicianId ? 'the lead technician' : null].filter(Boolean) as string[];
+    if (missing.length) return refuse(400, ...missing);
+    if (b.jobType === 'planned_maintenance' && !(b.maintenanceSteps ?? []).length) return refuse(400, 'planned maintenance needs its checklist steps');
+    const n = Math.max(...this.state.jobs.map(j => j.meta.job_number)) + 1;
+    const j = officeJob(n, b.jobType, b.priority ?? 'normal', store!, b.faultReported.trim(), { id: b.leadTechnicianId, name: o.name(b.leadTechnicianId) }, b.scheduledDate, b.helperIds ?? [], b.clientOrderRef);
+    j.meta.checklist = (b.maintenanceSteps ?? []).map((step: string, i: number) => ({ id: `chk-${n}-${i}`, step, done: false }));
+    this.state.jobs.push(j);
+    this.persist(this.state);
+    return ok(this.view(j), 201);
+  }
+
+  private breakdownRoute(p: string, req: Request, b: any): Response | null {
+    let m: RegExpMatchArray | null;
+    if (!(p.startsWith('/breakdowns') || p === '/demo/breakdowns/simulate')) return null;
+    const q = new URLSearchParams(req.path.split('?')[1] ?? '');
+    const res = (r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }, status = 200) => { this.persist(this.state); return r.ok ? ok(r.body, status) : refuse(r.status, ...r.reasons); };
+    const bd = this.bds();
+    const ceo = this.does('access');
+    if (p.startsWith('/breakdowns/settings') || p.startsWith('/breakdowns/inboxes') || p.startsWith('/breakdowns/whatsapp')) {
+      if (!ceo) return refuse(403, 'only the CEO connects the inboxes and WhatsApp');
+      if (p === '/breakdowns/settings' && req.method === 'GET') return ok(bd.settings('demo-company'));
+      if (p === '/breakdowns/settings') return res(bd.saveSettings(b));
+      if (p === '/breakdowns/inboxes') return res(bd.addInbox(b.address, b.appPassword));
+      if ((m = p.match(/^\/breakdowns\/inboxes\/([^/]+)$/))) return res(bd.removeInbox(m[1]));
+      if (p === '/breakdowns/whatsapp/group') return res(bd.chooseGroup(b.jid));
+      return refuse(404, 'demo: not available');
+    }
+    if (!this.does('jobs')) return refuse(403, 'the breakdowns queue is for whoever opens jobs');
+    if (p === '/demo/breakdowns/simulate') return res(bd.simulate(b.channel === 'whatsapp' ? 'whatsapp' : 'email'));
+    if (p === '/breakdowns/count') { this.persist(this.state); return ok(bd.count()); }
+    if (p === '/breakdowns') { this.persist(this.state); return ok(bd.list(q.get('view') === 'done' ? 'done' : 'open', ceo)); }
+    if ((m = p.match(/^\/breakdowns\/([^/]+)\/log$/))) {
+      const c = bd.check(m[1]);
+      if (c) return res(c);
+      const made = this.newOfficeJob(this.office(), b);
+      if (made.status !== 201) return made;
+      const v = made.body as { id: string };
+      const j = this.findJob(v.id)!;
+      return res(bd.logged(m[1], { id: j.meta.id, job_number: j.meta.job_number, store_id: b.storeId, store: j.meta.store, lead: j.meta.lead_technician, ref: b.clientOrderRef ?? null }, this.who.name), 201);
+    }
+    if ((m = p.match(/^\/breakdowns\/([^/]+)\/merge$/))) return res(bd.merge(m[1], b.jobId, this.who.name));
+    if ((m = p.match(/^\/breakdowns\/([^/]+)\/ignore$/))) return res(bd.ignore(m[1], this.who.name, b.note, !!b.alwaysIgnoreSender));
+    if ((m = p.match(/^\/breakdowns\/([^/]+)\/reopen$/))) return res(bd.reopen(m[1]));
+    return refuse(404, 'demo: not available');
   }
 
   /** Own logins in the test drive. */
@@ -806,19 +870,7 @@ export class DemoTransport implements Transport {
         return { ...j, ...d.billingOf(j.id), ...(r ? { machine_at: r.machine_at, loans_out: r.loans_out, ready_to_deliver: r.ready_to_deliver } : {}) };
       }));
     }
-    if (p === '/jobs') {
-      const store = o.store(b.storeId);
-      const missing = [!store ? 'which store' : null, !b.faultReported || b.faultReported.trim().length < 3 ? 'what the fault is' : null, !b.scheduledDate ? 'the date' : null,
-        !b.leadTechnicianId ? 'the lead technician' : null].filter(Boolean) as string[];
-      if (missing.length) return refuse(400, ...missing);
-      if (b.jobType === 'planned_maintenance' && !(b.maintenanceSteps ?? []).length) return refuse(400, 'planned maintenance needs its checklist steps');
-      const n = Math.max(...this.state.jobs.map(j => j.meta.job_number)) + 1;
-      const j = officeJob(n, b.jobType, b.priority ?? 'normal', store!, b.faultReported.trim(), { id: b.leadTechnicianId, name: o.name(b.leadTechnicianId) }, b.scheduledDate, b.helperIds ?? [], b.clientOrderRef);
-      j.meta.checklist = (b.maintenanceSteps ?? []).map((step: string, i: number) => ({ id: `chk-${n}-${i}`, step, done: false }));
-      this.state.jobs.push(j);
-      this.persist(this.state);
-      return ok(this.view(j), 201);
-    }
+    if (p === '/jobs') return this.newOfficeJob(o, b);
     if ((m = p.match(/^\/jobs\/([^/]+)\/assign$/))) {
       const j = this.findJob(m[1]);
       if (!j) return refuse(404, 'no such job');
@@ -1170,6 +1222,8 @@ export class DemoTransport implements Transport {
       this.state.themeAccent = b.accent; this.persist(this.state);
       return ok({ accent: b.accent });
     }
+    const bdr = this.breakdownRoute(p, req, b);
+    if (bdr) return bdr;
     const off = this.officeRoute(p, req, b);
     if (off) return off;
 
@@ -1428,11 +1482,15 @@ export class DemoTransport implements Transport {
     }
     if ((m = p.match(/^\/jobs\/([^/]+)\/(go|start|resume|done)$/))) {
       const fn = { go: J.go, start: J.start, resume: J.resume, done: J.done }[m[2] as 'go'];
-      return this.rule(m[1], c => fn(c, b.at));
+      const r = this.rule(m[1], c => fn(c, b.at));
+      if (m[2] === 'done' && r.status < 300 && this.state.breakdowns) { this.bds().jobUpdate(m[1], 'done'); this.persist(this.state); }
+      return r;
     }
     if ((m = p.match(/^\/jobs\/([^/]+)\/pause$/))) return this.rule(m[1], c => J.pause(c, b.reason, b.at));
     if ((m = p.match(/^\/jobs\/([^/]+)\/arrive$/))) {
-      return this.rule(m[1], c => J.arrive(c, { at: b.at, vehiclePosition: b.position, managerName: b.managerName, safety: b.safety, outsideReason: b.outsideReason }));
+      const r = this.rule(m[1], c => J.arrive(c, { at: b.at, vehiclePosition: b.position, managerName: b.managerName, safety: b.safety, outsideReason: b.outsideReason }));
+      if (r.status < 300 && this.state.breakdowns) { this.bds().jobUpdate(m[1], 'on_site'); this.persist(this.state); }
+      return r;
     }
     if ((m = p.match(/^\/jobs\/([^/]+)\/continue-later$/))) {
       const j = this.findJob(m[1]);

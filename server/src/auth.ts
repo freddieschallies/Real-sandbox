@@ -70,7 +70,8 @@ export function registerAuth(app: FastifyInstance, db: Db) {
 
   app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     const path = req.routeOptions.url ?? req.url;
-    if (PUBLIC.has(path) || path.startsWith('/platform/')) return;
+    // The WhatsApp link on the same server signs its requests with its own key (routes/breakdowns.ts).
+    if (PUBLIC.has(path) || path.startsWith('/platform/') || path.startsWith('/internal/')) return;
     try {
       await req.jwtVerify();
     } catch {

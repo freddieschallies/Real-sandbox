@@ -83,3 +83,22 @@ No ports are opened on the office router; the server makes the connection outwar
 ```bash
 cd ~/real-sandbox && git pull && cd deploy && docker compose --env-file .env up -d --build
 ```
+
+## Breakdowns: Gmail inboxes and the WhatsApp group
+
+Breakdown emails and messages in the WhatsApp breakdowns group come into the office's **Breakdowns** tab.
+
+**Gmail (per inbox)**
+1. In that Gmail account: Google account → Security → turn on 2-Step Verification → App passwords → create one called "Real Sandbox".
+2. In the app as the CEO: Settings → Breakdowns → Connect a Gmail inbox → the address and the 16-letter app password.
+3. The server reads new emails every minute. It never deletes, moves or marks emails as read. To stop it, delete the app password in Google (or Disconnect in Settings).
+4. Optional: `ANTHROPIC_API_KEY` in `.env` lets AI read the store, fault and call log number; without it simple rules do (the office checks either way).
+
+**WhatsApp (the company's own number)**
+1. A cheap Android phone with its own SIM, used only for this. Install WhatsApp on it and add that number to the breakdowns group.
+2. In `.env`: `WA_BRIDGE_KEY` (make one with `openssl rand -hex 24`) and `WA_COMPANY_ID` (Settings → Breakdowns shows the company id).
+3. Start it: `docker compose --env-file .env --profile whatsapp up -d --build`
+4. Settings → Breakdowns shows a QR code: on the ZSP phone, WhatsApp → ⋮ → Linked devices → Link a device → scan it.
+5. Choose the breakdowns group in Settings, and what the app posts there.
+
+This is not WhatsApp's official business system (that one cannot join an existing group), so WhatsApp could block the number. If that happens, the group itself keeps working, email keeps coming in, and you link a new number the same way.

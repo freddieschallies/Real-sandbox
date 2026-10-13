@@ -9,7 +9,7 @@ export const MAX_PINNED = 4;
 /** Every tab each app can have, most used first (the automatic order on the phone). */
 export const MENU_TABS: Record<MenuApp, { key: string; label: string }[]> = {
   office: [
-    { key: 'today', label: 'Today' }, { key: 'jobs', label: 'Jobs' }, { key: 'departments', label: 'Departments' },
+    { key: 'today', label: 'Today' }, { key: 'breakdowns', label: 'Breakdowns' }, { key: 'jobs', label: 'Jobs' }, { key: 'departments', label: 'Departments' },
     { key: 'timesheets', label: 'Timesheets' }, { key: 'flags', label: 'Flags' }, { key: 'people', label: 'People' },
     { key: 'map', label: 'Team map' }, { key: 'vans', label: 'Van stock' }, { key: 'queries', label: 'Queries' },
     { key: 'quotes', label: 'Quotes' }, { key: 'invoices', label: 'Invoices' }, { key: 'accounts', label: 'Accounts' },
@@ -38,7 +38,7 @@ export function officeTabKeys(level: string, work: Partial<Record<WorkArea, bool
   const does = (a: WorkArea) => level === 'creator' || !!work[a];
   const jobsSide = level === 'creator' || !!work.jobs;
   const on: Record<string, boolean> = {
-    today: jobsSide, jobs: jobsSide, queries: does('jobs'),
+    today: jobsSide, jobs: jobsSide, queries: does('jobs'), breakdowns: does('jobs'),
     quotes: does('documents'), invoices: does('documents'), accounts: does('documents'),
     flags: does('flags'), handovers: does('flags'), map: does('flags') || level === 'management',
     vans: does('vanstock'), departments: does('hr'),

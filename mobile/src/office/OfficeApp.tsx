@@ -34,10 +34,11 @@ import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 import { ChangePassword } from '../screens/MyPassword.tsx';
 import { AddPerson, LOGIN_PILL, LoginCard } from './Logins.tsx';
+import { BreakdownAlert, BreakdownById, BreakdownList, BreakdownSettings, type Bd } from './Breakdowns.tsx';
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
-type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
-type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | null;
+type Tab = 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
+type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
   cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
@@ -79,12 +80,24 @@ export function OfficeApp() {
   const work = s.session?.user.work ?? {};
   const does = (a: string) => s.session?.user.level === 'creator' || !!work[a];
 
+  // Breakdowns waiting (email and the WhatsApp group): the tab's count and the pop-up.
+  const [bdView, setBdView] = useState<'open' | 'done'>('open');
+  const [bdTick, setBdTick] = useState(0);
+  const [bdCount, setBdCount] = useState(0);
+  useEffect(() => {
+    if (!does('jobs')) return;
+    const f = () => s.ask({ method: 'GET', path: '/breakdowns/count' }).then(r => { if (r?.status === 200) setBdCount((r.body as { breakdowns: number }).breakdowns); }).catch(() => undefined);
+    f(); const t = setInterval(f, 20_000); return () => clearInterval(t);
+  }, [bdTick]);
+  const bdDone = (jobId?: string) => { setBdTick(t => t + 1); o.load(); if (jobId) go('jobs', { kind: 'job', id: jobId }); else setSel(null); };
+
   const menu = usePhoneMenu();
   const [menuStart, setMenuStart] = useState<string | undefined>(undefined);
   const level = s.session?.user.level ?? '';
   // Every tab the office has (in the order of the side menu on a computer); each person gets the ones their work allows.
   const allTabs: { key: Tab; label: string; short?: string; count?: number }[] = [
     { key: 'today', label: 'Today' },
+    { key: 'breakdowns', label: 'Breakdowns', count: bdCount || undefined },
     { key: 'jobs', label: 'Jobs', count: ov ? ov.jobs.carried_over + ov.jobs.urgent : undefined },
     { key: 'queries', label: 'Queries', count: qs.unread },
     { key: 'quotes', label: 'Quotes', count: books.quotes.filter(q => q.status === 'draft').length || undefined },
@@ -120,6 +133,7 @@ export function OfficeApp() {
   const list = (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 40 }}>
       {tab === 'today' ? <TodayView o={o} go={go} flags={does('flags')} /> : null}
+      {tab === 'breakdowns' ? <BreakdownList view={bdView} setView={v => { setBdView(v); setSel(null); }} open={b => setSel({ kind: 'breakdown', id: b.id, b })} selected={sel?.kind === 'breakdown' ? sel.id : null} tick={bdTick} /> : null}
       {tab === 'jobs' ? <JobList o={o} open={id => setSel({ kind: 'job', id })} add={does('jobs') ? () => setSel({ kind: 'newjob' }) : undefined} selected={sel?.kind === 'job' ? sel.id : null} /> : null}
       {tab === 'queries' ? <QueryList q={qs} open={id => setSel({ kind: 'query', id })} ask={() => setSel({ kind: 'newquery' })} /> : null}
       {tab === 'quotes' ? <QuoteList b={books} open={id => setSel({ kind: 'quote', id })} add={() => setSel({ kind: 'newquote' })} /> : null}
@@ -135,7 +149,7 @@ export function OfficeApp() {
       {tab === 'repairs' ? <WorkshopBoard o={o} openJob={id => go('jobs', { kind: 'job', id })} /> : null}
       {tab === 'barcodes' ? <PrintBarcodes /> : null}
       {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
-      {tab === 'settings' ? <><ThemeSettings /><LetterheadSettings /><StorageSettings />{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
+      {tab === 'settings' ? <>{does('access') ? <BreakdownSettings /> : null}<ThemeSettings /><LetterheadSettings /><StorageSettings />{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
       <ChangePassword />
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
       <Text style={st.small}>{o.d.loadedAt ? `Updated ${when(o.d.loadedAt)}` : o.loading ? 'Loading…' : 'Needs signal to load.'}</Text>
@@ -161,6 +175,13 @@ export function OfficeApp() {
     if (sel.kind === 'person') return wrap(<PersonDetail key={sel.id} id={sel.id} o={o} ask={does('jobs') ? toId => setSel({ kind: 'newquery', toId }) : undefined}
       ended={() => { o.load(); setSel({ kind: 'leaver', id: sel.id }); }} />);
     if (sel.kind === 'leaver') return wrap(<LeaverDetail key={sel.id} id={sel.id} />);
+    if (sel.kind === 'breakdown') return wrap(<BreakdownById key={`${sel.id}-${bdTick}`} id={sel.id} b={sel.b} o={o} logIt={b => setSel({ kind: 'bdlog', b })} done={bdDone} />);
+    if (sel.kind === 'bdlog') {
+      const b = sel.b;
+      return wrap(<NewJob key={b.id} o={o} title="Log the breakdown as a job" path={`/breakdowns/${b.id}/log`}
+        start={{ storeId: b.store_id, storeText: b.store_text, fault: b.fault ?? b.subject ?? b.body.slice(0, 200), ref: b.call_ref, urgent: b.urgent }}
+        done={id => (id ? bdDone(id) : setSel({ kind: 'breakdown', id: b.id, b }))} />);
+    }
     if (sel.kind === 'newperson') {
       const p = o.d.people;
       return wrap(<AddPerson positions={(p?.positions ?? []).filter(x => (p?.addPositions ?? []).includes(x.level))} trades={p?.trades ?? []}
@@ -192,6 +213,7 @@ export function OfficeApp() {
     return (
       <View style={{ flex: 1, backgroundColor: C.bg }}>
         {header}
+        {does('jobs') ? <BreakdownAlert open={id => go('breakdowns', { kind: 'breakdown', id })} /> : null}
         <View style={{ flex: 1, flexDirection: 'row' }}>
           {/* Compact so every tab fits on a normal screen; on a short window it scrolls, with a scrollbar. */}
           <ScrollView style={{ width: 200, flexGrow: 0, borderRightWidth: 1, borderRightColor: C.line }} contentContainerStyle={{ paddingHorizontal: 10, paddingVertical: 8, gap: 2 }} showsVerticalScrollIndicator persistentScrollbar>
@@ -209,10 +231,12 @@ export function OfficeApp() {
       </View>
     );
   }
+  const alert = does('jobs') ? <BreakdownAlert open={id => go('breakdowns', { kind: 'breakdown', id })} /> : null;
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       {header}
       <View style={{ flex: 1 }}>{detail ?? list}</View>
+      {alert}
       {!sel ? (
         <BottomTabs tabs={[...tabs].sort((a, b) => PHONE_ORDER.indexOf(a.key) - PHONE_ORDER.indexOf(b.key))} current={tab} onSelect={k => go(k)} accent={K.stripe} bottom={ins.bottom}
           pinned={menu.pinned} onArrange={menu.canEdit ? arrange : undefined} />
@@ -353,16 +377,19 @@ function Reasons({ a }: { a: Answer | null }) {
   return <Notice tone="bad" title="Not yet. Still needed:" lines={a.reasons} />;
 }
 
-function NewJob({ o, done }: { o: OfficeHook; done: (id?: string) => void }) {
-  const [storeQ, setStoreQ] = useState('');
-  const [storeId, setStoreId] = useState<string>();
+/** Filled in already when the job comes from a breakdown email or WhatsApp message. */
+export interface JobStart { storeId?: string | null; storeText?: string | null; fault?: string | null; ref?: string | null; urgent?: boolean }
+
+export function NewJob({ o, done, start, path, title }: { o: OfficeHook; done: (id?: string) => void; start?: JobStart; path?: string; title?: string }) {
+  const [storeQ, setStoreQ] = useState(start?.storeId ? '' : start?.storeText ?? '');
+  const [storeId, setStoreId] = useState<string | undefined>(start?.storeId ?? undefined);
   const [type, setType] = useState<J.JobType>('breakdown');
-  const [priority, setPriority] = useState<'urgent' | 'normal' | 'scheduled'>('normal');
-  const [fault, setFault] = useState('');
+  const [priority, setPriority] = useState<'urgent' | 'normal' | 'scheduled'>(start?.urgent ? 'urgent' : 'normal');
+  const [fault, setFault] = useState(start?.fault ?? '');
   const [date, setDate] = useState(ymd(new Date()));
   const [lead, setLead] = useState<string>();
   const [helpers, setHelpers] = useState<string[]>([]);
-  const [ref, setRef] = useState('');
+  const [ref, setRef] = useState(start?.ref ?? '');
   const [steps, setSteps] = useState('');
   const [ans, setAns] = useState<Answer | null>(null);
   const [busy, setBusy] = useState(false);
@@ -375,19 +402,21 @@ function NewJob({ o, done }: { o: OfficeHook; done: (id?: string) => void }) {
       type === 'planned_maintenance' && !steps.trim() ? 'the maintenance checklist steps (one per line)' : null].filter(Boolean) as string[];
     if (missing.length) { setAns({ ok: false, reasons: missing }); return; }
     setBusy(true);
-    const r = await o.send('POST', '/jobs', {
+    const r = await o.send('POST', path ?? '/jobs', {
       jobType: type, priority, storeId, faultReported: fault.trim(), scheduledDate: date, leadTechnicianId: lead, helperIds: helpers,
       ...(ref.trim() ? { clientOrderRef: ref.trim() } : {}), maintenanceSteps: type === 'planned_maintenance' ? steps.split('\n').map(x => x.trim()).filter(Boolean) : [],
     });
     setBusy(false);
     setAns(r);
-    if (r.ok) done(r.body.id);
+    if (r.ok) done(r.body.id ?? r.body.jobId);
   };
 
   return (
     <>
-      <Heading>New job</Heading>
+      <Heading>{title ?? 'New job'}</Heading>
       <Label>Store</Label>
+      {!storeId && start?.storeText ? <Text style={st.small}>The message says "{start.storeText}": pick the store below (or add it under Stores).</Text> : null}
+      {!storeId && start && !start.storeText ? <Text style={st.small}>The store was not clear from the message: search for it below.</Text> : null}
       {store ? (
         <Card style={{ borderColor: K.stripe }}>
           <Text style={[st.body, { fontWeight: '800' }]}>{store.name}</Text>
