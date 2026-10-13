@@ -1533,6 +1533,39 @@ test('HR edits profiles and ends employment: the person leaves every list, the l
   await assert.rejects(db.query('DELETE FROM terminations WHERE user_id = $1', [leaver]), 'the record cannot be deleted');
 });
 
+test('timesheets: HR and the CEO open anyone\'s, all the way back and after they left, with a log of every submission, fill-in, missing day and view', async () => {
+  await db.query("UPDATE users SET created_at = now() - interval '40 days' WHERE id = $1", [ids.tech]);
+  const people = (await call('hr', 'GET', '/timesheets/people')).body;
+  assert.equal(people.full, true);
+  const leaver = people.people.find((x: { full_name: string }) => x.full_name === 'Leaver Tech');
+  assert.ok(leaver && leaver.left, 'people who left are there, marked');
+  assert.ok(!(await call('manager', 'GET', '/timesheets/people')).body.people.some((x: { left: boolean }) => x.left), 'a manager sees only his own, not leavers');
+  assert.equal((await call('admin', 'GET', '/timesheets/people')).status, 403);
+  // Leavers in the export when asked for.
+  const y = new Date(Date.now() - 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+  const without = (await call('director', 'GET', `/timesheets?from=${y}&to=${y}`)).body.technicians;
+  const withLeft = (await call('director', 'GET', `/timesheets?from=${y}&to=${y}&includeLeft=1`)).body.technicians;
+  assert.ok(!without.some((t: { id: string }) => t.id === leaver.id)); assert.ok(withLeft.some((t: { id: string; left: boolean }) => t.id === leaver.id && t.left));
+  assert.equal((await call('director', 'GET', `/timesheets?from=${y}&to=${y}&userId=${leaver.id}`)).status, 200, 'one person who left');
+  // History: three months at a time, back to when he started.
+  const h = await call('hr', 'GET', `/timesheets/person/${ids.tech}/history`);
+  assert.equal(h.status, 200, JSON.stringify(h.body));
+  assert.ok(h.body.months.length >= 2, 'this month and last');
+  assert.ok(h.body.months.flatMap((m: { days: unknown[] }) => m.days).length > 0, 'his days');
+  const d0 = h.body.months.flatMap((m: { days: { status: string }[] }) => m.days)[0];
+  assert.ok(['submitted', 'filled', 'missing', 'none'].includes(d0.status) && 'overtimeMin' in d0);
+  assert.equal((await call('director', 'GET', `/timesheets/person/${leaver.id}/history`)).status, 200, 'the CEO opens a leaver\'s');
+  assert.equal((await call('tech', 'GET', `/timesheets/person/${ids.tech2}/history`)).status, 403);
+  // The log: HR and the CEO only.
+  const log = await call('hr', 'GET', `/timesheets/person/${ids.tech2}/log`);
+  assert.equal(log.status, 200, JSON.stringify(log.body));
+  const kinds = new Set(log.body.events.map((e: { kind: string }) => e.kind));
+  assert.ok(kinds.has('submitted') && kinds.has('missing') && kinds.has('resolved'), [...kinds].join());
+  assert.ok(log.body.events.some((e: { kind: string; by: string }) => e.kind === 'viewed'), 'who looked at his timesheets');
+  assert.equal((await call('manager', 'GET', `/timesheets/person/${ids.tech2}/log`)).status, 403, 'not a manager');
+  assert.ok((await call('director', 'GET', `/timesheets/person/${ids.tech}/log`)).body.events.some((e: { text: string }) => /history/.test(e.text)), 'opening the history is logged too');
+});
+
 test('technicians submit quotes: on a job not finished, or from scratch with a job card for reference; the office prices and sends', async () => {
   const open = await call('admin', 'POST', '/jobs', { jobType: 'breakdown', storeId: ids.store, faultReported: 'Cold room door seal torn', scheduledDate: '2026-10-13', leadTechnicianId: ids.tech });
   const opts = (await call('tech', 'GET', '/me/quote-options')).body;

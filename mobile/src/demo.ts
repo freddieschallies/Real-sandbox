@@ -366,7 +366,7 @@ export class DemoTransport implements Transport {
   /** Daily timesheets: the technician's own, and HR's export. */
   private timesRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
-    if (!(p === '/me/timesheets' || p.startsWith('/me/timesheets/') || p === '/timesheets' || p === '/timesheets/settings' || /^\/timesheets\/[^/]+\/\d{4}-\d{2}-\d{2}\/fill$/.test(p))) return null;
+    if (!(p === '/me/timesheets' || p.startsWith('/me/timesheets/') || p === '/timesheets' || p === '/timesheets/settings' || p === '/timesheets/people' || p.startsWith('/timesheets/person/') || /^\/timesheets\/[^/]+\/\d{4}-\d{2}-\d{2}\/fill$/.test(p))) return null;
     const t = this.times();
     const save = (r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }) => { this.persist(this.state); return r.ok ? ok(r.body) : refuse(r.status, ...r.reasons); };
     if (p === '/me/timesheets') { if (this.who.level !== 'technician') return ok({ due: [], recent: [], explainFromMin: 30 }); const r = t.mine(this.who.id); this.persist(this.state); return ok(r); }
@@ -374,8 +374,10 @@ export class DemoTransport implements Transport {
     if ((m = p.match(/^\/me\/timesheets\/(\d{4}-\d{2}-\d{2})$/))) return ok(t.sheet(this.who.id, m[1]));
     const ceo = ['director', 'creator'].includes(this.office().levelOf(this.who.id) ?? this.who.level);
     if ((m = p.match(/^\/timesheets\/([^/]+)\/(\d{4}-\d{2}-\d{2})\/fill$/))) return ceo ? save(t.fill(m[1], m[2], this.who.name)) : refuse(403, "only the CEO fills in a technician's timesheet");
-    // HR (everyone) or a department manager (his own technicians).
-    const all = this.does('hr') || ['director', 'creator'].includes(this.who.level);
+    // HR and the CEO always see everyone (also people who have left); a department manager his own technicians.
+    const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
+    const all = this.does('hr') || ['hr', 'director', 'creator'].includes(lvl);
+    const full = ['hr', 'director', 'creator'].includes(lvl);
     if (p === '/timesheets/settings') {
       const canEdit = this.does('hr') || this.does('access');
       if (req.method === 'PUT') return canEdit ? save(t.setRules(b)) : refuse(403, 'only HR or the CEO sets the normal hours');
@@ -386,14 +388,38 @@ export class DemoTransport implements Transport {
     const q = new URLSearchParams(req.path.split('?')[1] ?? '');
     const from = q.get('from') ?? '', to = q.get('to') ?? '';
     const mine = all ? null : v.v.memberOf[this.who.id] ?? null;
-    const techs = this.office().o.people.filter(x => x.login_level === 'technician')
+    const leavers = (this.office().o.leavers ?? []).filter(l => l.person.login_level === 'technician');
+    if (p === '/timesheets/people') {
+      const staff = this.office().o.people.filter(x => x.login_level === 'technician').filter(x => all || (mine && v.v.memberOf[x.id] === mine))
+        .map(x => ({ id: x.id, full_name: x.full_name, left: false, left_on: null, department: v.deptOf(x.id)?.name ?? null })).sort((a, c) => a.full_name.localeCompare(c.full_name));
+      return ok({ people: [...staff, ...(full ? leavers.map(l => ({ id: l.person.id, full_name: l.person.full_name, left: true, left_on: l.date, department: l.department })) : [])], full });
+    }
+    let m2: RegExpMatchArray | null;
+    if ((m2 = p.match(/^\/timesheets\/person\/([^/]+)\/(history|log)$/))) {
+      const id2 = m2[1];
+      const isLeaver = leavers.some(l => l.person.id === id2);
+      if (!all && (isLeaver || !mine || v.v.memberOf[id2] !== mine)) return refuse(403, 'not one of your technicians');
+      if (isLeaver && !full) return refuse(403, 'not one of your technicians');
+      if (m2[2] === 'log') return full ? save(t.log(id2, x => v.v.memberOf[x] ?? null)) : refuse(403, 'the timesheet log is for HR and the CEO');
+      const r = t.history(id2, q.get('before'));
+      if (r.ok) t.viewed({ by: this.who.name, userId: id2, departmentId: null, history: true });
+      return save(r);
+    }
+    const withLeft = full && (q.get('includeLeft') === '1' || !!q.get('userId'));
+    const techs = [...this.office().o.people, ...(withLeft ? leavers.map(l => l.person) : [])].filter(x => x.login_level === 'technician')
       .filter(x => all || (mine && v.v.memberOf[x.id] === mine))
       .filter(x => !q.get('userId') || x.id === q.get('userId'))
       .filter(x => !q.get('departmentId') || v.v.memberOf[x.id] === q.get('departmentId'))
       .sort((a, c) => (v.deptOf(a.id)?.name ?? '~').localeCompare(v.deptOf(c.id)?.name ?? '~') || a.full_name.localeCompare(c.full_name))
       .map(x => ({ id: x.id, department: v.deptOf(x.id)?.name ?? null }));
     if (q.get('userId') && !techs.length) return refuse(403, 'not one of your technicians');
-    return save(t.exportFor(from, to, techs, ceo));
+    const res = t.exportFor(from, to, techs, ceo);
+    if (res.ok) {
+      t.viewed({ by: this.who.name, userId: q.get('userId'), departmentId: q.get('departmentId'), from, to });
+      const left = new Set(leavers.map(l => l.person.id));
+      for (const x of (res.body as { technicians: { id: string; left?: boolean }[] }).technicians) if (left.has(x.id)) x.left = true;
+    }
+    return save(res);
   }
 
   /** Departments and van stock lists. */

@@ -57,6 +57,24 @@ async function sheetFor(c: Q, techId: string, date: string, rules?: T.PayRules) 
 }
 
 const CEO = ['director', 'creator'];
+/** HR and the CEO always see every technician's timesheets, past and present, including people who have left. */
+const FULL = ['hr', 'director', 'creator'];
+const scopeOf = (a: { level: string } & Parameters<typeof departmentsFor>[0]) => (FULL.includes(a.level) ? 'all' as const : departmentsFor(a, 'view_timesheets'));
+const ym = (date: string) => date.slice(0, 7);
+const monthLabel = (m: string) => new Date(`${m}-15T12:00:00Z`).toLocaleDateString('en-ZA', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+const addMonths = (m: string, n: number) => { const d = new Date(`${m}-15T12:00:00Z`); d.setUTCMonth(d.getUTCMonth() + n); return d.toISOString().slice(0, 7); };
+
+/** One technician someone may see the timesheets of: HR and the CEO everyone (also people who left), a manager his own. */
+async function personFor(c: Q, actor: Parameters<typeof scopeOf>[0], userId: string) {
+  const scope = scopeOf(actor);
+  if (!scope) throw new Refused(403, ['timesheets are for HR, the CEO and department managers']);
+  const u = (await c.query(
+    `SELECT u.id, u.full_name, u.status, u.department_id, (u.created_at AT TIME ZONE 'Africa/Johannesburg')::date::text AS since, t.terminated_on::text AS left_on
+       FROM users u LEFT JOIN terminations t ON t.user_id = u.id WHERE u.id = $1 AND u.login_level = 'technician'`, [userId])).rows[0];
+  if (!u) throw new Refused(404, ['no such technician']);
+  if (scope !== 'all' && (u.status === 'left' || !scope.includes(u.department_id))) throw new Refused(403, ['not one of your technicians']);
+  return u as { id: string; full_name: string; status: string; since: string; left_on: string | null };
+}
 
 /** Keeps a day's sheet as it is now (it cannot change after), with the minutes per job; closes its missing flag. */
 async function saveSheet(c: Q, techId: string, date: string, day: T.Day, at: string, note: string | null, filledBy: string | null) {
@@ -164,19 +182,21 @@ export function registerTimesheetRoutes(app: FastifyInstance) {
   // ---- HR's export ------------------------------------------------------------------------------
   // Individual or group (a department, or everyone), for a day, a week or a month (up to 31 days).
   app.get('/timesheets', async (req: FastifyRequest<{ Querystring: Record<string, string> }>) => {
-    const q = parse(z.object({ from: DateOnly, to: DateOnly, userId: Uuid.optional(), departmentId: Uuid.optional() }), req.query);
-    const scope = departmentsFor(req.actor, 'view_timesheets');
-    if (!scope) throw new Refused(403, ['timesheets are for HR and department managers']);
+    const q = parse(z.object({ from: DateOnly, to: DateOnly, userId: Uuid.optional(), departmentId: Uuid.optional(), includeLeft: z.enum(['1', '0']).optional() }), req.query);
+    const scope = scopeOf(req.actor);
+    if (!scope) throw new Refused(403, ['timesheets are for HR, the CEO and department managers']);
+    // People who have left: HR and the CEO, when asked for (or when that one person is asked for).
+    const withLeft = scope === 'all' && (q.includeLeft === '1' || !!q.userId);
     if (q.to < q.from) throw new Refused(400, ['the end date is before the start date']);
     const dates = T.daysBetween(q.from, q.to);
     if (dates.length > 31) throw new Refused(400, ['at most 31 days at a time']);
     const today = sast();
     return tx(req.db, async c => {
       const techs = (await c.query(
-        `SELECT u.id, u.full_name, u.trade, d.name AS department FROM users u LEFT JOIN departments d ON d.id = u.department_id
-          WHERE u.login_level = 'technician' AND u.status <> 'left' AND ($1::boolean OR u.department_id = ANY($2))
+        `SELECT u.id, u.full_name, u.trade, u.status, d.name AS department FROM users u LEFT JOIN departments d ON d.id = u.department_id
+          WHERE u.login_level = 'technician' AND (u.status <> 'left' OR $5::boolean) AND ($1::boolean OR u.department_id = ANY($2))
             AND ($3::uuid IS NULL OR u.id = $3) AND ($4::uuid IS NULL OR u.department_id = $4)
-          ORDER BY d.name NULLS LAST, u.full_name`, [scope === 'all', scope === 'all' ? [] : scope, q.userId ?? null, q.departmentId ?? null])).rows;
+          ORDER BY (u.status = 'left'), d.name NULLS LAST, u.full_name`, [scope === 'all', scope === 'all' ? [] : scope, q.userId ?? null, q.departmentId ?? null, withLeft])).rows;
       if (q.userId && !techs.length) throw new Refused(403, ['not one of your technicians']);
       const rules = await rulesOf(c);
       const technicians = [];
@@ -191,7 +211,7 @@ export function registerTimesheetRoutes(app: FastifyInstance) {
         const sum = (k: 'travelMin' | 'workMin' | 'pausedMin' | 'unaccountedMin') => days.reduce((n, d) => n + d.day[k], 0);
         const pay = (k: 'paidMin' | 'normalMin' | 'overtimeMin' | 'doubleMin') => days.reduce((n, d) => n + d.pay[k], 0);
         technicians.push({
-          id: t.id, full_name: t.full_name, department: t.department, days,
+          id: t.id, full_name: t.full_name, department: t.department, days, left: t.status === 'left',
           totals: { travelMin: sum('travelMin'), workMin: sum('workMin'), pausedMin: sum('pausedMin'), unaccountedMin: sum('unaccountedMin'),
             paidMin: pay('paidMin'), normalMin: pay('normalMin'), overtimeMin: pay('overtimeMin'), doubleMin: pay('doubleMin'),
             jobs: days.reduce((n, d) => n + d.day.jobs.length, 0), flags: days.reduce((n, d) => n + d.flags.length, 0),
@@ -200,6 +220,95 @@ export function registerTimesheetRoutes(app: FastifyInstance) {
       }
       await audit(c, req.actor.id, 'timesheets_viewed', 'timesheets', null, q);
       return { from: q.from, to: q.to, generatedAt: new Date().toISOString(), rules, technicians, canFill: CEO.includes(req.actor.level) };
+    });
+  });
+
+  // ---- Every person's timesheets, all the way back -------------------------------------------------
+
+  // The people whose timesheets someone may open: HR and the CEO everyone, including people who left.
+  app.get('/timesheets/people', async req => {
+    const scope = scopeOf(req.actor);
+    if (!scope) throw new Refused(403, ['timesheets are for HR, the CEO and department managers']);
+    const { rows } = await req.db.query(
+      `SELECT u.id, u.full_name, u.status = 'left' AS left, t.terminated_on::text AS left_on, d.name AS department
+         FROM users u LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN terminations t ON t.user_id = u.id
+        WHERE u.login_level = 'technician' AND ($1::boolean OR (u.status <> 'left' AND u.department_id = ANY($2)))
+        ORDER BY (u.status = 'left'), u.full_name`, [scope === 'all', scope === 'all' ? [] : scope]);
+    return { people: rows, full: scope === 'all' };
+  });
+
+  // One person's timesheets month by month (three months a time, going back to when he started):
+  // every day's status and hours, so any previous sheet can be opened.
+  app.get('/timesheets/person/:userId/history', async (req: FastifyRequest<{ Params: { userId: string }; Querystring: Record<string, string> }>) => {
+    const userId = parse(Uuid, req.params.userId);
+    const q = parse(z.object({ before: z.string().regex(/^\d{4}-\d{2}$/).optional() }), req.query);
+    return tx(req.db, async c => {
+      const u = await personFor(c, req.actor, userId);
+      const today = sast();
+      const last = [q.before ? addMonths(q.before, -1) : ym(today), u.left_on ? ym(u.left_on) : ym(today)].sort()[0];
+      const months = [last, addMonths(last, -1), addMonths(last, -2)].filter(m => m >= ym(u.since));
+      const rules = await rulesOf(c);
+      const out = [];
+      for (const m of months) {
+        const end = [addDays(`${addMonths(m, 1)}-01`, -1), addDays(today, -1), u.left_on ?? '9999-12-31'].sort()[0];
+        const start = [`${m}-01`, u.since].sort()[1];
+        const days: ({ date: string; label: string; status: string; submittedAt: string | null; filledBy: string | null; note: string | null; travelMin: number; workMin: number; unaccountedMin: number; flags: number } & T.Pay)[] = [];
+        for (const date of start <= end ? T.daysBetween(start, end) : []) {
+          const sh = await sheetFor(c, userId, date, rules);
+          if (!sh.submitted && !sh.day.activity && !sh.weekday && !sh.flags.length) continue;
+          days.push({ date, label: sh.label, status: sh.submitted ? (sh.submitted.filledBy ? 'filled' : 'submitted') : sh.day.activity || sh.weekday ? 'missing' : 'none',
+            submittedAt: sh.submitted?.at ?? null, filledBy: sh.submitted?.filledBy ?? null, note: sh.submitted?.note ?? null,
+            travelMin: sh.day.travelMin, workMin: sh.day.workMin, unaccountedMin: sh.day.unaccountedMin, ...sh.pay, flags: sh.flags.length });
+        }
+        const sum = (k: 'travelMin' | 'workMin' | 'unaccountedMin' | 'normalMin' | 'overtimeMin' | 'doubleMin') => days.reduce((n, d) => n + d[k], 0);
+        out.push({ month: m, label: monthLabel(m), days: days.reverse(),
+          totals: { travelMin: sum('travelMin'), workMin: sum('workMin'), unaccountedMin: sum('unaccountedMin'), normalMin: sum('normalMin'), overtimeMin: sum('overtimeMin'), doubleMin: sum('doubleMin'),
+            submitted: days.filter(d => d.status === 'submitted').length, filled: days.filter(d => d.status === 'filled').length, missing: days.filter(d => d.status === 'missing').length } });
+      }
+      const oldest = months.at(-1) ?? last;
+      await audit(c, req.actor.id, 'timesheet_history_viewed', 'user', userId, { months });
+      return { person: { id: u.id, full_name: u.full_name, left: u.status === 'left', left_on: u.left_on, since: u.since }, months: out, older: oldest > ym(u.since) ? oldest : null };
+    });
+  });
+
+  // The log of one person's timesheets: submitted, filled in by the CEO, flagged as missing (and
+  // explained or resolved), and who looked at them. HR and the CEO only.
+  app.get('/timesheets/person/:userId/log', async (req: FastifyRequest<{ Params: { userId: string } }>) => {
+    const userId = parse(Uuid, req.params.userId);
+    if (!FULL.includes(req.actor.level)) throw new Refused(403, ['the timesheet log is for HR and the CEO']);
+    return tx(req.db, async c => {
+      const u = await personFor(c, req.actor, userId);
+      const dept = (await c.query('SELECT department_id FROM users WHERE id = $1', [userId])).rows[0]?.department_id ?? null;
+      const ev = (await c.query(
+        `SELECT a.at, a.action, a.details, coalesce(x.full_name, 'The app') AS by_name, ts.work_date::text AS ts_date
+           FROM audit_log a LEFT JOIN users x ON x.id = a.actor_id
+           LEFT JOIN timesheets ts ON a.entity = 'timesheet' AND ts.id::text = a.entity_id
+          WHERE (a.action = 'timesheet_submitted' AND a.actor_id = $1)
+             OR (a.action = 'timesheet_filled' AND a.details->>'technicianId' = $1::text)
+             OR (a.action = 'timesheet_history_viewed' AND a.entity_id = $1::text)
+             OR (a.action = 'timesheets_viewed' AND (a.details->>'userId' = $1::text OR (a.details->>'userId' IS NULL AND (a.details->>'departmentId' IS NULL OR a.details->>'departmentId' = $2::text))))
+          ORDER BY a.at DESC LIMIT 300`, [userId, dept])).rows;
+      const flags = (await c.query(
+        `SELECT f.raised_at, f.explained_at, f.explanation, f.resolved_at, f.resolution_note, f.details->>'workDate' AS work_date, r.full_name AS resolved_by
+           FROM flags f LEFT JOIN users r ON r.id = f.resolved_by WHERE f.technician_id = $1 AND f.flag_type = 'timesheet_missing' ORDER BY f.raised_at DESC LIMIT 200`, [userId])).rows;
+      const day = (d: string | null | undefined) => (d ? dayLabel(d) : '');
+      const range = (x: { from?: string; to?: string }) => (x.from ? (x.from === x.to ? day(x.from) : `${day(x.from)} – ${day(x.to)}`) : '');
+      const events: { at: string; kind: string; text: string; by: string }[] = [];
+      for (const e of ev) {
+        const d = e.details ?? {};
+        const at = new Date(e.at).toISOString();
+        if (e.action === 'timesheet_submitted') events.push({ at, kind: 'submitted', by: e.by_name, text: `Submitted ${day(d.workDate ?? e.ts_date)}${d.unaccountedMin ? ` (${T.hm(d.unaccountedMin)} not accounted for)` : ''}` });
+        else if (e.action === 'timesheet_filled') events.push({ at, kind: 'filled', by: e.by_name, text: `Filled in ${day(d.workDate)} for him (he had not submitted it)` });
+        else if (e.action === 'timesheet_history_viewed') events.push({ at, kind: 'viewed', by: e.by_name, text: 'Opened his timesheet history' });
+        else events.push({ at, kind: 'viewed', by: e.by_name, text: `Looked at ${d.userId ? 'his timesheets' : d.departmentId ? 'his department\'s timesheets' : 'everyone\'s timesheets'} for ${range(d)}` });
+      }
+      for (const f of flags) {
+        events.push({ at: new Date(f.raised_at).toISOString(), kind: 'missing', by: 'The app', text: `Flagged: ${day(f.work_date)} not submitted by 10:00 the next day` });
+        if (f.explained_at) events.push({ at: new Date(f.explained_at).toISOString(), kind: 'explained', by: u.full_name, text: `Explained the missing ${day(f.work_date)}: ${f.explanation ?? ''}` });
+        if (f.resolved_at) events.push({ at: new Date(f.resolved_at).toISOString(), kind: 'resolved', by: f.resolved_by ?? 'The app', text: `Missing ${day(f.work_date)} closed: ${f.resolution_note ?? ''}` });
+      }
+      events.sort((a, b) => b.at.localeCompare(a.at));
+      return { person: { id: u.id, full_name: u.full_name, left: u.status === 'left' }, events };
     });
   });
 }

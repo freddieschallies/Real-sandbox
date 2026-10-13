@@ -59,6 +59,7 @@ const STEPS: [string, string[]][] = [
   ]],
   ['As HR (Precious)', [
     'Timesheets: daily, weekly or monthly, for one person, a department or everyone, with every job and flag on each sheet, and normal time, overtime (1.5×) and double time (Sundays and public holidays). She sets the normal day (8 hours to start). Ayanda has not submitted his last days. Print or save as PDF (one page per sheet, on the letterhead), or download for Excel. In this test drive the browser may block the print window and the download; the real app saves them.',
+    'Timesheets → Who: pick one person, then "Every timesheet" (month by month back to when they started; tap any day for the full sheet) or "Log" (every submission, CEO fill-in, missing day, explanation, and who looked at them). Tick "Include people who have left" to see the timesheets of staff whose employment ended. The CEO has the same.',
     'People: set anyone\'s position (technician, admin, department manager, stock controller) and a technician\'s trade. Mechanic, HR, director and CEO stay with the CEO.',
     'Departments: every department with its manager and the technicians under him. Move a technician to another department, or give Plumbing a manager. Each person is in one department; a manager runs one department, so moving Pieter takes him off Foodservice.',
     'Departments this business has: every company starts with Admin, Electrical, Plumbing, Service and Foodservice. Switch off one the business doesn\'t do, or add your own. The office staff go in Admin.',

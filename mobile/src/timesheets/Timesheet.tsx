@@ -13,13 +13,14 @@ import { TITLE as FLAG_TITLE } from '../screens/Flags.tsx';
 import { letterheadBottom, letterheadTop } from '../letterhead.tsx';
 import { currentLogo } from '../brand.tsx';
 import type { Day, Pay } from '../../../server/src/core/timesheet.ts';
+import { PersonHistory, PersonLog } from './History.tsx';
 
 export interface SheetFlag { id: string; flag_type: string; question: string | null; explanation: string | null; status: string; resolution_note: string | null }
 export interface Sheet { date: string; label: string; weekday?: boolean; submitted: { at: string; note: string | null; filledBy?: string | null } | null; day: Day; pay?: Pay; flags: SheetFlag[]; status?: string }
 interface Export {
   from: string; to: string; generatedAt: string; rules?: { weekdayNormalMin: number; saturdayNormalMin: number };
   /** Only the CEO fills in a timesheet a technician did not submit. */ canFill?: boolean;
-  technicians: { id: string; full_name: string; department: string | null; days: Sheet[];
+  technicians: { id: string; full_name: string; department: string | null; days: Sheet[]; left?: boolean;
     totals: { travelMin: number; workMin: number; pausedMin: number; unaccountedMin: number; paidMin?: number; normalMin?: number; overtimeMin?: number; doubleMin?: number; jobs: number; flags: number; submitted: number; notSubmitted: number } }[];
 }
 
@@ -163,21 +164,49 @@ export function TimesheetsExport() {
   const [open, setOpen] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  // HR and the CEO: everyone's, also people who have left; a person's whole history and its log.
+  const [full, setFull] = useState(false);
+  const [withLeft, setWithLeft] = useState(false);
+  const [view, setView] = useState<'period' | 'history' | 'log'>('period');
   const r = rangeOf(period, anchor);
   useEffect(() => {
-    s.ask({ method: 'GET', path: '/departments' }).then(x => {
-      if (x?.status !== 200) return;
-      const b = x.body as { departments: { id: string; name: string; active?: boolean }[]; members?: { id: string; full_name: string; login_level: string }[] };
-      setPeople([{ value: 'all', label: 'Everyone' }, ...b.departments.filter(dp => dp.active !== false).map(dp => ({ value: `dept:${dp.id}`, label: `${dp.name} department` })),
-        ...(b.members ?? []).filter(m => m.login_level === 'technician').map(m => ({ value: `user:${m.id}`, label: m.full_name }))]);
+    Promise.all([s.ask({ method: 'GET', path: '/departments' }), s.ask({ method: 'GET', path: '/timesheets/people' })]).then(([x, y]) => {
+      const b = (x?.status === 200 ? x.body : { departments: [] }) as { departments: { id: string; name: string; active?: boolean }[]; members?: { id: string; full_name: string; login_level: string }[] };
+      const tp = y?.status === 200 ? (y.body as { people: { id: string; full_name: string; left: boolean; left_on: string | null }[]; full: boolean }) : null;
+      setFull(!!tp?.full);
+      const persons = tp ? tp.people.map(m => ({ value: `user:${m.id}`, label: `${m.full_name}${m.left ? ` (left${m.left_on ? ` ${m.left_on}` : ''})` : ''}` }))
+        : (b.members ?? []).filter(m => m.login_level === 'technician').map(m => ({ value: `user:${m.id}`, label: m.full_name }));
+      setPeople([{ value: 'all', label: 'Everyone' }, ...b.departments.filter(dp => dp.active !== false).map(dp => ({ value: `dept:${dp.id}`, label: `${dp.name} department` })), ...persons]);
     });
   }, []);
+  useEffect(() => { if (!who.startsWith('user:')) setView('period'); }, [who]);
   useEffect(() => {
     setD(null); setErr(null);
-    const q = `from=${r.from}&to=${r.to}${who.startsWith('dept:') ? `&departmentId=${who.slice(5)}` : who.startsWith('user:') ? `&userId=${who.slice(5)}` : ''}`;
+    const q = `from=${r.from}&to=${r.to}${who.startsWith('dept:') ? `&departmentId=${who.slice(5)}` : who.startsWith('user:') ? `&userId=${who.slice(5)}` : ''}${withLeft ? '&includeLeft=1' : ''}`;
     s.ask({ method: 'GET', path: `/timesheets?${q}` }).then(x => { if (x?.status === 200) setD(x.body); else setErr(reasons(x).join('; ')); });
-  }, [r.from, r.to, who, tick]);
+  }, [r.from, r.to, who, tick, withLeft]);
   const whoLabel = people.find(p => p.value === who)?.label ?? 'Everyone';
+  const person = who.startsWith('user:') ? { id: who.slice(5), name: whoLabel.replace(/ \(left.*\)$/, '') } : null;
+  const switches = (
+    <>
+      <Select label="Who" value={who} options={people.length ? people : [{ value: 'all', label: 'Everyone' }]} onChange={setWho} />
+      {full && !person ? (
+        <Pressable onPress={() => setWithLeft(v => !v)} accessibilityRole="switch" accessibilityState={{ checked: withLeft }} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={{ width: 22, height: 22, borderRadius: 4, borderWidth: 2, borderColor: withLeft ? C.accent : C.line, backgroundColor: withLeft ? C.accent : 'transparent' }} />
+          <Text style={st.body}>Include people who have left</Text>
+        </Pressable>
+      ) : null}
+      {person ? (
+        <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+          <Button label="This period" kind={view === 'period' ? 'primary' : 'secondary'} onPress={() => setView('period')} style={{ flexGrow: 1 }} />
+          <Button label="Every timesheet" kind={view === 'history' ? 'primary' : 'secondary'} onPress={() => setView('history')} style={{ flexGrow: 1 }} />
+          {full ? <Button label="Log" kind={view === 'log' ? 'primary' : 'secondary'} onPress={() => setView('log')} style={{ flexGrow: 1 }} /> : null}
+        </View>
+      ) : null}
+    </>
+  );
+  if (person && view === 'history') return <>{switches}<PersonHistory userId={person.id} name={person.name} /></>;
+  if (person && view === 'log') return <>{switches}<PersonLog userId={person.id} name={person.name} /></>;
   const sheets = d?.technicians.flatMap(t => t.days.map(day => ({ t, day }))) ?? [];
   return (
     <>
@@ -187,7 +216,7 @@ export function TimesheetsExport() {
         <Text style={[st.body, { fontWeight: '800', flex: 1, textAlign: 'center' }]} accessibilityLabel="Period">{r.label}</Text>
         <Button label="›" kind="secondary" disabled={r.to >= sastToday()} onPress={() => setAnchor(a => step(period, a, 1))} style={{ width: 56 }} />
       </View>
-      <Select label="Who" value={who} options={people.length ? people : [{ value: 'all', label: 'Everyone' }]} onChange={setWho} />
+      {switches}
       <HoursRules reload={() => setTick(t => t + 1)} />
       {err ? <Notice tone="bad" title="Could not load" lines={[err]} /> : null}
       {!d && !err ? <Body quiet>Loading…</Body> : null}
@@ -205,7 +234,9 @@ export function TimesheetsExport() {
             </View>
             {d.technicians.map(t => (
               <View key={t.id} style={{ flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: C.line }} accessibilityLabel={`Totals ${t.full_name}`}>
-                <Text style={[st.body, { flex: 2, fontWeight: '700' }]}>{t.full_name}</Text>
+                <Pressable onPress={() => setWho(`user:${t.id}`)} accessibilityRole="button" accessibilityLabel={`Open ${t.full_name}`} style={{ flex: 2 }}>
+                  <Text style={[st.body, { fontWeight: '700', color: C.accent }]}>{t.full_name}{t.left ? ' (left)' : ''}</Text>
+                </Pressable>
                 <Text style={[st.body, { flex: 1 }]}>{hm(t.totals.travelMin)}</Text>
                 <Text style={[st.body, { flex: 1 }]}>{hm(t.totals.workMin)}</Text>
                 <Text style={[st.body, { flex: 1 }]}>{hm(t.totals.normalMin ?? 0)}</Text>

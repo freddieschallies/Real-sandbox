@@ -6,7 +6,8 @@ import type { Flag } from './types.ts';
 import type { DemoOfficeState } from './demoOffice.ts';
 import { mayHaveIncidents } from './demoReal.ts';
 
-export interface DemoTimesState { submitted: Record<string, { at: string; note: string | null; day: T.Day; filledBy?: string | null }>; seeded?: boolean; rules?: T.PayRules }
+export interface DemoTimesState { submitted: Record<string, { at: string; note: string | null; day: T.Day; filledBy?: string | null }>; seeded?: boolean; rules?: T.PayRules;
+  /** Who looked at timesheets (the log HR and the CEO see). */ views?: { at: string; by: string; userId: string | null; departmentId: string | null; from?: string; to?: string; history?: boolean }[] }
 export interface RealVisit { jobId: string; jobNumber: number; store: string; fault: string; techIds: string[]; visits: { goAt?: string; arrivedAt?: string; startedAt?: string; endedAt?: string; state: string; pauses: { reason: string; at: string; resumedAt?: string }[] }[] }
 
 type Res = { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] };
@@ -18,6 +19,8 @@ const addDays = (date: string, n: number) => { const d = new Date(`${date}T12:00
 const dayLabel = (date: string) => new Date(`${date}T12:00:00+02:00`).toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short' });
 const at = (date: string, min: number) => `${date}T${String(Math.floor(min / 60)).padStart(2, '0')}:${String(Math.round(min % 60)).padStart(2, '0')}:00+02:00`;
 const sastDateOf = (iso: string) => sast(new Date(iso));
+const addMonths = (m: string, n: number) => { const d = new Date(`${m}-15T12:00:00Z`); d.setUTCMonth(d.getUTCMonth() + n); return d.toISOString().slice(0, 7); };
+const monthLabel = (m: string) => new Date(`${m}-15T12:00:00Z`).toLocaleDateString('en-ZA', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 
 function rng(seed: string) {
   let h = 2166136261;
@@ -42,7 +45,16 @@ export class DemoTimes {
     }
   }
 
-  private name(id: string) { return this.o.people.find(p => p.id === id)?.full_name ?? id; }
+  private name(id: string) { return this.person(id)?.p.full_name ?? id; }
+  /** Someone on the staff, or someone who has left (with the day they left). */
+  person(id: string) {
+    const p = this.o.people.find(x => x.id === id);
+    if (p) return { p, leftOn: null as string | null };
+    const l = (this.o.leavers ?? []).find(x => x.person.id === id);
+    return l ? { p: l.person, leftOn: l.date } : null;
+  }
+  /** The demo keeps four months of history. */
+  since() { return `${addMonths(sast().slice(0, 7), -3)}-01`; }
   private missingSeed(techId: string) {
     const y = addDays(sast(), -1);
     const days = [y, addDays(y, -1), addDays(y, -2), addDays(y, -3)].filter(T.isWeekday);
@@ -62,8 +74,9 @@ export class DemoTimes {
   private synth(techId: string, date: string): T.Day {
     const r = rng(`${techId}|${date}`);
     const dow = new Date(`${date}T12:00:00Z`).getUTCDay();
-    const p = this.o.people.find(x => x.id === techId);
-    if (!p || p.login_level !== 'technician' || dow === 0 || (dow === 6 && r() > 0.25)) return T.buildDay([], []);
+    const who = this.person(techId);
+    const p = who?.p;
+    if (!p || p.login_level !== 'technician' || dow === 0 || (dow === 6 && r() > 0.25) || (who!.leftOn && date > who!.leftOn) || date < this.since()) return T.buildDay([], []);
     const stores = this.o.stores;
     const reg = { me: 'ND 412-778', 'tech-2': 'ND 503-221', 'tech-3': 'ND 771-330', 'tech-4': 'ND 503-221' }[techId] ?? 'ND 412-778';
     const scan = 7 * 60 + Math.round(r() * 40);
@@ -103,7 +116,7 @@ export class DemoTimes {
     if (this.t.submitted[k]) return this.t.submitted[k];
     // Seeded: every finished day before the ones still owed was submitted the next morning.
     const y = addDays(sast(), -1);
-    if (date > y || this.missingSeed(techId).includes(date)) return null;
+    if (date > y || this.missingSeed(techId).includes(date) || date < this.since()) return null;
     if (techId === 'me' && date === y) return null;
     const day = this.dayOf(techId, date);
     if (!day.activity) return null;
@@ -186,5 +199,69 @@ export class DemoTimes {
             submitted: days.filter(d => d.status === 'submitted').length, notSubmitted: days.filter(d => d.status === 'not_submitted').length } };
       }),
     });
+  }
+
+  viewed(v: { by: string; userId: string | null; departmentId: string | null; from?: string; to?: string; history?: boolean }) {
+    (this.t.views ??= []).unshift({ at: new Date().toISOString(), ...v });
+    this.t.views.splice(300);
+  }
+
+  /** One person's timesheets month by month, three months a time. */
+  history(techId: string, before?: string | null) {
+    const who = this.person(techId);
+    if (!who) return bad(404, 'no such technician');
+    const today = sast();
+    const since = this.since();
+    const last = [before ? addMonths(before, -1) : today.slice(0, 7), who.leftOn ? who.leftOn.slice(0, 7) : today.slice(0, 7)].sort()[0];
+    const months = [last, addMonths(last, -1), addMonths(last, -2)].filter(m => m >= since.slice(0, 7));
+    const out = months.map(m => {
+      const end = [addDays(`${addMonths(m, 1)}-01`, -1), addDays(today, -1), who.leftOn ?? '9999-12-31'].sort()[0];
+      const start = [`${m}-01`, since].sort()[1];
+      const days = (start <= end ? T.daysBetween(start, end) : []).map(date => this.sheet(techId, date))
+        .filter(sh => sh.submitted || sh.day.activity || sh.weekday || sh.flags.length)
+        .map(sh => ({ date: sh.date, label: sh.label, status: sh.submitted ? (sh.submitted.filledBy ? 'filled' : 'submitted') : sh.day.activity || sh.weekday ? 'missing' : 'none',
+          submittedAt: sh.submitted?.at ?? null, filledBy: sh.submitted?.filledBy ?? null, note: sh.submitted?.note ?? null,
+          travelMin: sh.day.travelMin, workMin: sh.day.workMin, unaccountedMin: sh.day.unaccountedMin, ...sh.pay, flags: sh.flags.length }));
+      const sum = (k: 'travelMin' | 'workMin' | 'unaccountedMin' | 'normalMin' | 'overtimeMin' | 'doubleMin') => days.reduce((n, d) => n + d[k], 0);
+      return { month: m, label: monthLabel(m), days: days.reverse(), totals: { travelMin: sum('travelMin'), workMin: sum('workMin'), unaccountedMin: sum('unaccountedMin'),
+        normalMin: sum('normalMin'), overtimeMin: sum('overtimeMin'), doubleMin: sum('doubleMin'),
+        submitted: days.filter(d => d.status === 'submitted').length, filled: days.filter(d => d.status === 'filled').length, missing: days.filter(d => d.status === 'missing').length } };
+    });
+    const oldest = months.at(-1) ?? last;
+    return good({ person: { id: techId, full_name: who.p.full_name, left: !!who.leftOn, left_on: who.leftOn, since }, months: out, older: oldest > since.slice(0, 7) ? oldest : null });
+  }
+
+  /** The log of one person's timesheets: submitted, filled in, missing, explained, closed, and who looked. */
+  log(techId: string, deptOf: (id: string) => string | null) {
+    const who = this.person(techId);
+    if (!who) return bad(404, 'no such technician');
+    const events: { at: string; kind: string; text: string; by: string }[] = [];
+    const today = sast();
+    for (const date of T.daysBetween(this.since(), addDays(today, -1))) {
+      const sub = this.submitted(techId, date);
+      if (!sub) continue;
+      const by = (sub as { filledBy?: string | null }).filledBy;
+      events.push(by ? { at: sub.at, kind: 'filled', by, text: `Filled in ${dayLabel(date)} for him (he had not submitted it)` }
+        : { at: sub.at, kind: 'submitted', by: who.p.full_name, text: `Submitted ${dayLabel(date)}${sub.day.unaccountedMin >= T.EXPLAIN_FROM_MIN ? ` (${T.hm(sub.day.unaccountedMin)} not accounted for)` : ''}` });
+    }
+    for (const f of this.flags.filter(f => f.flag_type === 'timesheet_missing' && (f.tech ?? 'me') === techId)) {
+      const d = String(f.details?.workDate ?? '');
+      events.push({ at: f.raised_at, kind: 'missing', by: 'The app', text: `Flagged: ${dayLabel(d)} not submitted by 10:00 the next day` });
+      if (f.explanation) events.push({ at: f.raised_at, kind: 'explained', by: who.p.full_name, text: `Explained the missing ${dayLabel(d)}: ${f.explanation}` });
+      if (f.status === 'resolved') {
+        const sub = this.t.submitted[`${techId}|${d}`];
+        events.push({ at: sub?.at ?? f.raised_at, kind: 'resolved', by: sub?.filledBy ?? who.p.full_name, text: `Missing ${dayLabel(d)} closed: ${f.resolution_note ?? ''}` });
+      }
+    }
+    const dept = deptOf(techId);
+    const range = (v: { from?: string; to?: string }) => (v.from ? (v.from === v.to ? dayLabel(v.from) : `${dayLabel(v.from)} – ${dayLabel(v.to ?? v.from)}`) : '');
+    for (const v of this.t.views ?? []) {
+      if (v.history && v.userId === techId) events.push({ at: v.at, kind: 'viewed', by: v.by, text: 'Opened his timesheet history' });
+      else if (!v.history && (v.userId === techId || (!v.userId && (!v.departmentId || v.departmentId === dept)))) {
+        events.push({ at: v.at, kind: 'viewed', by: v.by, text: `Looked at ${v.userId ? 'his timesheets' : v.departmentId ? 'his department\'s timesheets' : 'everyone\'s timesheets'} for ${range(v)}` });
+      }
+    }
+    events.sort((a, b) => b.at.localeCompare(a.at));
+    return good({ person: { id: techId, full_name: who.p.full_name, left: !!who.leftOn }, events });
   }
 }
