@@ -127,8 +127,11 @@ export function arrive(c: JobCard, i: ArriveInput): Result {
   if (!i.managerName?.trim()) reasons.push('store manager checked in with');
   if (!(i.safety.areaSafe && i.safety.isolated && i.safety.publicClear)) reasons.push('all three safety checks');
   const pos = i.phonePosition ?? i.vehiclePosition;
-  const inside = pos ? insideGeofence(pos, c.store, c.store.geofenceM) : false;
+  // A store with no map point yet cannot be checked: Arrived counts, and the office is told to pin it.
+  const pinned = Number.isFinite(c.store?.lat) && Number.isFinite(c.store?.lng) && c.store.lat !== null && c.store.lng !== null;
+  const inside = !pinned || (pos ? insideGeofence(pos, c.store, c.store.geofenceM) : false);
   const flags: string[] = [];
+  if (!pinned) flags.push('store_not_pinned');
   if (!inside) {
     if (!i.outsideReason?.trim()) reasons.push('you are not at the store: are you in a different vehicle or location? give a reason');
     else flags.push('arrived_outside_geofence');

@@ -34,11 +34,12 @@ import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 import { ChangePassword } from '../screens/MyPassword.tsx';
 import { AddPerson, LOGIN_PILL, LoginCard } from './Logins.tsx';
+import { ImportCustomers, StoreDetail, StoreList, pointFrom } from './Stores.tsx';
 import { BreakdownAlert, BreakdownById, BreakdownList, BreakdownSettings, type Bd } from './Breakdowns.tsx';
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
 type Tab = 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
-type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | null;
+type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
   cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
@@ -148,7 +149,7 @@ export function OfficeApp() {
       {tab === 'people' ? <PeopleList key={`people-${sel?.kind === 'leaver' ? sel.id : ''}`} o={o} open={id => setSel({ kind: 'person', id })} openLeaver={id => setSel({ kind: 'leaver', id })} add={() => setSel({ kind: 'newperson' })} /> : null}
       {tab === 'repairs' ? <WorkshopBoard o={o} openJob={id => go('jobs', { kind: 'job', id })} /> : null}
       {tab === 'barcodes' ? <PrintBarcodes /> : null}
-      {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
+      {tab === 'stores' ? <StoreList o={o} canEdit={does('stores')} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} importIt={does('stores') ? () => setSel({ kind: 'importcustomers' }) : undefined} open={id => setSel({ kind: 'store', id })} /> : null}
       {tab === 'settings' ? <>{does('access') ? <BreakdownSettings /> : null}<ThemeSettings /><LetterheadSettings /><StorageSettings />{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
       <ChangePassword />
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
@@ -176,6 +177,8 @@ export function OfficeApp() {
       ended={() => { o.load(); setSel({ kind: 'leaver', id: sel.id }); }} />);
     if (sel.kind === 'leaver') return wrap(<LeaverDetail key={sel.id} id={sel.id} />);
     if (sel.kind === 'breakdown') return wrap(<BreakdownById key={`${sel.id}-${bdTick}`} id={sel.id} b={sel.b} o={o} logIt={b => setSel({ kind: 'bdlog', b })} done={bdDone} />);
+    if (sel.kind === 'store') return wrap(<StoreDetail key={sel.id} id={sel.id} o={o} canEdit={does('stores')} done={close} />);
+    if (sel.kind === 'importcustomers') return wrap(<ImportCustomers o={o} done={close} />);
     if (sel.kind === 'bdlog') {
       const b = sel.b;
       return wrap(<NewJob key={b.id} o={o} title="Log the breakdown as a job" path={`/breakdowns/${b.id}/log`}
@@ -858,36 +861,16 @@ function PersonDetail({ id, o, ask, ended }: { id: string; o: OfficeHook; ask?: 
 
 // ---- Stores ------------------------------------------------------------------------------------
 
-function StoreList({ o, add }: { o: OfficeHook; add?: () => void }) {
-  const [q, setQ] = useState('');
-  const list = useMemo(() => o.d.stores.filter(s => !q.trim() || `${s.client} ${s.name} ${s.address ?? ''}`.toLowerCase().includes(q.trim().toLowerCase())), [o.d.stores, q]);
-  return (
-    <>
-      {add ? <Button label="Add a store" kind="secondary" onPress={add} /> : null}
-      <TextInput value={q} onChangeText={setQ} placeholder="Search client or store" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Search stores" />
-      {list.map(s => (
-        <Card key={s.id}>
-          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-            <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>{s.name}</Text>
-            {s.open_jobs ? <Pill text={`${s.open_jobs} open`} tone="info" /> : null}
-          </View>
-          <Text style={st.small}>{s.client}{s.address ? ` · ${s.address}` : ''} · {s.lat.toFixed(4)}, {s.lng.toFixed(4)}</Text>
-        </Card>
-      ))}
-    </>
-  );
-}
-
 function NewStore({ o, done }: { o: OfficeHook; done: () => void }) {
   const [client, setClient] = useState('');
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [where, setWhere] = useState('');
   const [ans, setAns] = useState<Answer | null>(null);
-  // Paste straight from Google Maps: "-28.7465, 32.0584".
-  const m = where.match(/(-?\d+(?:\.\d+)?)\s*[,; ]\s*(-?\d+(?:\.\d+)?)/);
-  const lat = m ? Number(m[1]) : null;
-  const lng = m ? Number(m[2]) : null;
+  // Paste straight from Google Maps: "-28.7465, 32.0584". Optional: without it the address is found on the map.
+  const pt = where.trim() ? pointFrom(where) : null;
+  const lat = pt?.lat ?? null;
+  const lng = pt?.lng ?? null;
   const clients = [...new Set(o.d.stores.map(s => s.client))];
   return (
     <>
@@ -896,12 +879,13 @@ function NewStore({ o, done }: { o: OfficeHook; done: () => void }) {
       {clients.length ? <Choice options={clients} value={clients.find(c => c === client)} onChange={setClient} /> : null}
       <Field label="Store name" value={name} onChangeText={setName} placeholder="e.g. Spar Arboretum" autoCapitalize="words" />
       <Field label="Address" value={address} onChangeText={setAddress} />
-      <Field label="Where it is (paste from Google Maps)" value={where} onChangeText={setWhere} placeholder="-28.7465, 32.0584"
-        hint={lat != null ? `Latitude ${lat}, longitude ${lng}. The technician's Arrived only works within 150 m of this point.` : 'Right-click the store in Google Maps and click the numbers to copy them.'} />
+      <Field label="Where it is (optional: paste from Google Maps)" value={where} onChangeText={setWhere} placeholder="-28.7465, 32.0584"
+        hint={lat != null ? `Latitude ${lat}, longitude ${lng}. The technician's Arrived is checked within 150 m of this point.` : where.trim() ? 'Paste the two numbers, like -28.7465, 32.0584' : 'Leave it empty: the app finds the address on the map. Or right-click the store in Google Maps and copy the numbers.'} />
       <Reasons a={ans} />
       <Button label="Add store" onPress={async () => {
-        if (lat == null || lng == null) { setAns({ ok: false, reasons: ['where the store is (latitude, longitude)'] }); return; }
-        const r = await o.send('POST', '/office/stores', { client: client.trim(), name: name.trim(), ...(address.trim() ? { address: address.trim() } : {}), lat, lng });
+        if (where.trim() && lat == null) { setAns({ ok: false, reasons: ['paste the point from Google Maps, like -28.7465, 32.0584'] }); return; }
+        if (lat == null && !address.trim()) { setAns({ ok: false, reasons: ['the address (the app finds it on the map), or the point from Google Maps'] }); return; }
+        const r = await o.send('POST', '/office/stores', { client: client.trim(), name: name.trim(), ...(address.trim() ? { address: address.trim() } : {}), ...(lat != null ? { lat, lng } : {}) });
         setAns(r);
         if (r.ok) done();
       }} />

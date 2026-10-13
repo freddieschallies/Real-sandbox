@@ -13,6 +13,7 @@ import type { LoginLevel } from '../../server/src/core/permissions.ts';
 import { DemoOffice, END_REASONS, HR_POSITIONS, POSITION_LABEL, seedOffice, terminate, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
 import { DemoLogins, type DemoLoginsState } from './demoLogins.ts';
 import { DemoBreakdowns, seedBreakdowns, type DemoBdState } from './demoBreakdowns.ts';
+import { FIELDS as CUSTOMER_FIELDS, guessMapping, parseCsv, splitHeader, toCustomers } from '../../server/src/core/customerSheet.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
 import { normReg, registrationCandidates } from '../../server/src/core/vehicleCode.ts';
@@ -69,6 +70,8 @@ export interface DemoState {
   logins?: DemoLoginsState;
   /** The Breakdowns queue: emails and WhatsApp group messages (pretend). */
   breakdowns?: DemoBdState;
+  /** Customer lists uploaded in the test drive, until brought in. */
+  customerImports?: Record<string, { headers: string[]; rows: string[][]; applied: boolean }>;
   docs?: DemoDocsState;
   queries?: { id: string; from: string; to: string; job_id: string | null; subject: string; created_at: string; read: Record<string, string>; messages: { id: string; from: string; body: string; at: string }[] }[];
 }
@@ -105,11 +108,11 @@ function officeJob(n: number, type: J.JobType, priority: string, s: DemoStore, f
   return {
     meta: {
       id: `job-${n}`, job_number: n, job_type: type, priority, fault_reported: fault, scheduled_date: date, client_order_ref: ref ?? null,
-      store_id: s.id, store: s.name, store_address: s.address, store_lat: s.lat, store_lng: s.lng, geofence_m: s.geofence_m,
+      store_id: s.id, store: s.name, store_address: s.address, store_lat: s.lat as number, store_lng: s.lng as number, geofence_m: s.geofence_m,
       lead_technician: lead.name, manager_name: null, checklist: [], equipment: [], storeManagers: [], i_am_lead: lead.id === 'me', lead_id: lead.id, helper_ids: helpers,
     },
     card: {
-      jobType: type, status: 'assigned', store: { lat: s.lat, lng: s.lng, geofenceM: s.geofence_m }, visits: [],
+      jobType: type, status: 'assigned', store: { lat: s.lat as number, lng: s.lng as number, geofenceM: s.geofence_m }, visits: [],
       items: [{ id: `item-${n}-1`, title: fault.slice(0, 200), origin: 'reported', beforePhotos: 0, afterPhotos: 0, vanStockLines: 0, boughtOutLines: 0, noMaterials: false }],
     },
     checklistIds: [],
@@ -440,6 +443,47 @@ export class DemoTransport implements Transport {
     this.state.jobs.push(j);
     this.persist(this.state);
     return ok(this.view(j), 201);
+  }
+
+  /** Bringing in customers from a CSV (the test drive reads CSV; the real server also reads Excel). */
+  private async customerRoute(p: string, req: Request, b: any): Promise<Response | null> {
+    let m: RegExpMatchArray | null;
+    if (!p.startsWith('/office/customers/import')) return null;
+    if (!this.does('stores')) return refuse(403, 'bringing in customers is for whoever looks after clients and stores');
+    const imports = (this.state.customerImports ??= {});
+    if (p === '/office/customers/import') {
+      if (!req.upload) return refuse(400, 'no file');
+      let text: string;
+      try { const blob = await (await fetch(req.upload.fileUri)).blob(); const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer()); if (head[0] === 0x50 && head[1] === 0x4b) return refuse(400, 'In the test drive, use a CSV file (in Excel: File → Save as → CSV). The real server reads Excel files too.'); text = await blob.text(); }
+      catch { return refuse(400, 'could not read the file'); }
+      const all = parseCsv(text);
+      if (all.length < 2) return refuse(400, 'the file has no rows: export the customer list with its headings');
+      const { headers, body } = splitHeader(all);
+      const id = `imp-${Date.now()}`;
+      imports[id] = { headers, rows: body, applied: false };
+      this.persist(this.state);
+      return ok({ id, filename: req.upload.name ?? null, headers, rows: body.length, guess: guessMapping(headers), fields: CUSTOMER_FIELDS, samples: headers.map((_, i) => body.slice(0, 3).map(r => r[i] ?? '').filter(Boolean)) });
+    }
+    if ((m = p.match(/^\/office\/customers\/import\/([^/]+)\/(preview|apply)$/))) {
+      const imp = imports[m[1]];
+      if (!imp) return refuse(404, 'no such upload');
+      if (b.mapping?.client === undefined) return refuse(400, 'say which column is the customer');
+      const { rows, skipped } = toCustomers(imp.rows, b.mapping);
+      const st = this.office().o.stores;
+      if (m[2] === 'preview') {
+        const clients = new Set(rows.map(r => r.client.toLowerCase()));
+        const known = new Set(st.map(s => s.client.toLowerCase()));
+        return ok({ customers: clients.size, newCustomers: [...clients].filter(c => !known.has(c)).length, sites: rows.length,
+          newSites: rows.filter(r => !st.some(s => s.client.toLowerCase() === r.client.toLowerCase() && s.name.toLowerCase() === r.store.toLowerCase())).length,
+          withAddress: rows.filter(r => r.address).length, withPin: rows.filter(r => r.lat !== null).length, skipped, preview: rows.slice(0, 8), applied: imp.applied });
+      }
+      if (imp.applied) return refuse(409, 'this file was already brought in');
+      imp.applied = true;
+      const r = this.office().importRows(rows);
+      this.persist(this.state);
+      return ok({ ...r, skipped });
+    }
+    return refuse(404, 'demo: not available');
   }
 
   private breakdownRoute(p: string, req: Request, b: any): Response | null {
@@ -840,7 +884,7 @@ export class DemoTransport implements Transport {
         if (!sNew) return refuse(400, 'unknown store');
         ch.push(['store', j.meta.store, sNew.name]);
         Object.assign(j.meta, { store_id: sNew.id, store: sNew.name, store_address: sNew.address, store_lat: sNew.lat, store_lng: sNew.lng });
-        j.card.store = { lat: sNew.lat, lng: sNew.lng, geofenceM: sNew.geofence_m };
+        j.card.store = { lat: sNew.lat as number, lng: sNew.lng as number, geofenceM: sNew.geofence_m };
       }
       if (b.jobType && b.jobType !== j.meta.job_type) { ch.push(['job type', j.meta.job_type, b.jobType]); j.meta.job_type = b.jobType; j.card.jobType = b.jobType; }
       if (b.priority && b.priority !== j.meta.priority) { ch.push(['priority', j.meta.priority, b.priority]); j.meta.priority = b.priority; }
@@ -860,6 +904,8 @@ export class DemoTransport implements Transport {
     if (p === '/office/overview') return ok(o.overview());
     if (p === '/office/stores' && req.method === 'GET') return ok(o.stores());
     if (p === '/office/stores') return done(o.addStore(b));
+    if ((m = p.match(/^\/office\/stores\/([^/]+)\/pin$/))) return this.does('stores') ? done(o.pin(m[1], b.action === 'confirm' ? 'confirm' : 'lookup', this.who.name)) : refuse(403, 'you cannot change stores');
+    if ((m = p.match(/^\/office\/stores\/([^/]+)$/)) && req.method === 'PUT') return this.does('stores') ? done(o.editStore(m[1], b)) : refuse(403, 'you cannot change stores');
     if (p === '/office/technicians') return ok(o.technicians(id => (id === 'me' ? this.state.vehicle?.registration ?? null : this.fleet().technicians(null).find(t => t.id === id)?.registration ?? null)));
     if (p === '/jobs' && req.method === 'GET') {
       const d = this.docs();
@@ -1222,6 +1268,8 @@ export class DemoTransport implements Transport {
       this.state.themeAccent = b.accent; this.persist(this.state);
       return ok({ accent: b.accent });
     }
+    const cust = await this.customerRoute(p, req, b);
+    if (cust) return cust;
     const bdr = this.breakdownRoute(p, req, b);
     if (bdr) return bdr;
     const off = this.officeRoute(p, req, b);

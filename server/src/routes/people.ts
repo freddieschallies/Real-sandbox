@@ -185,7 +185,7 @@ export async function nowOf(db: Q, id: string) {
   const pos = scan ? (await db.query(
     `SELECT lat, lng, speed_kmh, ignition, recorded_at FROM tracker_positions WHERE vehicle_id = $1 ORDER BY recorded_at DESC LIMIT 1`, [scan.vehicle_id])).rows[0] : null;
   const location = pos ? { source: 'vehicle tracker', lat: pos.lat, lng: pos.lng, moving: !!pos.ignition, speedKmh: pos.speed_kmh, minutesAgo: Math.round((Date.now() - new Date(pos.recorded_at).getTime()) / 60000) }
-    : job?.status === 'in_progress' ? { source: 'on site', lat: job.lat, lng: job.lng, moving: false, speedKmh: 0, minutesAgo: null } : null;
+    : job?.status === 'in_progress' && job.lat != null ? { source: 'on site', lat: job.lat, lng: job.lng, moving: false, speedKmh: 0, minutesAgo: null } : null;
 
   const withNames = [...new Map([...inVehicle, ...onJob].map(p => [p.id, p.full_name])).values()];
   return {

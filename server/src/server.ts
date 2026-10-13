@@ -7,6 +7,8 @@ import { readPendingInvoices } from './routes/stock.ts';
 import { purgeOldPhotos } from './retention.ts';
 import { escalate, pollInboxes } from './intake.ts';
 import { breakdownReaderFromEnv } from './breakdownReader.ts';
+import { geocoderFromEnv } from './geocoder.ts';
+import { locateStores } from './storePins.ts';
 
 // Migrations run as the database owner; the app then runs as its own restricted user.
 const appUrl = process.env.DATABASE_URL ?? '';
@@ -38,6 +40,16 @@ setInterval(() => {
   pollInboxes(pool, reader).then(n => { if (n) app.log.info(`${n} new email(s) in the breakdowns queue`); })
     .catch(e => app.log.error(e)).finally(() => { reading = false; });
   escalate(pool).catch(e => app.log.error(e));
+}, 60_000);
+
+// Stores waiting for a map pin (new customers, changed addresses): looked up every minute, a few at a time.
+const geocoder = geocoderFromEnv();
+let locating = false;
+if (geocoder) setInterval(() => {
+  if (locating) return;
+  locating = true;
+  locateStores(pool, geocoder).then(n => { if (n) app.log.info(`${n} store(s) pinned on the map`); })
+    .catch(e => app.log.error(e)).finally(() => { locating = false; });
 }, 60_000);
 
 // Old vehicle photos past their keeping time: once at start, then every 6 hours.

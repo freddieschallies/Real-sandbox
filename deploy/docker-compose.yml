@@ -33,6 +33,9 @@ services:
       INVOICE_MODEL: ${INVOICE_MODEL:-claude-sonnet-5-5}
       # Reading breakdown emails and messages (the store, fault and call log number).
       BREAKDOWN_MODEL: ${BREAKDOWN_MODEL:-claude-haiku-5-5}
+      # Finding stores' addresses on the map: Google with a key (best for shop addresses), otherwise OpenStreetMap (free).
+      GOOGLE_MAPS_KEY: ${GOOGLE_MAPS_KEY:-}
+      NOMINATIM_EMAIL: ${NOMINATIM_EMAIL:-}
       # The WhatsApp link (below) signs in to the server with this key.
       WA_BRIDGE_KEY: ${WA_BRIDGE_KEY:-}
     volumes:

@@ -154,6 +154,12 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
         if (res.flags?.includes('arrived_outside_geofence')) {
           await raiseFlag(c, { type: 'arrived_outside_geofence', technicianId: actorId, jobId: row.id, details: { position: b.position, reason: b.outsideReason } });
         }
+        // The store had no map point yet: where the technician arrived becomes its pin, for the office to check.
+        if (res.flags?.includes('store_not_pinned') && b.position) {
+          const who = (await c.query('SELECT full_name FROM users WHERE id = $1', [actorId])).rows[0]?.full_name ?? 'the technician';
+          await c.query(`UPDATE stores SET lat = $2, lng = $3, pin_source = 'arrival', pin_status = 'check', pin_at = now(),
+                           pin_note = $4 WHERE id = $1 AND lat IS NULL`, [row.store_id, b.position.lat, b.position.lng, `Where ${who} pressed Arrived on job ${row.job_number}: check the pin`]);
+        }
         await postJobUpdate(c, row.id, 'on_site');
       });
   });

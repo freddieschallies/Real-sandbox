@@ -102,3 +102,15 @@ Breakdown emails and messages in the WhatsApp breakdowns group come into the off
 5. Choose the breakdowns group in Settings, and what the app posts there.
 
 This is not WhatsApp's official business system (that one cannot join an existing group), so WhatsApp could block the number. If that happens, the group itself keeps working, email keeps coming in, and you link a new number the same way.
+
+## Customers and store pins
+
+Office → Stores → **Bring in customers**: upload the customer list (CSV or Excel .xlsx, one row per site). The app guesses the columns; check them, preview, bring them in. Every site's address is then found on the map in the background (a few a minute):
+
+- **Pinned**: found at the address.
+- **Check the pin**: only the street, suburb or town was found (or the pin came from a technician's first Arrived). Open it in Google Maps, then "The pin is right" or paste the right point.
+- **No pin yet**: not found. Fix the address (it is looked up again) or paste the point from Google Maps.
+
+A pin in the file (latitude and longitude columns) is used as it is. A pin set by hand is never replaced by an import or a lookup.
+
+The lookups use OpenStreetMap (free) unless `GOOGLE_MAPS_KEY` is set in `.env` (Google Cloud → Geocoding API), which finds South African shop addresses better.

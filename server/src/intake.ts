@@ -126,7 +126,7 @@ export async function postJobUpdate(c: Q, jobId: string, kind: 'on_site' | 'done
 
 // ---- Across companies: each company's own connection ------------------------------------------------
 
-async function eachCompany(db: Db, fn: (c: Q, companyId: string) => Promise<void>) {
+export async function eachCompany(db: Db, fn: (c: Q, companyId: string) => Promise<void>) {
   const companies = (await db.query('SELECT id FROM companies WHERE active')).rows.map(r => r.id as string);
   for (const id of companies) {
     const c = await db.connect();

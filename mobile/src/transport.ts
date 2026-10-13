@@ -1,6 +1,6 @@
 // How requests reach a server: the real office server over HTTP, or the demo server inside the app.
 // Both answer the same requests the same way, so the rest of the app doesn't know the difference.
-export interface Upload { fields: Record<string, string>; fileUri: string; mime: string }
+export interface Upload { fields: Record<string, string>; fileUri: string; mime: string; /** The file name (a spreadsheet); photos are sent as "photo". */ name?: string }
 
 export interface Request {
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';

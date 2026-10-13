@@ -61,34 +61,87 @@ export function registerControlRoutes(app: FastifyInstance) {
   app.get('/office/stores', async req => {
     office(req);
     const { rows } = await req.db.query(
-      `SELECT s.id, s.name, s.branch_code, s.address, s.lat, s.lng, s.geofence_m, c.name AS client,
+      `SELECT s.id, s.name, s.branch_code, s.address, s.lat, s.lng, s.geofence_m, c.name AS client, s.pin_status, s.pin_source, s.pin_note, s.pin_at, s.email, s.phone,
               (SELECT count(*)::int FROM equipment e WHERE e.store_id = s.id) AS equipment,
               (SELECT count(*)::int FROM jobs j WHERE j.store_id = s.id AND j.status NOT IN ('closed', 'cancelled')) AS open_jobs
          FROM stores s JOIN clients c ON c.id = s.client_id ORDER BY c.name, s.name`);
     return rows;
   });
 
+  // A store: with its map point (pasted from Google Maps), or only its address: the server then finds it on the map.
   app.post('/office/stores', async (req, reply) => {
     if (!can(req.actor, 'manage_stores_equipment')) throw new Refused(403, ['you cannot add stores']);
     const b = parse(z.object({
       client: z.string().trim().min(2, 'client name').max(200), name: z.string().trim().min(2, 'store name').max(200),
       branchCode: z.string().trim().max(50).optional(), address: z.string().trim().max(500).optional(),
-      lat: z.number().min(-35).max(-22, 'that is not in South Africa'), lng: z.number().min(16).max(33, 'that is not in South Africa'),
+      lat: z.number().min(-35).max(-22, 'that is not in South Africa').optional(), lng: z.number().min(16).max(33, 'that is not in South Africa').optional(),
       geofenceM: z.number().int().min(50).max(1000).default(150),
     }), req.body);
+    if ((b.lat === undefined) !== (b.lng === undefined)) throw new Refused(400, ['both numbers of the map point, or neither']);
+    if (b.lat === undefined && !b.address) throw new Refused(400, ['the address (the app finds it on the map), or the map point']);
     const out = await tx(req.db, async c => {
       const client = (await c.query('SELECT id FROM clients WHERE lower(name) = lower($1)', [b.client])).rows[0]
         ?? (await c.query('INSERT INTO clients (name) VALUES ($1) RETURNING id', [b.client])).rows[0];
       if ((await c.query('SELECT 1 FROM stores WHERE client_id = $1 AND lower(name) = lower($2)', [client.id, b.name])).rowCount) {
         throw new Refused(409, [`${b.client} ${b.name} is already a store`]);
       }
+      const pinned = b.lat !== undefined;
       const s = (await c.query(
-        'INSERT INTO stores (client_id, name, branch_code, address, lat, lng, geofence_m) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
-        [client.id, b.name, b.branchCode ?? null, b.address ?? null, b.lat, b.lng, b.geofenceM])).rows[0];
+        `INSERT INTO stores (client_id, name, branch_code, address, lat, lng, geofence_m, pin_source, pin_status, pin_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $5::float IS NULL THEN NULL ELSE now() END) RETURNING id`,
+        [client.id, b.name, b.branchCode ?? null, b.address ?? null, b.lat ?? null, b.lng ?? null, b.geofenceM, pinned ? 'manual' : 'none', pinned ? 'ok' : 'looking'])).rows[0];
       await audit(c, req.actor.id, 'store_added', 'store', s.id, b);
-      return { id: s.id };
+      return { id: s.id, pinStatus: pinned ? 'ok' : 'looking' };
     });
     return reply.code(201).send(out);
+  });
+
+  // Edit a store. A new address is looked up again (unless a pin is given with it); a pin given is the store's pin.
+  app.put('/office/stores/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    if (!can(req.actor, 'manage_stores_equipment')) throw new Refused(403, ['you cannot change stores']);
+    const id = parse(Uuid, req.params.id);
+    const t = (n: number) => z.string().trim().max(n).optional();
+    const b = parse(z.object({
+      name: z.string().trim().min(2).max(200).optional(), address: t(500), branchCode: t(50), email: t(200), phone: t(40),
+      lat: z.number().min(-35).max(-22, 'that is not in South Africa').optional(), lng: z.number().min(16).max(33, 'that is not in South Africa').optional(),
+      geofenceM: z.number().int().min(50).max(1000).optional(),
+    }), req.body);
+    if ((b.lat === undefined) !== (b.lng === undefined)) throw new Refused(400, ['both numbers of the map point']);
+    return tx(req.db, async c => {
+      const s = (await c.query('SELECT address, client_id FROM stores WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!s) throw new Refused(404, ['no such store']);
+      if (b.name && (await c.query('SELECT 1 FROM stores WHERE client_id = $1 AND lower(name) = lower($2) AND id <> $3', [s.client_id, b.name, id])).rowCount) throw new Refused(409, ['that client already has a store with that name']);
+      await c.query(
+        `UPDATE stores SET name = COALESCE($2, name), address = CASE WHEN $3::text IS NULL THEN address ELSE NULLIF($3, '') END,
+                branch_code = CASE WHEN $4::text IS NULL THEN branch_code ELSE NULLIF($4, '') END, email = CASE WHEN $5::text IS NULL THEN email ELSE NULLIF($5, '') END,
+                phone = CASE WHEN $6::text IS NULL THEN phone ELSE NULLIF($6, '') END, geofence_m = COALESCE($7, geofence_m) WHERE id = $1`,
+        [id, b.name ?? null, b.address ?? null, b.branchCode ?? null, b.email ?? null, b.phone ?? null, b.geofenceM ?? null]);
+      if (b.lat !== undefined) {
+        await c.query("UPDATE stores SET lat = $2, lng = $3, pin_source = 'manual', pin_status = 'ok', pin_note = $4, pin_at = now(), lookup_tries = 0 WHERE id = $1",
+          [id, b.lat, b.lng, `Pinned by hand`]);
+      } else if (b.address !== undefined && (b.address || null) !== s.address) {
+        await c.query("UPDATE stores SET pin_status = 'looking', lookup_tries = 0, pin_note = 'New address: looking it up' WHERE id = $1 AND pin_source <> 'manual'", [id]);
+      }
+      await audit(c, req.actor.id, 'store_edited', 'store', id, b);
+      return (await c.query('SELECT id, name, address, lat, lng, pin_status, pin_source, pin_note FROM stores WHERE id = $1', [id])).rows[0];
+    });
+  });
+
+  // "That pin is right" (a pin found from the suburb, or from a technician's Arrived) or "look it up again".
+  app.post('/office/stores/:id/pin', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    if (!can(req.actor, 'manage_stores_equipment')) throw new Refused(403, ['you cannot change stores']);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ action: z.enum(['confirm', 'lookup']) }), req.body);
+    const s = (await req.db.query('SELECT lat FROM stores WHERE id = $1', [id])).rows[0];
+    if (!s) throw new Refused(404, ['no such store']);
+    if (b.action === 'confirm') {
+      if (s.lat === null) throw new Refused(409, ['there is no pin to confirm yet']);
+      await req.db.query("UPDATE stores SET pin_status = 'ok', pin_note = $2, pin_at = now() WHERE id = $1", [id, `Checked by ${(await req.db.query('SELECT full_name FROM users WHERE id = $1', [req.actor.id])).rows[0].full_name}`]);
+    } else {
+      await req.db.query("UPDATE stores SET pin_status = 'looking', pin_source = CASE WHEN pin_source = 'manual' THEN 'lookup' ELSE pin_source END, lookup_tries = 0, pin_note = 'Looking it up again' WHERE id = $1", [id]);
+    }
+    await audit(req.db, req.actor.id, b.action === 'confirm' ? 'store_pin_confirmed' : 'store_pin_lookup', 'store', id);
+    return (await req.db.query('SELECT id, lat, lng, pin_status, pin_source, pin_note FROM stores WHERE id = $1', [id])).rows[0];
   });
 
   // ---- Technicians -------------------------------------------------------------------------

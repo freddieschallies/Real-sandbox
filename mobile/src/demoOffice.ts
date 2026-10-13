@@ -6,7 +6,11 @@ import type { DemoWorkshop } from './demoWorkshop.ts';
 import type { DemoStockState } from './demoStock.ts';
 import { EXAMPLE_TECH, REAL } from './demoReal.ts';
 
-export interface DemoStore { id: string; client: string; name: string; address: string | null; lat: number; lng: number; geofence_m: number }
+export interface DemoStore {
+  id: string; client: string; name: string; address: string | null; lat: number | null; lng: number | null; geofence_m: number;
+  /** The map pin (see the server's stores): found by the pretend lookup in the test drive. */
+  pin_status?: 'ok' | 'check' | 'looking' | 'not_found'; pin_source?: string; pin_note?: string | null; branch_code?: string | null; phone?: string | null; email?: string | null; looking_since?: number;
+}
 export interface DemoInspection {
   id: string; vehicle_id: string; registration: string; driver_id: string; driver: string; previous_driver: string | null; inspected_at: string;
   odometer_km: number; fuel_level: string; problems: string[]; new_problems: string[]; handover_by: string; handed_over_by_name: string | null;
@@ -17,6 +21,26 @@ export interface DemoProfile {
   photo_id: string | null; phone: string | null; email: string | null; emergency_name: string | null; emergency_phone: string | null;
   id_number: string | null; date_of_birth: string | null; home_address: string | null; start_date: string | null; notes: string | null;
 }
+/** Places around the company's area for the test drive's pretend map lookup (the real server asks OpenStreetMap or Google). */
+const PLACES: [RegExp, number, number][] = [
+  [/arboretum/i, -28.7465, 32.0584], [/meerensee/i, -28.7743, 32.0789], [/alton/i, -28.7395, 32.0201], [/birdswood/i, -28.768, 32.005],
+  [/brackenham/i, -28.729, 32.036], [/veldenvlei/i, -28.733, 32.056], [/wildenweide/i, -28.756, 32.033], [/aquadene/i, -28.733, 32.047],
+  [/esikhawini/i, -28.8706, 31.9118], [/empangeni/i, -28.7621, 31.8932], [/nseleni/i, -28.693, 32.017], [/mtunzini/i, -28.95, 31.756],
+  [/felixton/i, -28.829, 31.887], [/kwambonambi/i, -28.6, 32.084], [/eshowe/i, -28.886, 31.469], [/mtubatuba/i, -28.4167, 32.1833],
+  [/st\.? ?lucia/i, -28.3833, 32.4167], [/ulundi/i, -28.33, 31.416], [/durban/i, -29.8587, 31.0218], [/pietermaritzburg/i, -29.6006, 30.3794],
+  [/richards ?bay/i, -28.783, 32.038],
+];
+function pretendLookup(st: { address: string | null; name: string }): Partial<DemoStore> {
+  const text = `${st.address ?? ''} ${st.name}`;
+  const hit = PLACES.find(([re]) => re.test(text));
+  if (!hit) return { pin_status: 'not_found', pin_source: 'lookup', pin_note: st.address ? 'Not found on the map: check the address, or pin it by hand (test drive: pretend map lookup)' : 'No address: add the address, or pin it by hand' };
+  // A street number in the address finds the building itself; otherwise only the suburb or town.
+  const exact = /\b\d{1,5}\s+[A-Za-z]/.test(st.address ?? '');
+  const j = () => (Math.random() - 0.5) * 0.004;
+  return { lat: hit[1] + j(), lng: hit[2] + j(), pin_source: 'lookup', pin_status: exact ? 'ok' : 'check',
+    pin_note: `Test drive: pretend map lookup${exact ? '' : ' (only the suburb or town was found: check the pin)'}` };
+}
+
 const blank = (): DemoProfile => ({ photo_id: null, phone: null, email: null, emergency_name: null, emergency_phone: null, id_number: null, date_of_birth: null, home_address: null, start_date: null, notes: null });
 /** Demo contact details: 555 numbers and example.com addresses, so nothing real. */
 function seedProfiles(): Record<string, DemoProfile> {
@@ -192,18 +216,72 @@ export class DemoOffice {
   }
 
   stores() {
-    return this.o.stores.map(s => ({ ...s, branch_code: null, equipment: 0, open_jobs: this.src.jobs.filter(j => j.meta.store === s.name && j.card.status !== 'closed' && j.card.status !== 'cancelled').length }))
+    // The test drive's pretend map lookup: a store waiting a few seconds is "found".
+    for (const st of this.o.stores) if (st.pin_status === 'looking' && Date.now() - (st.looking_since ?? 0) > 2500) Object.assign(st, pretendLookup(st));
+    return this.o.stores.map(s => ({ ...s, branch_code: s.branch_code ?? null, pin_status: s.pin_status ?? 'ok', pin_source: s.pin_source ?? 'manual', pin_note: s.pin_note ?? null, equipment: 0,
+      open_jobs: this.src.jobs.filter(j => j.meta.store === s.name && j.card.status !== 'closed' && j.card.status !== 'cancelled').length }))
       .sort((a, b) => a.client.localeCompare(b.client) || a.name.localeCompare(b.name));
   }
 
-  addStore(b: { client: string; name: string; address?: string; lat: number; lng: number }): Res {
+  addStore(b: { client: string; name: string; address?: string; lat?: number; lng?: number }): Res {
+    const pinned = b.lat !== undefined && b.lat !== null;
     const missing = [!b.client || b.client.trim().length < 2 ? 'client name' : null, !b.name || b.name.trim().length < 2 ? 'store name' : null,
-      !(b.lat >= -35 && b.lat <= -22 && b.lng >= 16 && b.lng <= 33) ? 'where the store is (a point in South Africa)' : null].filter(Boolean) as string[];
+      pinned && !(b.lat! >= -35 && b.lat! <= -22 && b.lng! >= 16 && b.lng! <= 33) ? 'that point is not in South Africa' : null,
+      !pinned && !b.address?.trim() ? 'the address (the app finds it on the map), or the map point' : null].filter(Boolean) as string[];
     if (missing.length) return bad(400, ...missing);
     if (this.o.stores.some(s => s.client.toLowerCase() === b.client.trim().toLowerCase() && s.name.toLowerCase() === b.name.trim().toLowerCase())) return bad(409, `${b.client} ${b.name} is already a store`);
     const id = `store-${Date.now()}`;
-    this.o.stores.push({ id, client: b.client.trim(), name: b.name.trim(), address: b.address?.trim() || null, lat: b.lat, lng: b.lng, geofence_m: 150 });
-    return good({ id }, 201);
+    this.o.stores.push({ id, client: b.client.trim(), name: b.name.trim(), address: b.address?.trim() || null, lat: pinned ? b.lat! : null, lng: pinned ? b.lng! : null, geofence_m: 150,
+      pin_status: pinned ? 'ok' : 'looking', pin_source: pinned ? 'manual' : 'none', looking_since: Date.now() });
+    return good({ id, pinStatus: pinned ? 'ok' : 'looking' }, 201);
+  }
+
+  editStore(id: string, b: { name?: string; address?: string; branchCode?: string; phone?: string; email?: string; lat?: number; lng?: number }): Res {
+    const st = this.o.stores.find(x => x.id === id);
+    if (!st) return bad(404, 'no such store');
+    if (b.lat !== undefined && !(b.lat >= -35 && b.lat <= -22 && b.lng! >= 16 && b.lng! <= 33)) return bad(400, 'that is not in South Africa');
+    if (b.name?.trim()) st.name = b.name.trim();
+    if (b.branchCode !== undefined) st.branch_code = b.branchCode || null;
+    if (b.phone !== undefined) st.phone = b.phone || null;
+    if (b.email !== undefined) st.email = b.email || null;
+    const moved = b.address !== undefined && (b.address || null) !== st.address;
+    if (b.address !== undefined) st.address = b.address || null;
+    if (b.lat !== undefined) Object.assign(st, { lat: b.lat, lng: b.lng, pin_source: 'manual', pin_status: 'ok', pin_note: 'Pinned by hand' });
+    else if (moved && st.pin_source !== 'manual') Object.assign(st, { pin_status: 'looking', looking_since: Date.now(), pin_note: 'New address: looking it up' });
+    return good({ id, pin_status: st.pin_status ?? 'ok' });
+  }
+
+  pin(id: string, action: 'confirm' | 'lookup', by: string): Res {
+    const st = this.o.stores.find(x => x.id === id);
+    if (!st) return bad(404, 'no such store');
+    if (action === 'confirm') { if (st.lat == null) return bad(409, 'there is no pin to confirm yet'); Object.assign(st, { pin_status: 'ok', pin_note: `Checked by ${by}` }); }
+    else Object.assign(st, { pin_status: 'looking', looking_since: Date.now(), pin_note: 'Looking it up again' });
+    return good({ id, pin_status: st.pin_status });
+  }
+
+  /** Customers and sites from an uploaded list (the rows already read). */
+  importRows(rows: { client: string; store: string; address: string | null; branchCode: string | null; phone: string | null; email: string | null; lat: number | null; lng: number | null }[]) {
+    const r = { customersNew: 0, customersUpdated: 0, sitesNew: 0, sitesUpdated: 0, toFind: 0, pinnedFromFile: 0 };
+    const seen = new Set<string>();
+    for (const x of rows) {
+      const c = x.client.toLowerCase();
+      if (!seen.has(c)) { seen.add(c); if (this.o.stores.some(s => s.client.toLowerCase() === c)) r.customersUpdated++; else r.customersNew++; }
+      const st = this.o.stores.find(s => s.client.toLowerCase() === c && s.name.toLowerCase() === x.store.toLowerCase());
+      if (st) {
+        if (x.address && x.address !== st.address && st.pin_source !== 'manual' && x.lat === null) Object.assign(st, { address: x.address, pin_status: 'looking', looking_since: Date.now() });
+        else if (x.address && !st.address) st.address = x.address;
+        st.branch_code ??= x.branchCode; st.phone ??= x.phone; st.email ??= x.email;
+        r.sitesUpdated++;
+      } else {
+        this.o.stores.push({ id: `store-${Date.now()}-${r.sitesNew}`, client: x.client, name: x.store, address: x.address, lat: x.lat, lng: x.lng, geofence_m: 150,
+          branch_code: x.branchCode, phone: x.phone, email: x.email, pin_status: x.lat !== null ? 'ok' : 'looking', pin_source: x.lat !== null ? 'import' : 'none',
+          pin_note: x.lat !== null ? 'From the imported file' : null, looking_since: Date.now() });
+        r.sitesNew++;
+      }
+      if (x.lat !== null) r.pinnedFromFile++;
+    }
+    r.toFind = this.o.stores.filter(s => s.pin_status === 'looking').length;
+    return r;
   }
 
   store(id: string) { return this.o.stores.find(s => s.id === id); }

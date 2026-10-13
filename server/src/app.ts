@@ -31,6 +31,7 @@ import { registerReportRoutes } from './routes/reports.ts';
 import { registerRepairRoutes } from './routes/repairs.ts';
 import { registerToolStoreRoutes } from './routes/toolStore.ts';
 import { registerBreakdownRoutes, type IntakeOptions } from './routes/breakdowns.ts';
+import { registerCustomerImportRoutes } from './routes/customers.ts';
 import { breakdownReaderFromEnv } from './breakdownReader.ts';
 
 /** db must connect as the app's own database role (no superuser, no row-level-security bypass). */
@@ -55,6 +56,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerTerminationRoutes(app);
   registerPeopleRoutes(app);
   registerLoginRoutes(app);
+  registerCustomerImportRoutes(app);
   registerBreakdownRoutes(app, db, { reader: breakdownReaderFromEnv(), ...opts.intake });
   registerStaffRoutes(app);
   registerDepartmentRoutes(app);

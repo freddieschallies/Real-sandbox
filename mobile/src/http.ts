@@ -14,9 +14,9 @@ export class HttpTransport implements Transport {
       for (const [k, v] of Object.entries(req.upload.fields)) form.append(k, v);
       if (Platform.OS === 'web') {
         const blob = await (await fetch(req.upload.fileUri)).blob();
-        form.append('file', blob, 'photo');
+        form.append('file', blob, req.upload.name ?? 'photo');
       } else {
-        form.append('file', { uri: req.upload.fileUri, name: 'photo', type: req.upload.mime } as any);
+        form.append('file', { uri: req.upload.fileUri, name: req.upload.name ?? 'photo', type: req.upload.mime } as any);
       }
       body = form;
     } else if (req.json !== undefined) {

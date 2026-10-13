@@ -19,6 +19,9 @@ import { createCompany } from '../src/routes/platform.ts';
 import { escalate, pollInboxes } from '../src/intake.ts';
 import { rulesReader } from '../src/breakdownReader.ts';
 import { callCentreMail, fakeImap, type FakeInbox } from './fakeImap.ts';
+import { locateStores } from '../src/storePins.ts';
+import type { Geocoder } from '../src/geocoder.ts';
+import { xlsx } from './xlsx.ts';
 
 const ADMIN_URL = process.env.TEST_DATABASE_ADMIN_URL ?? 'postgres://postgres@localhost:5433/postgres?host=/tmp';
 const TEST_DB = 'realsandbox_test';
@@ -2197,4 +2200,82 @@ test('breakdowns: Gmail inbox and the WhatsApp group feed one queue; one tap log
   assert.ok(set.settings.ignore_senders.includes('accounts@supplier.test'));
   assert.equal((await call('creator', 'PUT', '/breakdowns/settings', { postNew: true, postLogged: true, postOnSite: true, postDone: true, escalateAfterMin: 20, ignoreSenders: [] })).status, 200);
   assert.equal((await call('admin', 'GET', '/breakdowns/settings')).status, 403);
+});
+
+test('customers from a spreadsheet: columns guessed and checked, sites found on the map, a pin checked or set by hand', async () => {
+  const send = async (who: string, name: string, data: Buffer) => {
+    const boundary = '----rsimport';
+    const body = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: application/octet-stream\r\n\r\n`), data, Buffer.from(`\r\n--${boundary}--\r\n`)]);
+    const r = await app.inject({ method: 'POST', url: '/office/customers/import', payload: body, headers: { authorization: `Bearer ${tokens[who]}`, 'content-type': `multipart/form-data; boundary=${boundary}` } });
+    return { status: r.statusCode, body: r.json() };
+  };
+  const file = xlsx([
+    ['Customer export'],
+    ['Account Code', 'Customer', 'Site Name', 'Physical Address', 'Suburb', 'Town', 'Tel'],
+    ['A100', 'Harbour Grill', 'Harbour Grill Alton', '5 Demo Street', 'Alton', 'Richards Bay', '035 555 0000'],
+    ['A100', 'Harbour Grill', 'Harbour Grill Empangeni', '9 Test Avenue', '', 'Empangeni', ''],
+    ['A200', 'FreshMart', 'FreshMart Meerensee', 'Meerensee Mall', 'Meerensee', 'Richards Bay', ''],
+    ['A300', 'Nowhere Deli', 'Nowhere Deli', '', '', '', ''],
+  ]);
+  assert.equal((await send('tech', 'c.xlsx', file)).status, 403);
+  const up = await send('admin', 'customers.xlsx', file);
+  assert.equal(up.status, 200, JSON.stringify(up.body));
+  assert.equal(up.body.rows, 4);
+  assert.deepEqual(up.body.guess, { accountCode: 0, store: 2, client: 1, address: 3, suburb: 4, city: 5, phone: 6 });
+  const mapping = up.body.guess;
+  assert.equal((await call('admin', 'POST', `/office/customers/import/${up.body.id}/preview`, { mapping: { store: 2 } })).status, 400, 'the customer column is needed');
+  const pre = (await call('admin', 'POST', `/office/customers/import/${up.body.id}/preview`, { mapping })).body;
+  assert.deepEqual([pre.customers, pre.newCustomers, pre.sites, pre.newSites, pre.withAddress], [3, 2, 4, 3, 3], 'FreshMart Meerensee is already a store');
+  const done = await call('admin', 'POST', `/office/customers/import/${up.body.id}/apply`, { mapping });
+  assert.equal(done.status, 200, JSON.stringify(done.body));
+  assert.deepEqual([done.body.customersNew, done.body.customersUpdated, done.body.sitesNew, done.body.sitesUpdated], [2, 1, 3, 1]);
+  assert.equal((await call('admin', 'POST', `/office/customers/import/${up.body.id}/apply`, { mapping })).status, 409, 'once');
+  const stores = async () => (await call('admin', 'GET', '/office/stores')).body as { id: string; name: string; lat: number | null; pin_status: string; pin_source: string; pin_note: string | null; address: string | null }[];
+  const named = async (n: string) => (await stores()).find(x => x.name === n)!;
+  assert.equal((await named('Harbour Grill Alton')).pin_status, 'looking');
+  assert.equal((await named('FreshMart Meerensee')).pin_status, 'ok', 'a known store pinned by hand keeps its pin (its address is filled in)');
+  assert.equal((await named('FreshMart Meerensee')).address, 'Meerensee Mall, Meerensee, Richards Bay');
+
+  // The map: the Alton address is found exactly; Empangeni only by the town; the deli nowhere.
+  const asked: string[] = [];
+  const fake: Geocoder = async q => {
+    asked.push(q);
+    if (q.startsWith('5 Demo Street')) return { lat: -28.7395, lng: 32.0201, precision: 'exact', label: '5 Demo Street, Alton' };
+    if (q.startsWith('Meerensee Mall')) return { lat: -28.7743, lng: 32.0789, precision: 'exact', label: 'Meerensee Mall' };
+    if (q === 'Empangeni, South Africa') return { lat: -28.7621, lng: 31.8932, precision: 'area', label: 'Empangeni' };
+    return null;
+  };
+  await locateStores(appDb, fake);
+  const alton = await named('Harbour Grill Alton');
+  assert.deepEqual([alton.pin_status, alton.pin_source, alton.lat], ['ok', 'lookup', -28.7395]);
+  const emp = await named('Harbour Grill Empangeni');
+  assert.equal(emp.pin_status, 'check', 'only the town: check the pin');
+  assert.match(emp.pin_note!, /check the pin/);
+  const deli = await named('Nowhere Deli');
+  assert.equal(deli.pin_status, 'not_found');
+  assert.equal(deli.lat, null);
+
+  // The office: "that pin is right", and a pin set by hand.
+  assert.equal((await call('admin', 'POST', `/office/stores/${emp.id}/pin`, { action: 'confirm' })).body.pin_status, 'ok');
+  assert.equal((await call('admin', 'POST', `/office/stores/${deli.id}/pin`, { action: 'confirm' })).status, 409);
+  assert.equal((await call('admin', 'PUT', `/office/stores/${deli.id}`, { lat: 10, lng: 10 })).status, 400, 'not in South Africa');
+
+  // A store without a pin still works: the technician's Arrived pins it, for the office to check.
+  const job = await call('admin', 'POST', '/jobs', { jobType: 'breakdown', storeId: deli.id, faultReported: 'Fridge warm', scheduledDate: '2026-10-13', leadTechnicianId: ids.tech });
+  assert.equal(job.status, 201, JSON.stringify(job.body));
+  assert.equal((await call('tech', 'POST', `/jobs/${job.body.id}/go`, { at: '2026-10-13T09:00:00+02:00' })).status, 200);
+  const arr = await call('tech', 'POST', `/jobs/${job.body.id}/arrive`, { at: '2026-10-13T09:30:00+02:00', position: { lat: -28.8, lng: 32.0 }, managerName: 'Jane', safety: SAFE });
+  assert.equal(arr.status, 200, JSON.stringify(arr.body));
+  const pinned = await named('Nowhere Deli');
+  assert.deepEqual([pinned.pin_status, pinned.pin_source, pinned.lat], ['check', 'arrival', -28.8]);
+  assert.match(pinned.pin_note!, /pressed Arrived/);
+  assert.equal((await call('admin', 'PUT', `/office/stores/${deli.id}`, { lat: -28.801, lng: 32.001 })).body.pin_status, 'ok', 'pinned by hand');
+  // A new address on a store pinned by hand keeps the hand pin; a looked-up one is looked up again.
+  assert.equal((await call('admin', 'PUT', `/office/stores/${deli.id}`, { address: '1 Other Road, Alton' })).body.pin_status, 'ok');
+  assert.equal((await call('admin', 'PUT', `/office/stores/${alton.id}`, { address: '7 Demo Street, Alton, Richards Bay' })).body.pin_status, 'looking');
+  // A store added with only its address is found on the map.
+  const add = await call('admin', 'POST', '/office/stores', { client: 'Harbour Grill', name: 'Harbour Grill Waterfront', address: 'Meerensee Mall, Richards Bay' });
+  assert.equal(add.status, 201);
+  assert.equal(add.body.pinStatus, 'looking');
+  assert.equal((await call('admin', 'POST', '/office/stores', { client: 'Harbour Grill', name: 'Harbour Grill Nothing' })).status, 400, 'an address or a pin');
 });
