@@ -209,6 +209,54 @@ test('close-out: signature, or manager unavailable with reason and name (flagged
   assert.equal(J.addItem(closed, { ...closed.items[0], id: 'late' }).ok, false, 'closed card is locked');
 });
 
+test('workshop repairs: uplift needs a reason, photo and signature; the workshop visit is checked against its location; delivery before close', () => {
+  const ws = { lat: atStore.lat + 0.02, lng: atStore.lng, geofenceM: 150 };
+  const T = (h: number) => `2026-10-12T${String(h).padStart(2, '0')}:00:00Z`;
+  let c: J.JobCard = { ...newCard(), workshop: ws };
+  assert.equal(J.startAtWorkshop(c, { at: T(6), position: ws, safety: { areaSafe: true, isolated: true } }).ok, false, 'machine is on site');
+  c = must(J.go(c, T(7)));
+  c = must(J.arrive(c, { at: T(8), vehiclePosition: atStore, managerName: 'Sipho', safety }));
+  assert.equal(J.uplift(c, { at: T(8), reason: 'Needs stripping in the workshop properly', photos: 1, managerName: 'Sipho', signed: true }).ok, false, 'start first');
+  c = must(J.start(c, T(8)));
+  const bad = J.uplift(c, { at: T(9), reason: 'broken', photos: 0, managerName: '', signed: false });
+  assert.ok(!bad.ok && bad.reasons.length === 4);
+  c = must(J.loanOut(c, { photos: 1, managerName: 'Sipho', signed: true }));
+  const up = J.uplift(c, { at: T(9), reason: 'Compressor needs stripping in the workshop', photos: 1, managerName: 'Sipho', signed: true });
+  assert.ok(up.ok && up.flags?.includes('uplifted'));
+  c = must(up);
+  assert.equal(J.machineAt(c), 'workshop'); assert.equal(c.status, 'continue_later'); assert.equal(c.visits.at(-1)!.state, 'uplifted');
+  // Workshop visit: location checked, two safety ticks, no store manager.
+  const far = J.startAtWorkshop(c, { at: T(10), position: atStore, safety: { areaSafe: true, isolated: true } });
+  assert.ok(!far.ok && /not at the workshop/.test(far.reasons[0]));
+  c = must(J.startAtWorkshop(c, { at: T(10), position: ws, safety: { areaSafe: true, isolated: true } }));
+  assert.equal(c.visits.at(-1)!.place, 'workshop'); assert.equal(c.visits.at(-1)!.state, 'arrived');
+  c = must(J.start(c, T(10)));
+  assert.equal(J.loanBack(c, { photos: 1 }).ok, false, 'loan machines are collected on site');
+  c = must(J.updateItem(c, 'i1', finishedItem));
+  const wd = J.done(c, T(12));
+  assert.ok(wd.ok && wd.flags?.includes('ready_for_delivery'));
+  c = must(wd);
+  assert.equal(c.status, 'continue_later', 'waits for delivery');
+  assert.equal(J.close(c, { signature: true, managerName: 'Sipho' }, T(12)).ok, false, 'not while the machine is in the workshop');
+  // Delivery visit.
+  c = must(J.go(c, T(13)));
+  c = must(J.arrive(c, { at: T(13), vehiclePosition: atStore, managerName: 'Sipho', safety }));
+  c = must(J.start(c, T(13)));
+  assert.equal(J.done(c, T(13)).ok, false, 'machine still in the workshop');
+  assert.equal(J.deliver(c, { photos: 0, receivedBy: '' }).ok, false);
+  c = must(J.deliver(c, { photos: 1, receivedBy: 'Sipho' }));
+  assert.equal(J.machineAt(c), 'site');
+  const d1 = J.done(c, T(14));
+  assert.ok(!d1.ok && /loan machine/.test(d1.reasons[0]), 'collect the loan machine first');
+  c = must(J.loanBack(c, { photos: 1 }));
+  c = must(J.done(c, T(14)));
+  assert.ok(J.close(c, { signature: true, managerName: 'Sipho' }, T(14)).ok);
+  // Workshop repair: starts in the workshop; the workshop must be set.
+  assert.equal(J.machineAt(newCard('workshop_repair')), 'workshop');
+  const nows = J.startAtWorkshop(newCard('workshop_repair'), { at: T(8), position: ws, safety: { areaSafe: true, isolated: true } });
+  assert.ok(!nows.ok && /not set where the workshop is/.test(nows.reasons[0]));
+});
+
 test('planned maintenance needs its checklist', () => {
   let c = must(J.go(newCard('planned_maintenance'), '2026-10-12T07:30:00Z'));
   c = must(J.arrive(c, { at: '2026-10-12T08:00:00Z', vehiclePosition: atStore, managerName: 'Sipho', safety }));

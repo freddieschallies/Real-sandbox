@@ -23,7 +23,7 @@ export async function loadCard(c: Q, jobId: string, forUpdate = false): Promise<
   if (!r) return null;
 
   const v = await c.query(
-    `SELECT id, state, go_at, arrived_at, checked_in_manager, safety_check, started_at, ended_at
+    `SELECT id, state, place, go_at, arrived_at, checked_in_manager, safety_check, started_at, ended_at
        FROM job_visits WHERE job_id = $1 ORDER BY go_at`,
     [jobId],
   );
@@ -36,6 +36,7 @@ export async function loadCard(c: Q, jobId: string, forUpdate = false): Promise<
   const iso = (d: Date | null) => (d ? d.toISOString() : undefined);
   const visits: Visit[] = v.rows.map(x => ({
     state: x.state,
+    ...(x.place === 'workshop' ? { place: 'workshop' as const } : {}),
     goAt: iso(x.go_at),
     arrivedAt: iso(x.arrived_at),
     checkedInManager: x.checked_in_manager ?? undefined,
@@ -78,6 +79,18 @@ export async function loadCard(c: Q, jobId: string, forUpdate = false): Promise<
     [jobId],
   );
 
+  // Where the machine is, and loan machines out, from its moves.
+  const moves = await c.query('SELECT kind FROM machine_moves WHERE job_id = $1 ORDER BY at, created_at', [jobId]);
+  let machineAt: JobCard['machineAt'];
+  let loansOut = 0;
+  for (const m of moves.rows) {
+    if (m.kind === 'uplifted') machineAt = 'workshop';
+    else if (m.kind === 'delivered') machineAt = 'site';
+    else if (m.kind === 'loan_out') loansOut++;
+    else if (m.kind === 'loan_back') loansOut--;
+  }
+  const ws = (await c.query('SELECT lat, lng, geofence_m FROM company_workshop')).rows[0];
+
   const card: JobCard = {
     jobType: r.job_type,
     status: r.status,
@@ -86,6 +99,9 @@ export async function loadCard(c: Q, jobId: string, forUpdate = false): Promise<
     visits,
     maintenanceChecklistDone: chk.rows[0].n > 0 && chk.rows[0].n === chk.rows[0].d,
     closedAt: iso(r.closed_at),
+    workshop: ws ? { lat: ws.lat, lng: ws.lng, geofenceM: ws.geofence_m } : null,
+    ...(machineAt ? { machineAt } : {}),
+    loansOut,
   };
   return { row: r, card, visitIds: v.rows.map(x => x.id) };
 }

@@ -76,6 +76,13 @@ export interface CardView {
   /** His department asks for the parts report when another quote is needed; the reports already made. */
   parts_report_required?: boolean;
   parts_reports?: { id: string; report_number: number; created_at: string; part_description: string; visit_id: string | null; quote_number: number | null; created_by: string }[];
+  /** Workshop repairs: where the machine is, loan machines out on this job, every move, our workshop. */
+  machine_at?: 'site' | 'workshop';
+  loans_out?: number;
+  loans_out_list?: { id: string; name: string; serial: string | null; since: string }[];
+  moves?: MachineMove[];
+  workshop?: Workshop | null;
+  ready_to_deliver?: boolean;
 }
 
 export interface StockLine { id: string; code: string; description: string; unit: string; qty: number }
@@ -136,4 +143,15 @@ export interface StockRequest {
   id: string; technician_id?: string; technician?: string; job_id: string | null; job_number: number | null; store: string | null;
   status: 'pending' | 'issued' | 'rejected'; requested_at: string; decided_at: string | null; note: string | null; decided_by?: string | null;
   lines: { lineId: string; stockItemId: string; code: string; description: string; unit: string; qtyRequested: number; qtyIssued: number | null; inStockroom: number }[];
+}
+
+export interface Workshop { name: string; address: string | null; lat: number; lng: number; geofence_m: number }
+export interface MachineMove {
+  id: string; kind: 'uplifted' | 'delivered' | 'loan_out' | 'loan_back'; place: 'site' | 'workshop'; at: string; note: string | null;
+  person_name: string | null; photo_ids: string[]; signature_photo_id: string | null; loan_machine_id: string | null;
+  loan_machine: string | null; loan_serial: string | null; by_name: string;
+}
+export interface LoanMachine {
+  id: string; name: string; serial: string | null; asset_number: string | null; notes: string | null; active: boolean; out: boolean;
+  job_id?: string; job_number?: number; store?: string; since?: string; by_name?: string;
 }

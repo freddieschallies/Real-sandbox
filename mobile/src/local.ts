@@ -11,6 +11,9 @@ export function toCore(v: CardView): J.JobCard {
     items: v.items.map(({ status: _s, missing: _m, ...it }) => it),
     visits: v.visits,
     maintenanceChecklistDone: v.checklist.length > 0 && v.checklist.every(c => c.done),
+    workshop: v.workshop ? { lat: v.workshop.lat, lng: v.workshop.lng, geofenceM: v.workshop.geofence_m } : null,
+    ...(v.machine_at ? { machineAt: v.machine_at } : {}),
+    loansOut: v.loans_out ?? 0,
   };
 }
 
@@ -23,6 +26,9 @@ export function fromCore(v: CardView, c: J.JobCard): CardView {
     currentState: c.visits.at(-1)?.state ?? 'not_started',
     jobMinutes: J.jobMinutes(c),
     items: c.items.map(it => ({ ...it, status: J.itemStatus(it, c.jobType), missing: J.missingOnItem(it, c.jobType) })),
+    machine_at: J.machineAt(c),
+    loans_out: c.loansOut ?? 0,
+    ready_to_deliver: J.machineAt(c) === 'workshop' && c.visits.at(-1)?.place === 'workshop' && c.visits.at(-1)?.state === 'done',
   };
 }
 

@@ -1,4 +1,5 @@
 import { PartsReportScreen, ReportScreen } from './src/reports/PartsReport.tsx';
+import { DeliverScreen, LoanScreen, UpliftScreen } from './src/screens/Workshop.tsx';
 import { ThemeRoot } from './src/appearance.tsx';
 import { themeNow } from './src/theme.ts';
 import { MyQuotesScreen, TechQuoteScreen } from './src/screens/TechQuotes.tsx';
@@ -59,6 +60,9 @@ function Current() {
     case 'timesheets': return <MyTimesheetsScreen />;
     case 'quotes': return <MyQuotesScreen />;
     case 'partsReport': return <PartsReportScreen jobId={route.jobId} />;
+    case 'uplift': return <UpliftScreen jobId={route.jobId} />;
+    case 'loan': return <LoanScreen key={route.mode} jobId={route.jobId} mode={route.mode} />;
+    case 'deliver': return <DeliverScreen jobId={route.jobId} />;
     case 'report': return <ReportScreen id={route.id} />;
     case 'quote': return <TechQuoteScreen key={route.jobId ?? 'new'} jobId={route.jobId} />;
   }

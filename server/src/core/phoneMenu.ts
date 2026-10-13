@@ -13,7 +13,7 @@ export const MENU_TABS: Record<MenuApp, { key: string; label: string }[]> = {
     { key: 'timesheets', label: 'Timesheets' }, { key: 'flags', label: 'Flags' }, { key: 'people', label: 'People' },
     { key: 'map', label: 'Team map' }, { key: 'vans', label: 'Van stock' }, { key: 'queries', label: 'Queries' },
     { key: 'quotes', label: 'Quotes' }, { key: 'invoices', label: 'Invoices' }, { key: 'accounts', label: 'Accounts' },
-    { key: 'handovers', label: 'Handovers' }, { key: 'stores', label: 'Stores' }, { key: 'settings', label: 'Settings' },
+    { key: 'handovers', label: 'Handovers' }, { key: 'repairs', label: 'Workshop' }, { key: 'stores', label: 'Stores' }, { key: 'settings', label: 'Settings' },
   ],
   stockroom: [
     { key: 'issue', label: 'To issue' }, { key: 'receive', label: 'To receive' }, { key: 'room', label: 'Stock' },
@@ -42,7 +42,7 @@ export function officeTabKeys(level: string, work: Partial<Record<WorkArea, bool
     quotes: does('documents'), invoices: does('documents'), accounts: does('documents'),
     flags: does('flags'), handovers: does('flags'), map: does('flags') || level === 'management',
     vans: does('vanstock'), departments: does('hr'), timesheets: does('hr') || level === 'management',
-    people: opts.people, stores: jobsSide, settings: opts.settings,
+    people: opts.people, repairs: jobsSide, stores: jobsSide, settings: opts.settings,
   };
   return MENU_TABS.office.map(t => t.key).filter(k => on[k]);
 }

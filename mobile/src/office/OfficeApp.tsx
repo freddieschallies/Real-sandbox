@@ -6,6 +6,8 @@ import { usePhoneMenu } from '../menu.tsx';
 import { ModeToggle, ThemeSettings } from '../appearance.tsx';
 import { LetterheadSettings, useLetterhead } from '../letterhead.tsx';
 import { JobReports, PartsReportView } from '../reports/PartsReport.tsx';
+import { WorkshopBoard } from './WorkshopBoard.tsx';
+import { MachineMoves } from '../screens/Workshop.tsx';
 import { useBrand } from '../brand.tsx';
 import { PhoneMenus } from '../menus/PhoneMenus.tsx';
 import { MENU_TABS, officeTabKeys } from '../../../server/src/core/phoneMenu.ts';
@@ -30,13 +32,13 @@ import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
-type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'stores' | 'settings';
+type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'settings';
 type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
   cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
 };
-const TYPE: Record<string, string> = { breakdown: 'Breakdown', planned_maintenance: 'Planned maintenance', installation: 'Installation', quote_visit: 'Quote visit', follow_up: 'Follow-up' };
+const TYPE: Record<string, string> = { breakdown: 'Breakdown', planned_maintenance: 'Planned maintenance', installation: 'Installation', quote_visit: 'Quote visit', follow_up: 'Follow-up', workshop_repair: 'Workshop repair' };
 const ymd = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
 const day = (s: string) => {
   const t = ymd(new Date());
@@ -91,6 +93,7 @@ export function OfficeApp() {
     { key: 'departments', label: 'Departments', short: 'Depts' },
     { key: 'timesheets', label: 'Timesheets', short: 'Timesheet' },
     { key: 'people', label: 'People' },
+    { key: 'repairs', label: 'Workshop', count: o.d.jobs.filter(j => j.ready_to_deliver && j.status !== 'closed' && j.status !== 'cancelled').length || undefined },
     { key: 'stores', label: 'Stores' },
     { key: 'settings', label: 'Settings' },
   ];
@@ -124,6 +127,7 @@ export function OfficeApp() {
       {tab === 'departments' ? <DepartmentsBoard openPerson={canPeople ? id => go('people', { kind: 'person', id }) : undefined} /> : null}
       {tab === 'vans' ? <VanLists openTech={id => setSel({ kind: 'van', id })} /> : null}
       {tab === 'people' ? <PeopleList key={`people-${sel?.kind === 'leaver' ? sel.id : ''}`} o={o} open={id => setSel({ kind: 'person', id })} openLeaver={id => setSel({ kind: 'leaver', id })} /> : null}
+      {tab === 'repairs' ? <WorkshopBoard o={o} openJob={id => go('jobs', { kind: 'job', id })} /> : null}
       {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
       {tab === 'settings' ? <><ThemeSettings /><LetterheadSettings />{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
@@ -259,7 +263,7 @@ function TodayView({ o, go, flags }: { o: OfficeHook; go: (t: Tab, x?: Sel) => v
 
 // ---- Jobs ---------------------------------------------------------------------------------------
 
-const FILTERS = ['open', 'today', 'carried', 'closed', 'all'] as const;
+const FILTERS = ['open', 'today', 'carried', 'workshop', 'closed', 'all'] as const;
 const BILLING = ['any', 'not_invoiced', 'invoiced', 'credited'] as const;
 function JobList({ o, open, add, selected }: { o: OfficeHook; open: (id: string) => void; add?: () => void; selected: string | null }) {
   const [f, setF] = useState<(typeof FILTERS)[number]>('open');
@@ -271,7 +275,8 @@ function JobList({ o, open, add, selected }: { o: OfficeHook; open: (id: string)
   const shut = (st: string) => st === 'closed' || st === 'cancelled';
   const techs = [...new Set(o.d.jobs.map(j => j.lead_technician))].sort();
   const jobs = o.d.jobs
-    .filter(j => f === 'all' || (f === 'closed' ? shut(j.status) : !shut(j.status)) && (f !== 'today' || j.scheduled_date === t) && (f !== 'carried' || j.scheduled_date < t))
+    .filter(j => f === 'all' || (f === 'closed' ? shut(j.status) : !shut(j.status)) && (f !== 'today' || j.scheduled_date === t) && (f !== 'carried' || j.scheduled_date < t)
+      && (f !== 'workshop' || j.machine_at === 'workshop' || (j.loans_out ?? 0) > 0))
     // Billing: not invoiced means a closed job with no invoice sent yet (a draft counts as not sent).
     .filter(j => bill === 'any' || (bill === 'credited' ? j.billing === 'credited' : bill === 'invoiced' ? j.billing === 'invoiced' || j.billing === 'credited'
       : j.status === 'closed' && (j.billing === 'not_invoiced' || j.billing === 'draft_invoice')))
@@ -283,7 +288,7 @@ function JobList({ o, open, add, selected }: { o: OfficeHook; open: (id: string)
   return (
     <>
       {add ? <Button label="New job" onPress={add} /> : null}
-      <Choice options={FILTERS} value={f} onChange={setF} labels={{ open: 'All open', today: 'Today', carried: 'Carried over', closed: 'Closed / cancelled', all: 'All jobs' }} />
+      <Choice options={FILTERS} value={f} onChange={setF} labels={{ open: 'All open', today: 'Today', carried: 'Carried over', workshop: 'Workshop & loans', closed: 'Closed / cancelled', all: 'All jobs' }} />
       <Label>Invoicing</Label>
       <Choice options={BILLING} value={bill} onChange={v => { setBill(v); if (v !== 'any' && f !== 'closed') setF('all'); }}
         labels={{ any: 'Any', not_invoiced: 'Not invoiced', invoiced: 'Invoiced', credited: 'Credited' }} />
@@ -316,8 +321,15 @@ function JobRow({ j, on, onPress }: { j: OfficeJob; on: boolean; onPress: () => 
         {j.billing === 'credited' ? <Pill text={`Credited${j.invoice_number ? ` · INV ${j.invoice_number}` : ''}`} tone="bad" />
           : j.billing === 'invoiced' ? <Pill text={`Invoiced · INV ${j.invoice_number}`} tone="good" />
           : j.status === 'closed' ? <Pill text={j.billing === 'draft_invoice' ? 'Draft invoice' : 'Not invoiced'} tone="warn" /> : null}
-        <Pill text={STATUS[j.status]?.text ?? j.status} tone={STATUS[j.status]?.tone ?? 'quiet'} />
+        {j.status === 'continue_later' && j.machine_at === 'workshop' ? <Pill text={j.ready_to_deliver ? 'Ready to deliver' : 'In the workshop'} tone={j.ready_to_deliver ? 'good' : 'warn'} />
+          : <Pill text={STATUS[j.status]?.text ?? j.status} tone={STATUS[j.status]?.tone ?? 'quiet'} />}
       </View>
+      {j.status !== 'closed' && j.status !== 'cancelled' && ((j.machine_at === 'workshop' && j.status !== 'continue_later') || (j.loans_out ?? 0) > 0) ? (
+        <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+          {j.machine_at === 'workshop' && j.status !== 'continue_later' ? <Pill text="Machine in the workshop" tone="warn" /> : null}
+          {(j.loans_out ?? 0) > 0 ? <Pill text="Loan machine out" tone="info" /> : null}
+        </View>
+      ) : null}
       <Body numberOfLines={2}>{j.fault_reported}</Body>
       <Text style={[st.small, late ? { color: C.warn } : null]}>{TYPE[j.job_type] ?? j.job_type}{j.priority === 'urgent' ? ' · URGENT' : ''} · {day(j.scheduled_date)}{late ? ' (carried over)' : ''} · {j.lead_technician}</Text>
     </Card>
@@ -383,10 +395,11 @@ function NewJob({ o, done }: { o: OfficeHook; done: (id?: string) => void }) {
         </>
       )}
       <Label>Type</Label>
-      <Choice options={['breakdown', 'planned_maintenance', 'installation', 'quote_visit', 'follow_up'] as const} value={type} onChange={setType} labels={TYPE} />
+      <Choice options={['breakdown', 'planned_maintenance', 'installation', 'quote_visit', 'follow_up', 'workshop_repair'] as const} value={type} onChange={setType} labels={TYPE} />
       <Label>Priority</Label>
       <Choice options={['urgent', 'normal', 'scheduled'] as const} value={priority} onChange={setPriority} labels={{ urgent: 'Urgent', normal: 'Normal', scheduled: 'Scheduled' }} />
       <Field label="Fault reported by the client" value={fault} onChangeText={setFault} multiline placeholder="e.g. Ice machine not dispensing, bakery" />
+      {type === 'workshop_repair' ? <Notice tone="info" title="The machine is already in our workshop" lines={['Brought in by the client. The technician starts in the workshop, and it goes back by delivery or the client fetches it.', 'For a machine still on site, open a breakdown: the technician uplifts it from there.']} /> : null}
       {type === 'planned_maintenance' ? <Field label="Checklist steps (one per line)" value={steps} onChangeText={setSteps} multiline placeholder={'1. Descale steam generator\n2. Check door seals'} /> : null}
       <Field label="Client order number (optional)" value={ref} onChangeText={setRef} autoCapitalize="characters" />
       <Label>Day</Label>
@@ -466,10 +479,11 @@ function JobDetail({ id, o, canEdit, openReport }: { id: string; o: OfficeHook; 
       {panel === 'cancel' ? <CancelJob j={j} o={o} done={() => setPanel('none')} /> : null}
       {j.status === 'cancelled' ? <Notice tone="warn" title="Cancelled" lines={[hist.find(h => h.field === 'status')?.reason ?? 'Cancelled by the office.']} /> : null}
 
-      <Heading>On site</Heading>
+      {c ? <MachineMoves v={c} /> : null}
+      <Heading>Visits</Heading>
       {c?.visits.length ? c.visits.map((x, i) => (
         <Card key={i}>
-          <Text style={[st.body, { fontWeight: '700' }]}>Visit {i + 1}{x.state === 'continue_later' ? ' · continue later' : ''}</Text>
+          <Text style={[st.body, { fontWeight: '700' }]}>Visit {i + 1}{x.place === 'workshop' ? ' · in the workshop' : ''}{x.state === 'continue_later' ? ' · continue later' : x.state === 'uplifted' ? ' · machine uplifted' : ''}</Text>
           <Text style={st.small}>
             {x.goAt ? `Left ${when(x.goAt)}` : ''}{x.arrivedAt ? ` · arrived ${when(x.arrivedAt)}` : ''}{x.startedAt ? ` · started ${when(x.startedAt)}` : ''}{x.endedAt ? ` · ended ${when(x.endedAt)}` : ''}
           </Text>
@@ -544,7 +558,7 @@ function EditJob({ j, c, o, started, done }: { j: OfficeJob; c: CardView; o: Off
           {!started ? (
             <>
               <Label>Type</Label>
-              <Choice options={['breakdown', 'planned_maintenance', 'installation', 'quote_visit', 'follow_up'] as const} value={type} onChange={setType} labels={TYPE} />
+              <Choice options={['breakdown', 'planned_maintenance', 'installation', 'quote_visit', 'follow_up', 'workshop_repair'] as const} value={type} onChange={setType} labels={TYPE} />
               <Label>Store</Label>
               <Choice options={o.d.stores.map(x => x.id)} value={storeId} onChange={setStoreId} labels={Object.fromEntries(o.d.stores.map(x => [x.id, x.name]))} />
             </>

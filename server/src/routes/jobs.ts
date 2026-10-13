@@ -7,39 +7,43 @@ import { can } from '../core/permissions.ts';
 import * as J from '../core/jobCard.ts';
 import { isOnJob, loadCard, type JobRow } from '../jobsRepo.ts';
 import { partsReportRequired, reportsOn } from './reports.ts';
+import { repairView } from './repairs.ts';
+import { notify } from './field.ts';
 import { useOnJob } from '../stockRepo.ts';
 import { Iso, Point, Refused, Uuid, DateOnly, parse } from '../http.ts';
 import { readUpload, saveFile, removeFile } from '../uploads.ts';
 
-interface Ctx { c: Q; row: JobRow; card: J.JobCard; visitId?: string; actorId: string }
+export interface Ctx { c: Q; row: JobRow; card: J.JobCard; visitId?: string; actorId: string }
+
+/**
+ * Runs one job card action: lock the card, check the person is on the job, ask the rules engine,
+ * and only if it agrees, write the change. Returns the card as it now stands.
+ */
+export async function actOnJob(
+  req: FastifyRequest<{ Params: { id: string } }>,
+  rule: (card: J.JobCard) => J.Result,
+  persist: (ctx: Ctx, result: Extract<J.Result, { ok: true }>) => Promise<void>,
+) {
+  const jobId = parse(Uuid, req.params.id);
+  await tx(req.db, async c => {
+    const loaded = await loadCard(c, jobId, true);
+    if (!loaded) throw new Refused(404, ['no such job']);
+    if ((loaded.row as { status?: string }).status === 'cancelled') throw new Refused(409, ['the office cancelled this job']);
+    if (!(await isOnJob(c, jobId, req.actor.id))) throw new Refused(403, ['you are not assigned to this job']);
+    const result = rule(loaded.card);
+    if (!result.ok) throw new Refused(409, result.reasons);
+    await persist({ c, row: loaded.row, card: loaded.card, visitId: loaded.visitIds.at(-1), actorId: req.actor.id }, result);
+  });
+  return cardView(req.db, jobId);
+}
 
 export function registerJobRoutes(app: FastifyInstance, db: Db) {
-  /**
-   * Runs one job card action: lock the card, check the person is on the job, ask the rules engine,
-   * and only if it agrees, write the change. Returns the card as it now stands.
-   */
-  async function act(
-    req: FastifyRequest<{ Params: { id: string } }>,
-    rule: (card: J.JobCard) => J.Result,
-    persist: (ctx: Ctx, result: Extract<J.Result, { ok: true }>) => Promise<void>,
-  ) {
-    const jobId = parse(Uuid, req.params.id);
-    await tx(req.db, async c => {
-      const loaded = await loadCard(c, jobId, true);
-      if (!loaded) throw new Refused(404, ['no such job']);
-      if ((loaded.row as { status?: string }).status === 'cancelled') throw new Refused(409, ['the office cancelled this job']);
-      if (!(await isOnJob(c, jobId, req.actor.id))) throw new Refused(403, ['you are not assigned to this job']);
-      const result = rule(loaded.card);
-      if (!result.ok) throw new Refused(409, result.reasons);
-      await persist({ c, row: loaded.row, card: loaded.card, visitId: loaded.visitIds.at(-1), actorId: req.actor.id }, result);
-    });
-    return cardView(req.db, jobId);
-  }
+  const act = actOnJob;
 
   // ---- Create, list, view ------------------------------------------------
 
   const NewJob = z.object({
-    jobType: z.enum(['breakdown', 'planned_maintenance', 'installation', 'quote_visit', 'follow_up']),
+    jobType: z.enum(['breakdown', 'planned_maintenance', 'installation', 'quote_visit', 'follow_up', 'workshop_repair']),
     priority: z.enum(['urgent', 'normal', 'scheduled']).default('normal'),
     storeId: Uuid,
     clientOrderRef: z.string().max(100).optional(),
@@ -87,7 +91,11 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
               s.name AS store, u.full_name AS lead_technician, j.lead_technician_id,
               -- Billing, for the office's filters: its invoice (not cancelled) and anything credited.
               inv.invoice_number, inv.status::text AS invoice_status,
-              (SELECT coalesce(sum(cn.amount_cents), 0)::bigint FROM credit_notes cn WHERE cn.job_id = j.id) AS credited_cents
+              (SELECT coalesce(sum(cn.amount_cents), 0)::bigint FROM credit_notes cn WHERE cn.job_id = j.id) AS credited_cents,
+              -- Workshop repairs: the machine's last move, loan machines out, and whether the repair is done.
+              (SELECT m.kind FROM machine_moves m WHERE m.job_id = j.id AND m.kind IN ('uplifted', 'delivered') ORDER BY m.at DESC, m.created_at DESC LIMIT 1) AS last_move,
+              (SELECT count(*) FILTER (WHERE m.kind = 'loan_out') - count(*) FILTER (WHERE m.kind = 'loan_back') FROM machine_moves m WHERE m.job_id = j.id)::int AS loans_out,
+              (SELECT v.place = 'workshop' AND v.state = 'done' FROM job_visits v WHERE v.job_id = j.id ORDER BY v.go_at DESC LIMIT 1) AS last_workshop_done
          FROM jobs j
          LEFT JOIN LATERAL (SELECT i.invoice_number, i.status FROM invoices i WHERE i.job_id = j.id AND i.status <> 'cancelled' ORDER BY i.created_at DESC LIMIT 1) inv ON true JOIN stores s ON s.id = j.store_id JOIN users u ON u.id = j.lead_technician_id
         WHERE ($1::boolean = false OR j.lead_technician_id = $2
@@ -96,7 +104,9 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
         ORDER BY (j.status IN ('closed', 'cancelled')), j.scheduled_date, j.priority, j.job_number`,
       [mine, req.actor.id, q.status ?? null],
     );
-    return rows.map(r => ({ ...r, credited_cents: Number(r.credited_cents),
+    return rows.map(({ last_move, last_workshop_done, ...r }) => ({ ...r, credited_cents: Number(r.credited_cents),
+      machine_at: last_move === 'uplifted' ? 'workshop' : last_move === 'delivered' ? 'site' : r.job_type === 'workshop_repair' ? 'workshop' : 'site',
+      ready_to_deliver: !!last_workshop_done && last_move !== 'delivered' && (last_move === 'uplifted' || r.job_type === 'workshop_repair'),
       billing: Number(r.credited_cents) > 0 ? 'credited' : r.invoice_status === 'draft' ? 'draft_invoice' : r.invoice_status ? 'invoiced' : 'not_invoiced' }));
   });
 
@@ -312,8 +322,17 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
 
   app.post('/jobs/:id/done', async (req: FastifyRequest<P>) => {
     const b = parse(z.object({ at: Iso }), req.body);
-    return act(req, card => J.done(card, b.at), async ({ c, visitId }) => {
+    return act(req, card => J.done(card, b.at), async ({ c, row, visitId, actorId }, res) => {
       await c.query("UPDATE job_visits SET state = 'done', ended_at = $2 WHERE id = $1", [visitId, b.at]);
+      // Repaired in the workshop: the job waits for the machine to go back (or the loan machine to come in).
+      if (res.card.status === 'continue_later') {
+        await c.query("UPDATE jobs SET status = 'continue_later' WHERE id = $1", [row.id]);
+        const j = (await c.query('SELECT s.name FROM jobs j JOIN stores s ON s.id = j.store_id WHERE j.id = $1', [row.id])).rows[0];
+        const what = res.flags?.includes('ready_for_delivery') ? 'is repaired and ready to go back' : 'is back; the loan machine still has to be collected';
+        for (const o of (await c.query("SELECT id FROM users WHERE login_level IN ('admin', 'management', 'director', 'creator') AND status <> 'left'")).rows) {
+          await notify(c, o.id, 'ready_for_delivery', `Job ${row.job_number} (${j.name}): the machine ${what}.`, { jobId: row.id, by: actorId });
+        }
+      }
     });
   });
 
@@ -400,6 +419,8 @@ export async function cardView(c: Q, jobId: string) {
       // Parts report: whether his department asks for it, and the reports already made on this job.
       parts_report_required: await partsReportRequired(c, jobId),
       parts_reports: await reportsOn(c, jobId),
+      // Workshop repairs: where the machine is, loan machines out, every move, and the workshop itself.
+      ...(await repairView(c, jobId, card)),
     };
   }
 }

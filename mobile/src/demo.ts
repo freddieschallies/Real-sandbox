@@ -16,13 +16,17 @@ import { normReg, registrationCandidates } from '../../server/src/core/vehicleCo
 import { DemoStock, seedStock, type DemoStockState } from './demoStock.ts';
 import { DemoFleet, seedFleet, type DemoFleetState } from './demoFleet.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
-import type { CardView, Flag, StockLine, Today, TodayJob } from './types.ts';
+import type { CardView, Flag, LoanMachine, MachineMove, StockLine, Today, TodayJob, Workshop } from './types.ts';
 
 interface DemoJob {
   meta: Omit<CardView, 'visits' | 'currentState' | 'jobMinutes' | 'items' | 'status'> & { i_am_lead: boolean; lead_id?: string; helper_ids?: string[] };
   card: J.JobCard;
   checklistIds: string[];
+  /** Workshop repairs: the machine's moves on this job. */
+  moves?: MachineMove[];
 }
+
+interface DemoRepairs { workshop: Workshop; loans: Omit<LoanMachine, 'out'>[] }
 
 export interface DemoState {
   acknowledged: boolean;
@@ -53,6 +57,7 @@ export interface DemoState {
   /** People given the mechanic's work on top of their own position (by the CEO). */
   fleetDuty?: Record<string, boolean>;
   workshop?: DemoWorkshopState;
+  repairs?: DemoRepairs;
   office?: DemoOfficeState;
   docs?: DemoDocsState;
   queries?: { id: string; from: string; to: string; job_id: string | null; subject: string; created_at: string; read: Record<string, string>; messages: { id: string; from: string; body: string; at: string }[] }[];
@@ -170,7 +175,139 @@ export class DemoTransport implements Transport {
       items: c.items.map(it => ({ ...it, status: J.itemStatus(it, c.jobType), missing: J.missingOnItem(it, c.jobType) })),
       parts_report_required: this.vans().partsReport(j.meta.lead_id ?? 'me'),
       parts_reports: this.reportsOn(j.meta.id),
+      ...this.repairView(j),
     };
+  }
+
+  // ---- Workshop repairs: the workshop, loan machines, machines uplifted ----------------------
+
+  private repairs(): DemoRepairs {
+    if (!this.state.repairs) {
+      this.state.repairs = {
+        workshop: { name: REAL ? `${REAL.company.name} workshop` : 'ZSP workshop (demo)', address: REAL?.company.address ?? 'Alton, Richards Bay', lat: -28.7466, lng: 32.0383, geofence_m: 150 },
+        loans: [
+          { id: 'loan-1', name: 'Loan ice machine 1 (Scotsman AC 86)', serial: 'LN-IM-01', asset_number: 'L001', notes: null, active: true },
+          { id: 'loan-2', name: 'Loan combi oven (Rational 6-1/1)', serial: 'LN-CO-01', asset_number: 'L002', notes: 'Needs a 3-phase plug', active: true },
+          { id: 'loan-3', name: 'Loan bottle fridge (2-door)', serial: 'LN-BF-01', asset_number: 'L003', notes: null, active: true },
+        ],
+      };
+      const o = this.office();
+      const st = (id: string) => o.store(id) ?? this.state.office!.stores[0];
+      const n0 = Math.max(...this.state.jobs.map(j => j.meta.job_number)) + 1;
+      // A machine uplifted yesterday, with a loan machine at the store, being repaired.
+      const y = new Date(Date.now() - 22 * 3600_000);
+      const iso = (ms: number) => new Date(y.getTime() + ms * 60_000).toISOString();
+      const lifted = officeJob(n0, 'breakdown', 'normal', st('arboretum') as DemoStore, 'Ice machine making very little ice, compressor noisy', { id: 'tech-2', name: o.name('tech-2') }, y.toISOString().slice(0, 10));
+      lifted.card.visits = [{ state: 'uplifted', goAt: iso(0), arrivedAt: iso(20), checkedInManager: 'Store manager', safetyCheck: { areaSafe: true, isolated: true, publicClear: true }, startedAt: iso(25), endedAt: iso(70), pauses: [] }];
+      lifted.card.status = 'continue_later';
+      lifted.card.machineAt = 'workshop';
+      lifted.card.loansOut = 1;
+      lifted.moves = [
+        { id: 'mv-1', kind: 'loan_out', place: 'site', at: iso(60), note: null, person_name: 'Store manager', photo_ids: [], signature_photo_id: null, loan_machine_id: 'loan-1', loan_machine: 'Loan ice machine 1 (Scotsman AC 86)', loan_serial: 'LN-IM-01', by_name: o.name('tech-2') },
+        { id: 'mv-2', kind: 'uplifted', place: 'site', at: iso(68), note: 'Compressor bearings worn, needs to be stripped and rebuilt on the bench in the workshop', person_name: 'Store manager', photo_ids: [], signature_photo_id: null, loan_machine_id: null, loan_machine: null, loan_serial: null, by_name: o.name('tech-2') },
+      ];
+      this.state.jobs.push(lifted);
+      // A machine the client brought in: the technician starts in the workshop.
+      this.state.jobs.push(officeJob(n0 + 1, 'workshop_repair', 'normal', st('meerensee') as DemoStore, 'Microwave brought in by the client: not heating, turntable not turning', { id: 'me', name: 'Thabo Mkhize' }, today()));
+      this.persist(this.state);
+    }
+    return this.state.repairs;
+  }
+
+  /** Each loan machine and where it is now (its last move on any job). */
+  private loanStatus(): LoanMachine[] {
+    const last = new Map<string, { m: MachineMove; j: DemoJob }>();
+    for (const j of this.state.jobs) for (const m of j.moves ?? []) {
+      if (!m.loan_machine_id) continue;
+      const cur = last.get(m.loan_machine_id);
+      if (!cur || cur.m.at <= m.at) last.set(m.loan_machine_id, { m, j });
+    }
+    return this.repairs().loans.map(l => {
+      const x = last.get(l.id);
+      const out = x?.m.kind === 'loan_out';
+      return { ...l, out, ...(out ? { job_id: x!.j.meta.id, job_number: x!.j.meta.job_number, store: x!.j.meta.store, since: x!.m.at, by_name: x!.m.by_name } : {}) };
+    }).sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
+  }
+
+  private repairView(j: DemoJob) {
+    const rp = this.repairs();
+    const c = j.card;
+    const at = J.machineAt(c);
+    const last = c.visits.at(-1);
+    return {
+      machine_at: at,
+      loans_out: c.loansOut ?? 0,
+      loans_out_list: this.loanStatus().filter(l => l.out && l.job_id === j.meta.id).map(l => ({ id: l.id, name: l.name, serial: l.serial, since: l.since! })),
+      moves: j.moves ?? [],
+      workshop: rp.workshop,
+      ready_to_deliver: at === 'workshop' && last?.place === 'workshop' && last.state === 'done',
+    };
+  }
+
+  private repairRoute(p: string, req: Request, b: any): Response | null {
+    let m: RegExpMatchArray | null;
+    const level = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
+    const office = ['admin', 'management', 'director', 'creator'].includes(level);
+    const rp = this.repairs();
+    if (p === '/company/workshop') {
+      if (req.method === 'GET') return ok({ workshop: rp.workshop, canEdit: office });
+      if (!office) return refuse(403, 'only the office keeps the loan machines and the workshop');
+      if (typeof b.lat !== 'number' || typeof b.lng !== 'number') return refuse(400, 'the map position');
+      rp.workshop = { name: (b.name ?? 'Workshop').trim(), address: b.address ?? null, lat: b.lat, lng: b.lng, geofence_m: b.geofenceM ?? 150 };
+      this.persist(this.state);
+      return ok({ workshop: rp.workshop, canEdit: true });
+    }
+    if (p === '/loan-machines') {
+      if (req.method === 'GET') return ok(this.loanStatus());
+      if (!office) return refuse(403, 'only the office keeps the loan machines and the workshop');
+      if (!b.name || b.name.trim().length < 2) return refuse(400, 'a name');
+      const l = { id: id('loan'), name: b.name.trim(), serial: b.serial ?? null, asset_number: b.assetNumber ?? null, notes: b.notes ?? null, active: true };
+      rp.loans.push(l);
+      this.persist(this.state);
+      return ok(this.loanStatus().find(x => x.id === l.id), 201);
+    }
+    if ((m = p.match(/^\/loan-machines\/([^/]+)$/)) && req.method === 'PUT') {
+      if (!office) return refuse(403, 'only the office keeps the loan machines and the workshop');
+      const l = rp.loans.find(x => x.id === m![1]);
+      const now = this.loanStatus().find(x => x.id === m![1]);
+      if (!l || !now) return refuse(404, 'no such loan machine');
+      if (b.active === false && now.out) return refuse(409, `${l.name} is out at ${now.store}: collect it first`);
+      Object.assign(l, { name: b.name ?? l.name, serial: b.serial ?? l.serial, asset_number: b.assetNumber ?? l.asset_number, notes: b.notes ?? l.notes, active: b.active ?? l.active });
+      this.persist(this.state);
+      return ok(this.loanStatus().find(x => x.id === l.id));
+    }
+    if (!(m = p.match(/^\/jobs\/([^/]+)\/(workshop-start|uplift|loan-out|loan-back|deliver)$/))) return null;
+    const j = this.findJob(m[1]);
+    if (!j) return refuse(404, 'no such job');
+    j.card.workshop = { lat: rp.workshop.lat, lng: rp.workshop.lng, geofenceM: rp.workshop.geofence_m };
+    const by = this.who.name;
+    const add = (mv: Partial<MachineMove> & Pick<MachineMove, 'kind'>) => (jj: DemoJob) => {
+      jj.moves = [...(jj.moves ?? []), { id: id('mv'), place: 'site', at: b.at ?? new Date().toISOString(), note: null, person_name: null, photo_ids: b.photoIds ?? [], signature_photo_id: b.signaturePhotoId ?? null,
+        loan_machine_id: null, loan_machine: null, loan_serial: null, by_name: by, ...mv }];
+    };
+    const photos = (b.photoIds ?? []).length;
+    switch (m[2]) {
+      case 'workshop-start': return this.rule(j.meta.id, c => J.startAtWorkshop(c, { at: b.at, position: b.position, safety: b.safety, outsideReason: b.outsideReason }));
+      case 'uplift':
+        if (!b.signaturePhotoId) return refuse(409, 'send the store manager signature first');
+        return this.rule(j.meta.id, c => J.uplift(c, { at: b.at, reason: b.reason ?? '', managerName: b.managerName ?? '', photos, signed: true }), add({ kind: 'uplifted', note: (b.reason ?? '').trim(), person_name: (b.managerName ?? '').trim() }));
+      case 'loan-out': {
+        const lm = this.loanStatus().find(x => x.id === b.loanMachineId);
+        if (!lm || !lm.active) return refuse(400, 'unknown loan machine');
+        if (lm.out) return refuse(409, `${lm.name} is already out at ${lm.store} (job ${lm.job_number})`);
+        if (!b.signaturePhotoId) return refuse(409, 'send the store manager signature first');
+        return this.rule(j.meta.id, c => J.loanOut(c, { photos, managerName: b.managerName ?? '', signed: true }), add({ kind: 'loan_out', loan_machine_id: lm.id, loan_machine: lm.name, loan_serial: lm.serial, person_name: (b.managerName ?? '').trim() }));
+      }
+      case 'loan-back': {
+        const lm = this.loanStatus().find(x => x.id === b.loanMachineId);
+        if (!lm || !lm.out || lm.job_id !== j.meta.id) return refuse(409, 'that loan machine is not out on this job');
+        return this.rule(j.meta.id, c => J.loanBack(c, { photos }), add({ kind: 'loan_back', loan_machine_id: lm.id, loan_machine: lm.name, loan_serial: lm.serial, note: b.note ?? null, signature_photo_id: null }));
+      }
+      default: {
+        const place = J.placeOf(j.card.visits.at(-1));
+        return this.rule(j.meta.id, c => J.deliver(c, { photos, receivedBy: b.receivedBy ?? '' }), add({ kind: 'delivered', place, person_name: (b.receivedBy ?? '').trim(), note: b.note ?? null, signature_photo_id: null }));
+      }
+    }
   }
 
   private office(): DemoOffice {
@@ -532,7 +669,15 @@ export class DemoTransport implements Transport {
     if (p === '/office/stores' && req.method === 'GET') return ok(o.stores());
     if (p === '/office/stores') return done(o.addStore(b));
     if (p === '/office/technicians') return ok(o.technicians(id => (id === 'me' ? this.state.vehicle?.registration ?? null : this.fleet().technicians(null).find(t => t.id === id)?.registration ?? null)));
-    if (p === '/jobs' && req.method === 'GET') { const d = this.docs(); return ok(o.jobs(q.get('status')).map(j => ({ ...j, ...d.billingOf(j.id) }))); }
+    if (p === '/jobs' && req.method === 'GET') {
+      const d = this.docs();
+      this.repairs();
+      return ok(o.jobs(q.get('status')).map(j => {
+        const dj = this.findJob(j.id);
+        const r = dj ? this.repairView(dj) : null;
+        return { ...j, ...d.billingOf(j.id), ...(r ? { machine_at: r.machine_at, loans_out: r.loans_out, ready_to_deliver: r.ready_to_deliver } : {}) };
+      }));
+    }
     if (p === '/jobs') {
       const store = o.store(b.storeId);
       const missing = [!store ? 'which store' : null, !b.faultReported || b.faultReported.trim().length < 3 ? 'what the fault is' : null, !b.scheduledDate ? 'the date' : null,
@@ -788,6 +933,7 @@ export class DemoTransport implements Transport {
   private rule(jobId: string, fn: (c: J.JobCard) => J.Result, after?: (j: DemoJob, r: Extract<J.Result, { ok: true }>) => void): Response {
     const j = this.findJob(jobId);
     if (!j) return refuse(404, 'no such job');
+    if (this.state.repairs) { const w = this.state.repairs.workshop; j.card.workshop = { lat: w.lat, lng: w.lng, geofenceM: w.geofence_m }; }
     const r = fn(j.card);
     if (!r.ok) return refuse(409, ...r.reasons);
     j.card = r.card;
@@ -854,6 +1000,8 @@ export class DemoTransport implements Transport {
     if (tq) return tq;
     const rr = this.reportRoute(p, req, b);
     if (rr) return rr;
+    const wr = this.repairRoute(p, req, b);
+    if (wr) return wr;
     const ceoLevel = ['director', 'creator'].includes(this.office().levelOf(this.who.id) ?? this.who.level);
     if (p === '/company/brand') return ok({ name: 'ZSP (demo)', logoPhotoId: this.state.logoPhotoId ?? null, logoDataUri: this.state.logoPhotoId ? null : DEMO_LOGO,
       accent: this.state.themeAccent ?? 'orange', canTheme: ceoLevel });
@@ -879,6 +1027,7 @@ export class DemoTransport implements Transport {
       return r.ok ? ok({ userId: m[1], fleetDuty: !!b.on }) : refuse(r.status, ...r.reasons);
     }
     if (p === '/me/today') {
+      this.repairs();
       const jobs: TodayJob[] = this.state.jobs.filter(j => (j.card.status as string) !== 'cancelled' && !(j.card.status === 'closed' && j.meta.scheduled_date < today()) && ((j.meta.lead_id ?? 'me') === 'me' || (j.meta.helper_ids ?? []).includes('me'))).map(j => ({
         id: j.meta.id, job_number: j.meta.job_number, job_type: j.meta.job_type, priority: j.meta.priority as TodayJob['priority'],
         status: j.card.status, scheduled_date: j.meta.scheduled_date, fault_reported: j.meta.fault_reported, store: j.meta.store,

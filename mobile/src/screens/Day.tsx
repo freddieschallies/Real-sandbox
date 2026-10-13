@@ -20,7 +20,7 @@ const STATUS: Record<TodayJob['status'], { text: string; tone: 'info' | 'good' |
   closed: { text: 'Closed', tone: 'good' },
 };
 const TYPE: Record<string, string> = {
-  breakdown: 'Breakdown', planned_maintenance: 'Planned maintenance', installation: 'Installation', quote_visit: 'Quote visit', follow_up: 'Follow-up',
+  breakdown: 'Breakdown', planned_maintenance: 'Planned maintenance', installation: 'Installation', quote_visit: 'Quote visit', follow_up: 'Follow-up', workshop_repair: 'Workshop repair',
 };
 const rank = (j: TodayJob) => (j.status === 'closed' ? 9 : j.status === 'in_progress' ? 0 : j.priority === 'urgent' ? 1 : j.carried_over ? 2 : 3);
 
@@ -136,6 +136,8 @@ export function Day() {
               <Pill text={STATUS[j.status].text} tone={STATUS[j.status].tone} />
               {j.priority === 'urgent' ? <Pill text="Urgent" tone="bad" /> : null}
               {j.carried_over ? <Pill text="From earlier" tone="warn" /> : null}
+              {j.status !== 'closed' && (s.cache.cards[j.id]?.machine_at ?? (j.job_type === 'workshop_repair' ? 'workshop' : 'site')) === 'workshop'
+                ? <Pill text={s.cache.cards[j.id]?.ready_to_deliver ? 'Ready to deliver' : 'In the workshop'} tone={s.cache.cards[j.id]?.ready_to_deliver ? 'good' : 'info'} /> : null}
             </View>
             <Text style={{ color: C.text, fontSize: 20, fontWeight: '700' }}>{j.store}</Text>
             <Body quiet>{TYPE[j.job_type] ?? j.job_type}{j.address ? ` · ${j.address}` : ''}</Body>

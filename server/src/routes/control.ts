@@ -147,7 +147,7 @@ export function registerControlRoutes(app: FastifyInstance) {
     if (!can(req.actor, 'assign_jobs')) throw new Refused(403, ['you cannot edit jobs']);
     const jobId = parse(Uuid, req.params.id);
     const b = parse(z.object({
-      jobType: z.enum(['breakdown', 'planned_maintenance', 'installation', 'quote_visit', 'follow_up']).optional(),
+      jobType: z.enum(['breakdown', 'planned_maintenance', 'installation', 'quote_visit', 'follow_up', 'workshop_repair']).optional(),
       priority: z.enum(['urgent', 'normal', 'scheduled']).optional(),
       storeId: Uuid.optional(),
       faultReported: z.string().trim().min(3).max(2000).optional(),

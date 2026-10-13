@@ -24,6 +24,7 @@ const STEPS: [string, string[]][] = [
     'My tools and PPE (on My day): what the stockroom has on his name.',
     'Timesheet (on My day): yesterday\'s timesheet, made by the app from his jobs: travel, work, paused and time not accounted for. Check it and submit it; time not accounted for needs a word.',
     'Parts report: on a job you started, tap Continue later and answer "Is another quote needed?" Yes: the app takes you step by step through photos of the machine, the serial tag (type it if unclear) and the part, then more photos. It goes to the office as a quote; open it on the job to print or email it.',
+    'Workshop repairs: on a job you started on site, tap "Uplift to the workshop": photos of the machine, which machine and why, a loan machine if the store needs one, and the store manager signs. Next time, "Start at the workshop" (checked against the workshop, no store manager). When it is fixed, Done says it is ready to go back: Go, deliver it back (photo, who received it), collect the loan machine, sign off. The microwave on My day was brought in by the client: it starts in the workshop.',
     'Quotes (on My day): a new quote for a store, with an older job card linked for reference; or open a job that is not finished and tap "Submit a quote for this job". Add hours, parts and things to buy; it goes to the office to price and send.',
   ]],
   ['As stock controller (Lindiwe)', [
@@ -74,6 +75,7 @@ const STEPS: [string, string[]][] = [
     'Jobs: open a job for any technician (Thabo sees it on his phone at once), edit anything on it (every change is written on the job and the technician is told), move it, or cancel it.',
     'Queries: send any technician a question (switch to Tech to see it on Thabo\'s My day and answer it).',
     'People: she can see everyone, but cannot change positions unless the CEO switches on "Positions and access" for her.',
+    'Workshop: machines in the workshop (being repaired, or ready to go back), the loan machines and which store each one is at, and where the workshop is. Jobs → "Workshop & loans" filters the job list the same way. A workshop repair (a machine the client brings in) is a job type on New job.',
     'Stores: add a store by pasting its point from Google Maps.',
     'Ask the CEO to give her the stockroom: a Stockroom tab appears at the top and she has the stock controller\'s full screens.',
   ]],

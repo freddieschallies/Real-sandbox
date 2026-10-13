@@ -1,6 +1,7 @@
 // The job card. What the technician sees depends only on where the job is in the forced path:
 // Go → Arrived (manager + safety) → Start → work items → Done → sign-off, or Continue later.
 import { JobReports } from '../reports/PartsReport.tsx';
+import { MachineMoves, WorkshopStartForm } from './Workshop.tsx';
 import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
@@ -15,9 +16,9 @@ import type { CardView } from '../types.ts';
 const PAUSES = ['waiting_for_parts', 'collecting_parts', 'store_asked_to_stop', 'break'] as const;
 const STEP: Record<string, string> = {
   not_started: 'Not started', on_the_way: 'On the way', arrived: 'Arrived', working: 'Working',
-  paused: 'Paused', done: 'Done – waiting for sign-off', continue_later: 'Continue later',
+  paused: 'Paused', done: 'Done – waiting for sign-off', continue_later: 'Continue later', uplifted: 'Uplifted – in the workshop',
 };
-const TYPE: Record<string, string> = { breakdown: 'Breakdown', planned_maintenance: 'Planned maintenance', installation: 'Installation', quote_visit: 'Quote visit', follow_up: 'Follow-up' };
+const TYPE: Record<string, string> = { breakdown: 'Breakdown', planned_maintenance: 'Planned maintenance', installation: 'Installation', quote_visit: 'Quote visit', follow_up: 'Follow-up', workshop_repair: 'Workshop repair' };
 const time = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' }) : '–');
 
 export function Job({ jobId }: { jobId: string }) {
@@ -45,6 +46,11 @@ export function Job({ jobId }: { jobId: string }) {
   const state = v.status === 'closed' ? 'closed' : v.currentState;
   const visit = v.visits.at(-1);
   const finished = v.items.filter(i => i.status === 'finished').length;
+  // Workshop repairs: where this visit is, and where the machine is.
+  const inWorkshop = visit?.place === 'workshop' && ['arrived', 'working', 'paused', 'done'].includes(state);
+  const machineAt = v.machine_at ?? (v.job_type === 'workshop_repair' ? 'workshop' : 'site');
+  const between = state === 'not_started' || state === 'continue_later' || state === 'uplifted' || (state === 'done' && v.status !== 'in_progress');
+  const onVisit = ['arrived', 'working', 'paused'].includes(state);
 
   return (
     <Screen title={`#${v.job_number} · ${v.store}`} sub={v.store_address ?? undefined} onBack={nav.back} right={<SyncPill />}>
@@ -53,6 +59,9 @@ export function Job({ jobId }: { jobId: string }) {
           <Pill text={state === 'closed' ? 'Closed' : STEP[state]} tone={state === 'closed' ? 'good' : state === 'working' ? 'info' : state === 'paused' || state === 'continue_later' ? 'warn' : 'quiet'} />
           {v.priority === 'urgent' ? <Pill text="Urgent" tone="bad" /> : null}
           <Pill text={TYPE[v.job_type] ?? v.job_type} tone="quiet" />
+          {machineAt === 'workshop' && state !== 'closed' ? <Pill text={v.ready_to_deliver ? 'Ready to deliver' : 'Machine in the workshop'} tone={v.ready_to_deliver ? 'good' : 'warn'} /> : null}
+          {(v.loans_out ?? 0) > 0 ? <Pill text="Loan machine out" tone="warn" /> : null}
+          {inWorkshop ? <Pill text="At the workshop" tone="info" /> : null}
         </View>
         <Label>Reported fault</Label>
         <Body>{v.fault_reported}</Body>
@@ -62,11 +71,26 @@ export function Job({ jobId }: { jobId: string }) {
 
       {reasons ? <Notice tone="bad" title="Not yet. Still needed:" lines={reasons} /> : null}
 
-      {(state === 'not_started' || state === 'continue_later' || (state === 'done' && v.status !== 'in_progress')) ? (
+      <MachineMoves v={v} />
+
+      {between ? (
         <>
           <JobStock jobId={jobId} closed={false} beforeLeaving />
-          {state === 'continue_later' ? <Notice tone="warn" title="Continue later" lines={['Tap Go when you leave for this store again. A new visit starts.']} /> : null}
-          <Button label="Go – I'm on the way" onPress={() => run(`On the way to ${v.store}`, c => J.go(c, nowIso()), 'go', { at: nowIso() })} />
+          {state === 'continue_later' ? <Notice tone="warn" title="Continue later" lines={[machineAt === 'workshop' ? 'Start again in the workshop, or tap Go when you leave for the store.' : 'Tap Go when you leave for this store again. A new visit starts.']} /> : null}
+          {v.ready_to_deliver ? (
+            <>
+              <Notice tone="good" title="Repaired: deliver it back" lines={['Tap Go when you leave with it. If the client fetches it, start at the workshop and hand it over there.', ...((v.loans_out ?? 0) > 0 ? ['Collect the loan machine when you deliver.'] : [])]} />
+              <Button label="Go – delivering it back" onPress={() => run(`On the way to ${v.store} (delivery)`, c => J.go(c, nowIso()), 'go', { at: nowIso() })} />
+              <WorkshopToggle v={v} onRefused={setReasons} label="The client collects it at the workshop" />
+            </>
+          ) : machineAt === 'workshop' ? (
+            <>
+              <WorkshopStartForm v={v} onRefused={setReasons} />
+              <Button label="Go to the store instead (e.g. a loan machine)" kind="quiet" onPress={() => run(`On the way to ${v.store}`, c => J.go(c, nowIso()), 'go', { at: nowIso() })} />
+            </>
+          ) : (
+            <Button label="Go – I'm on the way" onPress={() => run(`On the way to ${v.store}`, c => J.go(c, nowIso()), 'go', { at: nowIso() })} />
+          )}
         </>
       ) : null}
 
@@ -74,7 +98,7 @@ export function Job({ jobId }: { jobId: string }) {
 
       {state === 'arrived' ? (
         <>
-          <Notice tone="good" title={`Checked in with ${visit?.checkedInManager ?? 'the manager'}`} lines={['Safety checks done.']} />
+          <Notice tone="good" title={inWorkshop ? 'In the workshop' : `Checked in with ${visit?.checkedInManager ?? 'the manager'}`} lines={['Safety checks done.']} />
           <Button label="Start job – timer starts" onPress={() => run('Started work', c => J.start(c, nowIso()), 'start', { at: nowIso() })} />
         </>
       ) : null}
@@ -113,10 +137,12 @@ export function Job({ jobId }: { jobId: string }) {
 
       {!['not_started', 'continue_later'].includes(state) ? <JobStock jobId={jobId} closed={state === 'closed'} /> : null}
 
+      {onVisit && state !== 'closed' ? <MachineActions v={v} inWorkshop={inWorkshop} machineAt={machineAt} state={state} /> : null}
+
       {state === 'working' ? (
         <>
           {reasons ? <Notice tone="bad" title="Not yet. Still needed:" lines={reasons} /> : null}
-          <Button label="Done – all work finished" onPress={() => run('Job done', c => J.done(c, nowIso()), 'done', { at: nowIso() })} />
+          <Button label={inWorkshop && machineAt === 'workshop' ? 'Done – repair finished' : 'Done – all work finished'} onPress={() => run(inWorkshop ? 'Repair done in the workshop' : 'Job done', c => J.done(c, nowIso()), 'done', { at: nowIso() })} />
           <PauseBox onPause={reason => run(`Paused: ${reason.replace(/_/g, ' ')}`, c => J.pause(c, reason, nowIso()), 'pause', { at: nowIso(), reason })} />
           <Button label="Continue later (another day)" kind="secondary" onPress={() => nav.push({ name: 'later', jobId })} />
         </>
@@ -270,4 +296,26 @@ function JobStock({ jobId, closed, beforeLeaving }: { jobId: string; closed: boo
       ) : null}
     </>
   );
+}
+
+/** Uplift, loan machines and delivery while on a visit. */
+function MachineActions({ v, inWorkshop, machineAt, state }: { v: CardView; inWorkshop: boolean; machineAt: 'site' | 'workshop'; state: string }) {
+  const nav = useNav();
+  const loans = v.loans_out ?? 0;
+  return (
+    <View style={{ gap: 8 }}>
+      {machineAt === 'workshop' ? (
+        <Button label={inWorkshop ? 'The client collects it here' : 'Deliver the machine back'} kind={inWorkshop ? 'secondary' : 'primary'} onPress={() => nav.push({ name: 'deliver', jobId: v.id })} />
+      ) : null}
+      {!inWorkshop && loans > 0 ? <Button label="Collect the loan machine" kind={machineAt === 'site' ? 'primary' : 'secondary'} onPress={() => nav.push({ name: 'loan', jobId: v.id, mode: 'back' })} /> : null}
+      {!inWorkshop && machineAt === 'site' && (state === 'working' || state === 'paused') ? <Button label="Uplift to the workshop" kind="secondary" onPress={() => nav.push({ name: 'uplift', jobId: v.id })} /> : null}
+      {!inWorkshop ? <Button label="Leave a loan machine" kind="quiet" onPress={() => nav.push({ name: 'loan', jobId: v.id, mode: 'out' })} /> : null}
+    </View>
+  );
+}
+
+function WorkshopToggle({ v, onRefused, label }: { v: CardView; onRefused: (r: string[] | null) => void; label: string }) {
+  const [open, setOpen] = useState(false);
+  if (!open) return <Button label={label} kind="secondary" onPress={() => setOpen(true)} />;
+  return <WorkshopStartForm v={v} onRefused={onRefused} />;
 }

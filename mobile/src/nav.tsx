@@ -24,6 +24,9 @@ export type Route =
   | { name: 'quotes' }
   | { name: 'quote'; jobId?: string }
   | { name: 'partsReport'; jobId: string }
+  | { name: 'uplift'; jobId: string }
+  | { name: 'loan'; jobId: string; mode: 'out' | 'back' }
+  | { name: 'deliver'; jobId: string }
   | { name: 'report'; id: string };
 
 interface Nav { route: Route; push(r: Route): void; back(): void; reset(): void; replace(r: Route): void }

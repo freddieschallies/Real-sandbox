@@ -1622,6 +1622,90 @@ test('parts report: a Foodservice technician who needs parts reports it step by 
   await db.query('UPDATE departments SET parts_report = false WHERE id = $1', [ids.dept]);
 });
 
+test('workshop repairs: uplifted from site with a signature, a loan machine left, repaired in the workshop, delivered back; the card stays open until both are back', async () => {
+  const d = (day: number, h: number, m = 0) => `2026-10-${day}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00+02:00`;
+  const WS = { lat: -28.7950, lng: 32.0500 };
+  // The office sets the workshop and the loan machines.
+  assert.equal((await call('tech', 'PUT' as 'POST', '/company/workshop', { name: 'Workshop', ...WS })).status, 403, 'the office sets it');
+  assert.equal((await call('admin', 'PUT' as 'POST', '/company/workshop', { name: 'Our workshop', address: 'Alton', ...WS, geofenceM: 150 })).status, 200);
+  assert.equal((await call('tech', 'GET', '/company/workshop')).body.workshop.name, 'Our workshop');
+  assert.equal((await call('tech', 'POST', '/loan-machines', { name: 'Ice machine' })).status, 403);
+  const loan = (await call('admin', 'POST', '/loan-machines', { name: 'Loan ice machine 1', serial: 'LN-001' })).body;
+  assert.equal(loan.out, false);
+
+  const created = await call('admin', 'POST', '/jobs', { jobType: 'breakdown', storeId: ids.store, faultReported: 'Ice machine compressor noisy', scheduledDate: '2026-10-26', leadTechnicianId: ids.tech });
+  const id = created.body.id, J = `/jobs/${id}`, item = created.body.items[0].id;
+  assert.equal(created.body.machine_at, 'site');
+  assert.equal((await call('tech', 'POST', `${J}/workshop-start`, { at: d(26, 8), position: WS, safety: { areaSafe: true, isolated: true } })).status, 409, 'the machine is still on site');
+  await call('tech', 'POST', `${J}/go`, { at: d(26, 9) });
+  await call('tech', 'POST', `${J}/arrive`, { at: d(26, 9, 20), position: STORE, managerName: 'Sipho', safety: SAFE });
+  await call('tech', 'POST', `${J}/start`, { at: d(26, 9, 25) });
+  const pic = async (kind: string) => (await upload('tech', '/photos', { kind, takenAt: d(26, 10), jobId: id })).body.id as string;
+  assert.equal((await upload('tech', '/photos', { kind: 'uplift', takenAt: d(26, 10) })).status, 400, 'belongs to a job');
+  const sig = (await upload('tech', '/photos', { kind: 'signature', takenAt: d(26, 10), jobId: id }, 'image/png')).body.id;
+  const uplift = { at: d(26, 10, 30), reason: 'Compressor bearings worn, needs to be stripped in the workshop', managerName: 'Sipho', signaturePhotoId: sig, photoIds: [await pic('uplift')], equipmentId: ids.equipment };
+  assert.equal((await call('tech', 'POST', `${J}/uplift`, { ...uplift, reason: 'broken' })).status, 409, 'a full sentence why');
+  assert.equal((await call('tech', 'POST', `${J}/uplift`, { ...uplift, photoIds: [sig] })).status, 409, 'photos of the right kind');
+  // A loan machine first, signed for.
+  const lo = { at: d(26, 10, 20), loanMachineId: loan.id, photoIds: [await pic('loan')], managerName: 'Sipho', signaturePhotoId: sig };
+  assert.equal((await call('tech', 'POST', `${J}/loan-out`, lo)).status, 200);
+  assert.equal((await call('tech', 'POST', `${J}/loan-out`, lo)).status, 409, 'already out');
+  const lifted = await call('tech', 'POST', `${J}/uplift`, uplift);
+  assert.equal(lifted.status, 200, JSON.stringify(lifted.body));
+  assert.equal(lifted.body.machine_at, 'workshop'); assert.equal(lifted.body.status, 'continue_later'); assert.equal(lifted.body.currentState, 'uplifted');
+  assert.equal(lifted.body.loans_out, 1); assert.equal(lifted.body.loans_out_list[0].name, 'Loan ice machine 1');
+  const loans = (await call('admin', 'GET', '/loan-machines')).body;
+  assert.equal(loans.find((x: { id: string }) => x.id === loan.id).store, 'FreshMart Meerensee', 'the office sees where it is');
+  const listed = (await call('admin', 'GET', '/jobs')).body.find((x: { id: string }) => x.id === id);
+  assert.equal(listed.machine_at, 'workshop'); assert.equal(listed.loans_out, 1);
+  assert.equal((await call('admin', 'PUT' as 'POST', `/loan-machines/${loan.id}`, { active: false })).status, 409, 'cannot retire one that is out');
+  // In the workshop: checked against its location, no store manager.
+  const far = await call('tech', 'POST', `${J}/workshop-start`, { at: d(27, 8), position: STORE, safety: { areaSafe: true, isolated: true } });
+  assert.equal(far.status, 409); assert.match(far.body.reasons[0], /not at the workshop/);
+  const ws = await call('tech', 'POST', `${J}/workshop-start`, { at: d(27, 8), position: WS, safety: { areaSafe: true, isolated: true } });
+  assert.equal(ws.status, 200, JSON.stringify(ws.body)); assert.equal(ws.body.visits.at(-1).place, 'workshop');
+  await call('tech', 'POST', `${J}/start`, { at: d(27, 8, 5) });
+  await upload('tech', `${J}/items/${item}/photos`, { kind: 'before', takenAt: d(27, 8, 10) });
+  await upload('tech', `${J}/items/${item}/photos`, { kind: 'after', takenAt: d(27, 11) });
+  await call('tech', 'PATCH', `${J}/items/${item}`, { equipmentId: ids.equipment, faultType: 'mechanical', noMaterials: true,
+    found: 'Compressor bearings worn and noisy under load', did: 'Replaced the compressor bearings and tested for two hours', tested: 'yes', outcome: 'complete' });
+  const done = await call('tech', 'POST', `${J}/done`, { at: d(27, 13) });
+  assert.equal(done.status, 200, JSON.stringify(done.body));
+  assert.equal(done.body.ready_to_deliver, true); assert.equal(done.body.status, 'continue_later', 'waits for delivery');
+  assert.equal((await call('admin', 'GET', '/jobs')).body.find((x: { id: string }) => x.id === id).ready_to_deliver, true);
+  // Delivery back, and the loan machine collected.
+  await call('tech', 'POST', `${J}/go`, { at: d(28, 9) });
+  await call('tech', 'POST', `${J}/arrive`, { at: d(28, 9, 20), position: STORE, managerName: 'Sipho', safety: SAFE });
+  await call('tech', 'POST', `${J}/start`, { at: d(28, 9, 25) });
+  assert.equal((await call('tech', 'POST', `${J}/done`, { at: d(28, 9, 30) })).status, 409, 'not done while the machine is in the workshop');
+  const pic2 = async (kind: string) => (await upload('tech', '/photos', { kind, takenAt: d(28, 9, 40), jobId: id })).body.id as string;
+  const back = await call('tech', 'POST', `${J}/deliver`, { at: d(28, 9, 45), photoIds: [await pic2('delivery')], receivedBy: 'Sipho' });
+  assert.equal(back.status, 200, JSON.stringify(back.body)); assert.equal(back.body.machine_at, 'site');
+  const early = await call('tech', 'POST', `${J}/done`, { at: d(28, 10) });
+  assert.equal(early.status, 409); assert.match(early.body.reasons.join(), /loan machine/, 'collect the loan machine before Done');
+  assert.equal((await call('tech', 'POST', `${J}/loan-back`, { at: d(28, 10, 6), loanMachineId: loan.id, photoIds: [] })).status, 400, 'a photo');
+  assert.equal((await call('tech', 'POST', `${J}/loan-back`, { at: d(28, 10, 6), loanMachineId: loan.id, photoIds: [await pic2('loan')] })).status, 200);
+  assert.equal((await call('tech', 'POST', `${J}/done`, { at: d(28, 10, 7) })).status, 200);
+  const sig2 = (await upload('tech', '/photos', { kind: 'signature', takenAt: d(28, 10, 1), jobId: id }, 'image/png')).body.id;
+  const close = { at: d(28, 10, 5), signOff: { signature: true, managerName: 'Sipho', signaturePhotoId: sig2 } };
+  const closed = await call('tech', 'POST', `${J}/close`, { ...close, at: d(28, 10, 8) });
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+  assert.deepEqual(closed.body.moves.map((m: { kind: string }) => m.kind), ['loan_out', 'uplifted', 'delivered', 'loan_back']);
+  assert.equal((await call('admin', 'GET', '/loan-machines')).body.find((x: { id: string }) => x.id === loan.id).out, false, 'back in');
+
+  // A workshop repair: the machine is brought in, so the job starts in the workshop.
+  const wr = await call('admin', 'POST', '/jobs', { jobType: 'workshop_repair', storeId: ids.store, faultReported: 'Microwave brought in, not heating', scheduledDate: '2026-10-29', leadTechnicianId: ids.tech });
+  assert.equal(wr.body.machine_at, 'workshop');
+  const W = `/jobs/${wr.body.id}`;
+  assert.equal((await call('tech', 'POST', `${W}/workshop-start`, { at: d(29, 8), position: WS, safety: { areaSafe: true, isolated: true } })).status, 200);
+  await call('tech', 'POST', `${W}/start`, { at: d(29, 8, 5) });
+  const wpic = async (kind: string) => (await upload('tech', '/photos', { kind, takenAt: d(29, 9), jobId: wr.body.id })).body.id as string;
+  // The client collects it at the workshop.
+  assert.equal((await call('tech', 'POST', `${W}/deliver`, { at: d(29, 12), photoIds: [await wpic('delivery')], receivedBy: 'Sipho (collected)' })).status, 200);
+  const wv = (await call('tech', 'GET', W)).body;
+  assert.equal(wv.machine_at, 'site'); assert.equal(wv.moves[0].place, 'workshop');
+});
+
 test('phone menus: the CEO or an admin pins tabs per position; everyone gets their own position\'s choice', async () => {
   assert.deepEqual((await call('stock', 'GET', '/me/phone-menu')).body, { pinned: null, canEdit: false }, 'automatic until chosen');
   assert.equal((await call('stock', 'GET', '/phone-menus')).status, 403, 'not the stock controller');

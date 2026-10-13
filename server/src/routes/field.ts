@@ -150,10 +150,11 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
     const f = parse(z.object({
       kind: z.enum(['signature', 'fuel_slip', 'supplier_slip', 'bought_out_slip', 'vehicle_front', 'vehicle_back', 'vehicle_left',
         'vehicle_right', 'vehicle_dashboard', 'vehicle_damage', 'handover_signature', 'stock_item', 'delivery_note', 'profile',
-        'fleet_before', 'fleet_after', 'fleet_fault', 'fleet_slip', 'logo', 'letterhead', 'report_machine', 'report_serial', 'report_part', 'report_extra']),
+        'fleet_before', 'fleet_after', 'fleet_fault', 'fleet_slip', 'logo', 'letterhead', 'report_machine', 'report_serial', 'report_part', 'report_extra',
+        'uplift', 'loan', 'delivery']),
       takenAt: Iso, id: Uuid.optional(), jobId: Uuid.optional(),
     }), up.fields);
-    if (f.kind === 'signature' && !f.jobId) throw new Refused(400, ['a signature belongs to a job: send jobId']);
+    if (['signature', 'uplift', 'loan', 'delivery'].includes(f.kind) && !f.jobId) throw new Refused(400, ['this photo belongs to a job: send jobId']);
     const id = f.id ?? randomUUID();
     const rel = await saveFile(req.companyId, id, up, f.takenAt);
     try {

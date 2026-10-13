@@ -71,7 +71,7 @@ export function Later({ jobId }: { jobId: string }) {
       ) : null}
       <Label>Coming back</Label>
       <Choice options={days} value={when} onChange={setWhen} labels={dayLabels} />
-      <Field label="Store manager informed" value={manager} onChangeText={setManager} autoCapitalize="words" />
+      {v.visits.at(-1)?.place === 'workshop' ? null : <Field label="Store manager informed" value={manager} onChangeText={setManager} autoCapitalize="words" />}
       {reasons ? <Notice tone="bad" title="Not yet. Still needed:" lines={reasons} /> : null}
       <Button label="Leave site – continue later" onPress={submit} />
     </Screen>
