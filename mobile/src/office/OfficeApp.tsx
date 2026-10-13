@@ -1,5 +1,6 @@
 // The office screen (control base), for Admin, Management, Directors and the CEO. Made for a desktop
 // browser: menu, list and detail side by side. Works on a phone too, one screen at a time.
+import { jobOutcome, NO_CHARGE_REASONS, type NoChargeReason } from '../../../server/src/core/jobOutcome.ts';
 import { BottomTabs } from '../BottomTabs.tsx';
 import { BrandLogo } from '../brand.tsx';
 import { usePhoneMenu } from '../menu.tsx';
@@ -161,7 +162,7 @@ export function OfficeApp() {
   const detail = (() => {
     if (!sel) return null;
     const wrap = (el: React.ReactNode) => <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60, maxWidth: 820 }}>{el}</ScrollView>;
-    if (sel.kind === 'job') return wrap(<JobDetail key={sel.id} id={sel.id} o={o} canEdit={does('jobs')} openReport={rid => setSel({ kind: 'report', id: rid })} />);
+    if (sel.kind === 'job') return wrap(<JobDetail key={sel.id} id={sel.id} o={o} canEdit={does('jobs')} canDocs={does('documents')} openReport={rid => setSel({ kind: 'report', id: rid })} />);
     if (sel.kind === 'report') return wrap(<PartsReportView key={sel.id} id={sel.id} />);
     if (sel.kind === 'newjob') return wrap(<NewJob o={o} done={id => setSel(id ? { kind: 'job', id } : null)} />);
     if (sel.kind === 'query') return wrap(<QueryThread key={sel.id} q={qs} id={sel.id} />);
@@ -303,7 +304,7 @@ function TodayView({ o, go, flags }: { o: OfficeHook; go: (t: Tab, x?: Sel) => v
 // ---- Jobs ---------------------------------------------------------------------------------------
 
 const FILTERS = ['open', 'today', 'carried', 'workshop', 'closed', 'all'] as const;
-const BILLING = ['any', 'not_invoiced', 'invoiced', 'credited'] as const;
+const BILLING = ['any', 'not_invoiced', 'invoiced', 'credited', 'no_charge', 'cancelled'] as const;
 function JobList({ o, open, add, selected }: { o: OfficeHook; open: (id: string) => void; add?: () => void; selected: string | null }) {
   const [f, setF] = useState<(typeof FILTERS)[number]>('open');
   const [bill, setBill] = useState<(typeof BILLING)[number]>('any');
@@ -317,7 +318,8 @@ function JobList({ o, open, add, selected }: { o: OfficeHook; open: (id: string)
     .filter(j => f === 'all' || (f === 'closed' ? shut(j.status) : !shut(j.status)) && (f !== 'today' || j.scheduled_date === t) && (f !== 'carried' || j.scheduled_date < t)
       && (f !== 'workshop' || j.machine_at === 'workshop' || (j.loans_out ?? 0) > 0))
     // Billing: not invoiced means a closed job with no invoice sent yet (a draft counts as not sent).
-    .filter(j => bill === 'any' || (bill === 'credited' ? j.billing === 'credited' : bill === 'invoiced' ? j.billing === 'invoiced' || j.billing === 'credited'
+    .filter(j => bill === 'any' || (bill === 'cancelled' ? j.status === 'cancelled' : bill === 'no_charge' ? j.billing === 'no_charge'
+      : bill === 'credited' ? j.billing === 'credited' : bill === 'invoiced' ? j.billing === 'invoiced' || j.billing === 'credited'
       : j.status === 'closed' && (j.billing === 'not_invoiced' || j.billing === 'draft_invoice')))
     .filter(j => !tech || j.lead_technician === tech)
     .filter(j => !type || j.job_type === type)
@@ -330,7 +332,7 @@ function JobList({ o, open, add, selected }: { o: OfficeHook; open: (id: string)
       <Choice options={FILTERS} value={f} onChange={setF} labels={{ open: 'All open', today: 'Today', carried: 'Carried over', workshop: 'Workshop & loans', closed: 'Closed / cancelled', all: 'All jobs' }} />
       <Label>Invoicing</Label>
       <Choice options={BILLING} value={bill} onChange={v => { setBill(v); if (v !== 'any' && f !== 'closed') setF('all'); }}
-        labels={{ any: 'Any', not_invoiced: 'Not invoiced', invoiced: 'Invoiced', credited: 'Credited' }} />
+        labels={{ any: 'Any', not_invoiced: 'Not invoiced', invoiced: 'Invoiced', credited: 'Credited', no_charge: 'No charge', cancelled: 'Cancelled' }} />
       <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
         <View style={{ flex: 1, minWidth: 180 }}>
           <Select label="Technician" value={tech} onChange={setTech} options={[{ value: '', label: 'Everyone' }, ...techs.map(n => ({ value: n, label: n }))]} />
@@ -350,6 +352,12 @@ function JobList({ o, open, add, selected }: { o: OfficeHook; open: (id: string)
   );
 }
 
+/** Where a job stands in one pill: open (assigned, in progress), done and where the money stands (to invoice, invoiced, paid, credited, no charge), or who cancelled it. */
+function OutcomePill({ j }: { j: OfficeJob }) {
+  const x = jobOutcome(j);
+  return <Pill text={x.label} tone={x.tone} />;
+}
+
 function JobRow({ j, on, onPress }: { j: OfficeJob; on: boolean; onPress: () => void }) {
   const late = j.status !== 'closed' && j.status !== 'cancelled' && j.scheduled_date < ymd(new Date());
   return (
@@ -357,11 +365,8 @@ function JobRow({ j, on, onPress }: { j: OfficeJob; on: boolean; onPress: () => 
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Text style={[st.body, { fontWeight: '800' }]}>#{j.job_number}</Text>
         <Text numberOfLines={1} style={[st.body, { flex: 1 }]}>{j.store}</Text>
-        {j.billing === 'credited' ? <Pill text={`Credited${j.invoice_number ? ` · INV ${j.invoice_number}` : ''}`} tone="bad" />
-          : j.billing === 'invoiced' ? <Pill text={`Invoiced · INV ${j.invoice_number}`} tone="good" />
-          : j.status === 'closed' ? <Pill text={j.billing === 'draft_invoice' ? 'Draft invoice' : 'Not invoiced'} tone="warn" /> : null}
         {j.status === 'continue_later' && j.machine_at === 'workshop' ? <Pill text={j.ready_to_deliver ? 'Ready to deliver' : 'In the workshop'} tone={j.ready_to_deliver ? 'good' : 'warn'} />
-          : <Pill text={STATUS[j.status]?.text ?? j.status} tone={STATUS[j.status]?.tone ?? 'quiet'} />}
+          : <OutcomePill j={j} />}
       </View>
       {j.status !== 'closed' && j.status !== 'cancelled' && ((j.machine_at === 'workshop' && j.status !== 'continue_later') || (j.loans_out ?? 0) > 0) ? (
         <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
@@ -488,7 +493,7 @@ function TechPicker({ o, value, onChange }: { o: OfficeHook; value?: string; onC
   );
 }
 
-function JobDetail({ id, o, canEdit, openReport }: { id: string; o: OfficeHook; canEdit: boolean; openReport: (id: string) => void }) {
+function JobDetail({ id, o, canEdit, canDocs, openReport }: { id: string; o: OfficeHook; canEdit: boolean; canDocs: boolean; openReport: (id: string) => void }) {
   const [c, setC] = useState<CardView | null>(null);
   const [moving, setMoving] = useState(false);
   const [panel, setPanel] = useState<'none' | 'edit' | 'cancel'>('none');
@@ -501,8 +506,8 @@ function JobDetail({ id, o, canEdit, openReport }: { id: string; o: OfficeHook; 
     <>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>Job {j.job_number}</Text>
-        <Pill text={STATUS[j.status]?.text ?? j.status} tone={STATUS[j.status]?.tone ?? 'quiet'} />
-        {j.priority === 'urgent' ? <Pill text="Urgent" tone="bad" /> : null}
+        <OutcomePill j={j} />
+        {j.priority === 'urgent' && j.status !== 'closed' && j.status !== 'cancelled' ? <Pill text="Urgent" tone="bad" /> : null}
       </View>
       <JobReports jobId={id} open={openReport} />
       <Card>
@@ -521,7 +526,9 @@ function JobDetail({ id, o, canEdit, openReport }: { id: string; o: OfficeHook; 
       {moving ? <MoveJob j={j} o={o} done={() => setMoving(false)} /> : null}
       {panel === 'edit' && c ? <EditJob j={j} c={c} o={o} started={c.visits.length > 0} done={() => setPanel('none')} /> : null}
       {panel === 'cancel' ? <CancelJob j={j} o={o} done={() => setPanel('none')} /> : null}
-      {j.status === 'cancelled' ? <Notice tone="warn" title="Cancelled" lines={[hist.find(h => h.field === 'status')?.reason ?? 'Cancelled by the office.']} /> : null}
+      {j.status === 'cancelled' ? <Notice tone="warn" title={j.cancelled_by_party === 'client' ? 'Cancelled by the client' : j.cancelled_by_party === 'us' ? 'Cancelled by us' : 'Cancelled'}
+        lines={[j.cancel_note ?? hist.find(h => h.field === 'status')?.reason ?? 'Cancelled by the office.']} /> : null}
+      {j.status === 'closed' ? <Billing j={j} o={o} canDocs={canDocs} /> : null}
 
       {c ? <MachineMoves v={c} /> : null}
       <Heading>Visits</Heading>
@@ -625,16 +632,68 @@ function EditJob({ j, c, o, started, done }: { j: OfficeJob; c: CardView; o: Off
   );
 }
 
+/** A closed job: where the money stands, and closing it at no charge (warranty, callback, ...) instead of invoicing it. */
+function Billing({ j, o, canDocs }: { j: OfficeJob; o: OfficeHook; canDocs: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState<NoChargeReason | ''>('');
+  const [note, setNote] = useState('');
+  const [ans, setAns] = useState<Answer | null>(null);
+  const x = jobOutcome(j);
+  const send = async (method: 'POST' | 'DELETE', body?: object) => {
+    const r = await o.send(method, `/jobs/${j.id}/no-charge`, body ?? {});
+    setAns(r);
+    if (r.ok) { setOpen(false); setReason(''); setNote(''); }
+  };
+  if (j.billing === 'no_charge') return (
+    <Card>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>Closed at no charge</Text>
+        <Pill text={NO_CHARGE_REASONS[j.no_charge_reason as NoChargeReason] ?? j.no_charge_reason ?? ''} tone="good" />
+      </View>
+      {j.no_charge_note ? <Body>{j.no_charge_note}</Body> : null}
+      <Text style={st.small}>It is off the To invoice list. Who decided it is under Changes by the office.</Text>
+      <Reasons a={ans} />
+      {canDocs ? <Button label="Take off no charge (invoice it after all)" kind="quiet" onPress={() => send('DELETE')} /> : null}
+    </Card>
+  );
+  const canNoCharge = canDocs && (j.billing === 'not_invoiced' || !j.billing);
+  return (
+    <Card>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>Invoicing</Text>
+        <Pill text={x.label} tone={x.tone} />
+      </View>
+      <Text style={st.small}>{j.billing === 'draft_invoice' ? `Invoice ${j.invoice_number} is a draft: send it from Documents, or cancel the draft if the job is not charged.`
+        : j.billing === 'invoiced' ? `Invoice ${j.invoice_number} was sent${j.invoice_status === 'paid' ? ' and paid' : ''}.`
+        : j.billing === 'credited' ? `Invoice ${j.invoice_number} was credited.` : 'Done and waiting to be invoiced (it is on the To invoice list).'}</Text>
+      {canNoCharge && !open ? <Button label="Close at no charge" kind="secondary" onPress={() => setOpen(true)} /> : null}
+      {open ? (
+        <>
+          <Label>Why is there no charge?</Label>
+          <Choice options={Object.keys(NO_CHARGE_REASONS) as NoChargeReason[]} value={reason as NoChargeReason} onChange={setReason} labels={NO_CHARGE_REASONS} />
+          <Field label={reason === 'other' ? 'Say why' : 'Note (optional)'} value={note} onChangeText={setNote} placeholder="e.g. Same compressor we fitted last month" />
+          <Reasons a={ans} />
+          <Button label="Close at no charge" disabled={!reason || (reason === 'other' && note.trim().length < 3)} onPress={() => send('POST', { reason, note: note.trim() || undefined })} />
+          <Button label="Cancel" kind="quiet" onPress={() => { setOpen(false); setAns(null); }} />
+        </>
+      ) : <Reasons a={ans} />}
+    </Card>
+  );
+}
+
 function CancelJob({ j, o, done }: { j: OfficeJob; o: OfficeHook; done: () => void }) {
   const [note, setNote] = useState('');
+  const [by, setBy] = useState<'client' | 'us' | ''>('');
   const [ans, setAns] = useState<Answer | null>(null);
   return (
     <Card style={{ borderColor: C.bad }}>
       <Heading>Cancel job {j.job_number}</Heading>
       <Text style={st.small}>It leaves the technician's day and is kept on record. Stock booked for it must come back to the stockroom.</Text>
-      <Field label="Why is it cancelled?" value={note} onChangeText={setNote} placeholder="e.g. Client fixed it themselves" />
+      <Label>Who cancelled?</Label>
+      <Choice options={['client', 'us'] as const} value={by as 'client' | 'us'} onChange={setBy} labels={{ client: 'The client', us: 'Us' }} />
+      <Field label="Why is it cancelled?" value={note} onChangeText={setNote} placeholder={by === 'us' ? 'e.g. Logged twice' : 'e.g. Client fixed it themselves'} />
       <Reasons a={ans} />
-      <Button label="Cancel job" kind="danger" disabled={note.trim().length < 5} onPress={async () => { const r = await o.send('POST', `/jobs/${j.id}/cancel`, { note: note.trim() }); setAns(r); if (r.ok) done(); }} />
+      <Button label="Cancel job" kind="danger" disabled={!by || note.trim().length < 5} onPress={async () => { const r = await o.send('POST', `/jobs/${j.id}/cancel`, { note: note.trim(), by }); setAns(r); if (r.ok) done(); }} />
       <Button label="Keep the job" kind="quiet" onPress={done} />
     </Card>
   );

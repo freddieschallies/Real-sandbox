@@ -8,6 +8,7 @@ import { audit, tx } from '../db.ts';
 import { can } from '../core/permissions.ts';
 import * as D from '../core/documents.ts';
 import * as Jc from '../core/jobCard.ts';
+import { NO_CHARGE_REASONS, type NoChargeReason } from '../core/jobOutcome.ts';
 import { DateOnly, Refused, Uuid, parse } from '../http.ts';
 import { loadCard } from '../jobsRepo.ts';
 import { notify } from './field.ts';
@@ -353,13 +354,50 @@ export function registerDocumentRoutes(app: FastifyInstance) {
 
   // ---- Invoices ------------------------------------------------------------------------------
 
-  /** Closed jobs with no invoice yet. */
+  // Closed at no charge: a warranty job, a callback on our own work, goodwill, covered by a contract, no
+  // fault found. It leaves the "to invoice" list and shows as "no charge" on the job card. Taken off
+  // again if it must be invoiced after all.
+  app.post('/jobs/:id/no-charge', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    prep(req);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ reason: z.enum(Object.keys(NO_CHARGE_REASONS) as [NoChargeReason, ...NoChargeReason[]]), note: z.string().trim().max(500).optional() }), req.body);
+    if (b.reason === 'other' && (!b.note || b.note.length < 3)) throw new Refused(400, ['say why there is no charge']);
+    return tx(req.db, async c => {
+      const j = (await c.query('SELECT j.job_number, j.status, nc.reason AS no_charge_reason FROM jobs j LEFT JOIN job_no_charge nc ON nc.job_id = j.id WHERE j.id = $1', [id])).rows[0];
+      if (!j) throw new Refused(404, ['no such job']);
+      if (j.status !== 'closed') throw new Refused(409, [j.status === 'cancelled' ? 'the job is cancelled' : 'close the job first (the technician signs it off)']);
+      const inv = (await c.query("SELECT invoice_number, status FROM invoices WHERE job_id = $1 AND status <> 'cancelled'", [id])).rows[0];
+      if (inv) throw new Refused(409, [inv.status === 'draft' ? `cancel draft invoice ${inv.invoice_number} first` : `invoice ${inv.invoice_number} was sent: credit it instead`]);
+      await c.query(`INSERT INTO job_no_charge (job_id, reason, note, decided_by) VALUES ($1, $2, $3, $4)
+                     ON CONFLICT (job_id) DO UPDATE SET reason = $2, note = $3, decided_by = $4, decided_at = now()`, [id, b.reason, b.note || null, req.actor.id]);
+      await c.query('INSERT INTO job_changes (job_id, field, old_value, new_value, reason, changed_by) VALUES ($1, $2, $3, $4, $5, $6)',
+        [id, 'billing', j.no_charge_reason ? `no charge (${NO_CHARGE_REASONS[j.no_charge_reason as NoChargeReason]})` : 'to invoice', `no charge (${NO_CHARGE_REASONS[b.reason]})`, b.note || null, req.actor.id]);
+      await audit(c, req.actor.id, 'job_no_charge', 'job', id, b);
+      return { id, noChargeReason: b.reason };
+    });
+  });
+
+  app.delete('/jobs/:id/no-charge', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    prep(req);
+    const id = parse(Uuid, req.params.id);
+    return tx(req.db, async c => {
+      const j = (await c.query('SELECT reason AS no_charge_reason FROM job_no_charge WHERE job_id = $1 FOR UPDATE', [id])).rows[0];
+      if (!j?.no_charge_reason) throw new Refused(409, ['this job is not marked no charge']);
+      await c.query('DELETE FROM job_no_charge WHERE job_id = $1', [id]);
+      await c.query('INSERT INTO job_changes (job_id, field, old_value, new_value, reason, changed_by) VALUES ($1, $2, $3, $4, $5, $6)',
+        [id, 'billing', `no charge (${NO_CHARGE_REASONS[j.no_charge_reason as NoChargeReason]})`, 'to invoice', null, req.actor.id]);
+      await audit(c, req.actor.id, 'job_charge_again', 'job', id);
+      return { id, noChargeReason: null };
+    });
+  });
+
+  /** Closed jobs with no invoice yet (not those closed at no charge). */
   app.get('/office/to-invoice', async req => {
     see(req);
     const { rows } = await req.db.query(
       `SELECT j.id, j.job_number, j.job_type, j.closed_at, j.fault_reported, j.client_order_ref, ${WHO}, u.full_name AS lead_technician
          FROM jobs j JOIN stores s ON s.id = j.store_id JOIN clients c ON c.id = s.client_id JOIN users u ON u.id = j.lead_technician_id
-        WHERE j.status = 'closed' AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.job_id = j.id AND i.status <> 'cancelled')
+        WHERE j.status = 'closed' AND NOT EXISTS (SELECT 1 FROM job_no_charge nc WHERE nc.job_id = j.id) AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.job_id = j.id AND i.status <> 'cancelled')
         ORDER BY j.closed_at`);
     return rows;
   });
@@ -427,7 +465,8 @@ export function registerDocumentRoutes(app: FastifyInstance) {
     const out = await tx(req.db, async c => {
       const loaded = await loadCard(c, b.jobId, true);
       if (!loaded) throw new Refused(404, ['no such job']);
-      const j = (await c.query('SELECT job_number, job_type, status, client_order_ref FROM jobs WHERE id = $1', [b.jobId])).rows[0];
+      const j = (await c.query('SELECT j.job_number, j.job_type, j.status, j.client_order_ref, nc.reason AS no_charge_reason FROM jobs j LEFT JOIN job_no_charge nc ON nc.job_id = j.id WHERE j.id = $1', [b.jobId])).rows[0];
+      if (j?.no_charge_reason) throw new Refused(409, [`job ${j.job_number} was closed at no charge: take that off the job first if it must be invoiced`]);
       if (j.status !== 'closed') throw new Refused(409, ['only a closed job can be invoiced']);
       if ((await c.query("SELECT 1 FROM invoices WHERE job_id = $1 AND status <> 'cancelled'", [b.jobId])).rowCount) throw new Refused(409, ['this job already has an invoice']);
       const helpers = (await c.query('SELECT count(*)::int AS n FROM job_helpers WHERE job_id = $1', [b.jobId])).rows[0].n;

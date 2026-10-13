@@ -13,6 +13,7 @@ import type { LoginLevel } from '../../server/src/core/permissions.ts';
 import { DemoOffice, END_REASONS, HR_POSITIONS, POSITION_LABEL, seedOffice, terminate, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
 import { DemoLogins, type DemoLoginsState } from './demoLogins.ts';
 import { DemoBreakdowns, seedBreakdowns, type DemoBdState } from './demoBreakdowns.ts';
+import { NO_CHARGE_REASONS } from '../../server/src/core/jobOutcome.ts';
 import { FIELDS as CUSTOMER_FIELDS, guessMapping, parseCsv, splitHeader, toCustomers } from '../../server/src/core/customerSheet.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
@@ -862,8 +863,10 @@ export class DemoTransport implements Transport {
       if (!b.note || b.note.trim().length < 5) return refuse(400, 'say why the job is cancelled');
       if (j.card.status === 'closed' || (j.card.status as string) === 'cancelled') return refuse(409, `the job is already ${j.card.status}`);
       if (j.card.status === 'in_progress') return refuse(409, 'the technician is working on it: he must Continue later first');
-      this.logChange(j.meta.id, 'status', j.card.status, 'cancelled', b.note.trim());
+      const by = b.by === 'client' || b.by === 'us' ? b.by : null;
+      this.logChange(j.meta.id, 'status', j.card.status, by === 'client' ? 'cancelled by client' : by === 'us' ? 'cancelled by us' : 'cancelled', b.note.trim());
       (j.card as { status: string }).status = 'cancelled';
+      Object.assign(j.meta, { cancelled_by_party: by, cancel_note: b.note.trim() });
       this.persist(this.state);
       return ok({ jobId: j.meta.id, status: 'cancelled' });
     }
@@ -980,7 +983,7 @@ export class DemoTransport implements Transport {
 
   private docRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
-    const isDoc = p.startsWith('/quotes') || p.startsWith('/invoices') || p.startsWith('/pastel') || ['/office/company', '/office/rates', '/office/to-invoice'].includes(p);
+    const isDoc = /^\/jobs\/[^/]+\/no-charge$/.test(p) || p.startsWith('/quotes') || p.startsWith('/invoices') || p.startsWith('/pastel') || ['/office/company', '/office/rates', '/office/to-invoice'].includes(p);
     if (!isDoc) return null;
     if (!['admin', 'management', 'director', 'creator', 'stockroom'].includes(this.who.level) || !this.does('documents')) return refuse(403, 'quotes and invoices are not part of your work');
     const d = this.docs();
@@ -995,6 +998,13 @@ export class DemoTransport implements Transport {
     }
     if (p === '/office/rates') return this.does('prices') ? done(d.setRates(b)) : refuse(403, 'only the CEO sets rates');
     if (p === '/office/to-invoice') return ok(d.toInvoice());
+    if ((m = p.match(/^\/jobs\/([^/]+)\/no-charge$/))) {
+      if (!this.does('documents')) return refuse(403, 'you cannot prepare quotes and invoices');
+      const r = req.method === 'DELETE' ? d.clearNoCharge(m[1]) : d.setNoCharge(m[1], b.reason, b.note, this.who.name);
+      if (r.ok) { const j = this.findJob(m[1]); const nc = r.body as { noChargeReason: string | null }; this.logChange(m[1], 'billing', nc.noChargeReason ? 'to invoice' : 'no charge', nc.noChargeReason ? `no charge (${NO_CHARGE_REASONS[nc.noChargeReason as keyof typeof NO_CHARGE_REASONS]})` : 'to invoice', b.note ?? null); void j; }
+      this.persist(this.state);
+      return r.ok ? ok(r.body) : refuse(r.status, ...r.reasons);
+    }
     if (p === '/quotes' && get) return ok(d.quotes(q.get('status')));
     if (p === '/quotes') return done(d.newQuote(b));
     if ((m = p.match(/^\/quotes\/([^/]+)$/))) return get ? done(d.quote(m[1])) : done(d.editQuote(m[1], b));

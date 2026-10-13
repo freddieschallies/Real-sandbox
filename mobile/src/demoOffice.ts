@@ -212,6 +212,7 @@ export class DemoOffice {
       id: j.meta.id, job_number: j.meta.job_number, job_type: j.meta.job_type, priority: j.meta.priority, status: j.card.status,
       scheduled_date: j.meta.scheduled_date, fault_reported: j.meta.fault_reported, store: j.meta.store, lead_technician: j.meta.lead_technician,
       lead_id: j.meta.lead_id ?? 'me', helper_ids: j.meta.helper_ids ?? [],
+      cancelled_by_party: (j.meta as { cancelled_by_party?: string | null }).cancelled_by_party ?? null, cancel_note: (j.meta as { cancel_note?: string | null }).cancel_note ?? null,
     })).sort((a, b) => Number(a.status === 'closed' || a.status === 'cancelled') - Number(b.status === 'closed' || b.status === 'cancelled') || a.scheduled_date.localeCompare(b.scheduled_date) || a.job_number - b.job_number);
   }
 

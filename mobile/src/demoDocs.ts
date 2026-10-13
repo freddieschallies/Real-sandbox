@@ -21,6 +21,8 @@ export interface DemoDocsState {
   /** Credit notes against sent or paid invoices (kept as issued). */
   credits?: { id: string; credit_number: number; invoice_id: string; job_id: string; amount_cents: number; vat_pct: number; reason: string; created_at: string; created_by: string }[];
   nextCredit?: number;
+  /** Closed at no charge (warranty, callback, ...): the office's billing decision, beside the locked job card. */
+  noCharge?: Record<string, { reason: string; note: string | null; by: string; at: string }>;
   profile: Record<string, unknown> | null; rates: Record<string, number>;
   pastel: P.PastelSettings; clientCodes: Record<string, string | null>; batches: { id: string; kind: 'invoice' | 'quote'; numbers: number[]; file: string; created_at: string; created_by: string }[];
 }
@@ -209,7 +211,7 @@ export class DemoDocs {
 
   // ---- Invoices ------------------------------------------------------------------------------
   toInvoice() {
-    return this.src.jobs.filter(j => j.card.status === 'closed' && !this.d.invoices.some(i => i.job_id === j.meta.id && i.status !== 'cancelled')).map(j => {
+    return this.src.jobs.filter(j => j.card.status === 'closed' && !this.d.noCharge?.[j.meta.id] && !this.d.invoices.some(i => i.job_id === j.meta.id && i.status !== 'cancelled')).map(j => {
       const s = this.src.stores.find(x => x.id === j.meta.store_id);
       return { id: j.meta.id, job_number: j.meta.job_number, job_type: j.meta.job_type, closed_at: j.closedAt ?? j.card.visits.at(-1)?.endedAt ?? new Date().toISOString(),
         fault_reported: j.meta.fault_reported, client_order_ref: j.meta.client_order_ref, store: j.meta.store, client: s?.client ?? '', store_address: j.meta.store_address, lead_technician: j.meta.lead_technician };
@@ -253,12 +255,32 @@ export class DemoDocs {
   billingOf(jobId: string) {
     const inv = this.d.invoices.filter(i => i.job_id === jobId && i.status !== 'cancelled').sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
     const credited = (this.d.credits ?? []).filter(c => c.job_id === jobId).reduce((n, c) => n + c.amount_cents, 0);
-    return { invoice_number: inv?.invoice_number ?? null, invoice_status: inv?.status ?? null, credited_cents: credited,
-      billing: credited > 0 ? 'credited' : inv?.status === 'draft' ? 'draft_invoice' : inv ? 'invoiced' : 'not_invoiced' };
+    const nc = this.d.noCharge?.[jobId];
+    return { invoice_number: inv?.invoice_number ?? null, invoice_status: inv?.status ?? null, credited_cents: credited, no_charge_reason: nc?.reason ?? null, no_charge_note: nc?.note ?? null,
+      billing: nc ? 'no_charge' : credited > 0 ? 'credited' : inv?.status === 'draft' ? 'draft_invoice' : inv ? 'invoiced' : 'not_invoiced' };
+  }
+
+  /** Closed at no charge, with the reason (or taken off again). */
+  setNoCharge(jobId: string, reason: string, note: string | undefined, by: string): Res {
+    const j = this.job(jobId);
+    if (!j) return bad(404, 'no such job');
+    if (!['warranty', 'callback', 'goodwill', 'contract', 'no_fault', 'other'].includes(reason)) return bad(400, 'why there is no charge');
+    if (reason === 'other' && (!note || note.trim().length < 3)) return bad(400, 'say why there is no charge');
+    if (j.card.status !== 'closed') return bad(409, (j.card.status as string) === 'cancelled' ? 'the job is cancelled' : 'close the job first (the technician signs it off)');
+    const inv = this.d.invoices.find(i => i.job_id === jobId && i.status !== 'cancelled');
+    if (inv) return bad(409, inv.status === 'draft' ? `cancel draft invoice ${inv.invoice_number} first` : `invoice ${inv.invoice_number} was sent: credit it instead`);
+    (this.d.noCharge ??= {})[jobId] = { reason, note: note?.trim() || null, by, at: new Date().toISOString() };
+    return good({ id: jobId, noChargeReason: reason });
+  }
+  clearNoCharge(jobId: string): Res {
+    if (!this.d.noCharge?.[jobId]) return bad(409, 'this job is not marked no charge');
+    delete this.d.noCharge[jobId];
+    return good({ id: jobId, noChargeReason: null });
   }
   newInvoice(jobId: string): Res {
     const j = this.job(jobId);
     if (!j) return bad(404, 'no such job');
+    if (this.d.noCharge?.[jobId]) return bad(409, `job ${j.meta.job_number} was closed at no charge: take that off the job first if it must be invoiced`);
     if (j.card.status !== 'closed') return bad(409, 'only a closed job can be invoiced');
     if (this.d.invoices.some(i => i.job_id === jobId && i.status !== 'cancelled')) return bad(409, 'this job already has an invoice');
     const lines = D.invoiceDraft({

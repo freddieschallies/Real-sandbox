@@ -14,6 +14,7 @@ import { useOnJob } from '../stockRepo.ts';
 import { Iso, Point, Refused, Uuid, DateOnly, parse } from '../http.ts';
 import { readUpload, saveFile, removeFile } from '../uploads.ts';
 import { postJobUpdate } from '../intake.ts';
+import { jobOutcome } from '../core/jobOutcome.ts';
 
 export interface Ctx { c: Q; row: JobRow; card: J.JobCard; visitId?: string; actorId: string }
 
@@ -92,7 +93,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     const q = req.query as { status?: string };
     const mine = !can(req.actor, 'view_all_job_cards');
     const { rows } = await req.db.query(
-      `SELECT j.id, j.job_number, j.job_type, j.priority, j.status, j.scheduled_date, j.fault_reported,
+      `SELECT j.id, j.job_number, j.job_type, j.priority, j.status, j.scheduled_date, j.fault_reported, nc.reason AS no_charge_reason, nc.note AS no_charge_note, j.cancelled_by_party, j.cancel_note,
               s.name AS store, u.full_name AS lead_technician, j.lead_technician_id,
               -- Billing, for the office's filters: its invoice (not cancelled) and anything credited.
               inv.invoice_number, inv.status::text AS invoice_status,
@@ -101,7 +102,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
               (SELECT m.kind FROM machine_moves m WHERE m.job_id = j.id AND m.kind IN ('uplifted', 'delivered') ORDER BY m.at DESC, m.created_at DESC LIMIT 1) AS last_move,
               (SELECT count(*) FILTER (WHERE m.kind = 'loan_out') - count(*) FILTER (WHERE m.kind = 'loan_back') FROM machine_moves m WHERE m.job_id = j.id)::int AS loans_out,
               (SELECT v.place = 'workshop' AND v.state = 'done' FROM job_visits v WHERE v.job_id = j.id ORDER BY v.go_at DESC LIMIT 1) AS last_workshop_done
-         FROM jobs j
+         FROM jobs j LEFT JOIN job_no_charge nc ON nc.job_id = j.id
          LEFT JOIN LATERAL (SELECT i.invoice_number, i.status FROM invoices i WHERE i.job_id = j.id AND i.status <> 'cancelled' ORDER BY i.created_at DESC LIMIT 1) inv ON true JOIN stores s ON s.id = j.store_id JOIN users u ON u.id = j.lead_technician_id
         WHERE ($1::boolean = false OR j.lead_technician_id = $2
                OR EXISTS (SELECT 1 FROM job_helpers h WHERE h.job_id = j.id AND h.user_id = $2))
@@ -112,7 +113,8 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     return rows.map(({ last_move, last_workshop_done, ...r }) => ({ ...r, credited_cents: Number(r.credited_cents),
       machine_at: last_move === 'uplifted' ? 'workshop' : last_move === 'delivered' ? 'site' : r.job_type === 'workshop_repair' ? 'workshop' : 'site',
       ready_to_deliver: !!last_workshop_done && last_move !== 'delivered' && (last_move === 'uplifted' || r.job_type === 'workshop_repair'),
-      billing: Number(r.credited_cents) > 0 ? 'credited' : r.invoice_status === 'draft' ? 'draft_invoice' : r.invoice_status ? 'invoiced' : 'not_invoiced' }));
+      billing: r.no_charge_reason ? 'no_charge' : Number(r.credited_cents) > 0 ? 'credited' : r.invoice_status === 'draft' ? 'draft_invoice' : r.invoice_status ? 'invoiced' : 'not_invoiced',
+      outcome: jobOutcome(r) }));
   });
 
   app.get('/jobs/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {

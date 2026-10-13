@@ -269,20 +269,21 @@ export function registerControlRoutes(app: FastifyInstance) {
   app.post('/jobs/:id/cancel', async (req: FastifyRequest<{ Params: { id: string } }>) => {
     if (!can(req.actor, 'assign_jobs')) throw new Refused(403, ['you cannot cancel jobs']);
     const jobId = parse(Uuid, req.params.id);
-    const b = parse(z.object({ note: z.string().trim().min(5, 'say why the job is cancelled').max(500) }), req.body);
+    // Who cancelled it: the client (they fixed it, no longer needed, ...) or us (a duplicate, opened by mistake, ...).
+    const b = parse(z.object({ note: z.string().trim().min(5, 'say why the job is cancelled').max(500), by: z.enum(['client', 'us']).optional() }), req.body);
     return tx(req.db, async c => {
       const j = (await c.query('SELECT job_number, status, lead_technician_id FROM jobs WHERE id = $1 FOR UPDATE', [jobId])).rows[0];
       if (!j) throw new Refused(404, ['no such job']);
       if (j.status === 'closed' || j.status === 'cancelled') throw new Refused(409, [`the job is already ${j.status}`]);
       if (j.status === 'in_progress') throw new Refused(409, ['the technician is working on it: he must Continue later first']);
-      await c.query("UPDATE jobs SET status = 'cancelled', cancelled_at = now(), cancelled_by = $2, cancel_note = $3 WHERE id = $1", [jobId, req.actor.id, b.note]);
+      await c.query("UPDATE jobs SET status = 'cancelled', cancelled_at = now(), cancelled_by = $2, cancel_note = $3, cancelled_by_party = $4 WHERE id = $1", [jobId, req.actor.id, b.note, b.by ?? null]);
       await c.query('INSERT INTO job_changes (job_id, field, old_value, new_value, reason, changed_by) VALUES ($1, $2, $3, $4, $5, $6)',
-        [jobId, 'status', j.status, 'cancelled', b.note, req.actor.id]);
+        [jobId, 'status', j.status, b.by === 'client' ? 'cancelled by client' : b.by === 'us' ? 'cancelled by us' : 'cancelled', b.note, req.actor.id]);
       // Stock asked for but not yet issued is not needed any more.
       await c.query("UPDATE stock_issues SET status = 'rejected', decided_by = $2, decided_at = now(), note = $3 WHERE job_id = $1 AND status = 'pending'",
         [jobId, req.actor.id, `Job ${j.job_number} cancelled: ${b.note}`]);
       const crew = [j.lead_technician_id, ...(await c.query('SELECT user_id FROM job_helpers WHERE job_id = $1', [jobId])).rows.map(r => r.user_id)];
-      for (const u of crew) await notify(c, u, 'job_cancelled', `Job ${j.job_number} was cancelled: ${b.note}. Return any stock booked for it.`, { jobId });
+      for (const u of crew) await notify(c, u, 'job_cancelled', `Job ${j.job_number} was cancelled${b.by === 'client' ? ' by the client' : ''}: ${b.note}. Return any stock booked for it.`, { jobId });
       await audit(c, req.actor.id, 'job_cancelled', 'job', jobId, b);
       return { jobId, status: 'cancelled' };
     });

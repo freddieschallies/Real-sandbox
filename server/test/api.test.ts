@@ -52,7 +52,7 @@ const at = (h: number, m = 0) => `2026-10-12T${String(h).padStart(2, '0')}:${Str
 const STORE = { lat: -28.7807, lng: 32.0383 };
 const SAFE = { areaSafe: true, isolated: true, publicClear: true };
 
-async function call(who: string, method: 'GET' | 'POST' | 'PATCH' | 'PUT', url: string, body?: object, extra: Record<string, string> = {}) {
+async function call(who: string, method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, body?: object, extra: Record<string, string> = {}) {
   const res = await app.inject({ method, url, payload: body, headers: { ...(tokens[who] ? { authorization: `Bearer ${tokens[who]}` } : {}), ...extra } });
   return { status: res.statusCode, body: res.json(), headers: res.headers };
 }
@@ -2278,4 +2278,30 @@ test('customers from a spreadsheet: columns guessed and checked, sites found on 
   assert.equal(add.status, 201);
   assert.equal(add.body.pinStatus, 'looking');
   assert.equal((await call('admin', 'POST', '/office/stores', { client: 'Harbour Grill', name: 'Harbour Grill Nothing' })).status, 400, 'an address or a pin');
+});
+
+test('job status says where the money stands: to invoice, invoiced, paid, credited, closed at no charge, cancelled by the client', async () => {
+  const listed = async (id: string) => ((await call('admin', 'GET', '/jobs')).body as { id: string; outcome: { key: string; label: string }; billing: string }[]).find(j => j.id === id)!;
+  const closed = (await db.query("SELECT j.id, j.job_number FROM jobs j WHERE j.status = 'closed' AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.job_id = j.id AND i.status <> 'cancelled') LIMIT 1")).rows[0];
+  assert.ok(closed, 'a closed job not invoiced');
+  assert.equal((await listed(closed.id)).outcome.label, 'Done · to invoice');
+  assert.equal((await call('tech', 'POST', `/jobs/${closed.id}/no-charge`, { reason: 'warranty' })).status, 403);
+  assert.equal((await call('admin', 'POST', `/jobs/${closed.id}/no-charge`, { reason: 'other' })).status, 400, 'other needs a reason');
+  assert.equal((await call('admin', 'POST', `/jobs/${closed.id}/no-charge`, { reason: 'warranty', note: 'Compressor under warranty' })).status, 200);
+  const nc = await listed(closed.id);
+  assert.deepEqual([nc.outcome.key, nc.outcome.label, nc.billing], ['no_charge', 'Closed · no charge (Warranty)', 'no_charge']);
+  assert.ok(!((await call('admin', 'GET', '/office/to-invoice')).body as { id: string }[]).some(j => j.id === closed.id), 'off the to-invoice list');
+  assert.equal((await call('admin', 'POST', '/invoices', { jobId: closed.id })).status, 409, 'not invoiced while marked no charge');
+  assert.ok(((await call('admin', 'GET', `/jobs/${closed.id}/changes`)).body as { new_value: string }[]).some(c => c.new_value === 'no charge (Warranty)'), 'on the job\'s change log');
+  assert.equal((await call('admin', 'DELETE', `/jobs/${closed.id}/no-charge`)).status, 200);
+  assert.equal((await listed(closed.id)).outcome.label, 'Done · to invoice');
+  // Not before it is closed; and a job cancelled by the client says so.
+  const open = (await call('admin', 'POST', '/jobs', { jobType: 'breakdown', storeId: ids.store, faultReported: 'Door seal torn', scheduledDate: '2026-10-14', leadTechnicianId: ids.tech })).body;
+  assert.equal((await call('admin', 'POST', `/jobs/${open.id}/no-charge`, { reason: 'goodwill' })).status, 409);
+  assert.equal((await listed(open.id)).outcome.label, 'Assigned');
+  assert.equal((await call('admin', 'POST', `/jobs/${open.id}/cancel`, { note: 'Store fixed it themselves', by: 'client' })).status, 200);
+  assert.equal((await listed(open.id)).outcome.label, 'Cancelled by client');
+  // Invoiced jobs show the invoice.
+  const inv = (await db.query("SELECT i.job_id, i.invoice_number, i.status FROM invoices i WHERE i.status IN ('sent', 'paid') LIMIT 1")).rows[0];
+  if (inv) assert.match((await listed(inv.job_id)).outcome.label, new RegExp(`^(Invoiced|Paid|Credited) · INV ${inv.invoice_number}$`));
 });
