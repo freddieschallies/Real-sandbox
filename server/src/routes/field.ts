@@ -150,7 +150,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
     const f = parse(z.object({
       kind: z.enum(['signature', 'fuel_slip', 'supplier_slip', 'bought_out_slip', 'vehicle_front', 'vehicle_back', 'vehicle_left',
         'vehicle_right', 'vehicle_dashboard', 'vehicle_damage', 'handover_signature', 'stock_item', 'delivery_note', 'profile',
-        'fleet_before', 'fleet_after', 'fleet_fault', 'fleet_slip', 'logo']),
+        'fleet_before', 'fleet_after', 'fleet_fault', 'fleet_slip', 'logo', 'letterhead', 'report_machine', 'report_serial', 'report_part', 'report_extra']),
       takenAt: Iso, id: Uuid.optional(), jobId: Uuid.optional(),
     }), up.fields);
     if (f.kind === 'signature' && !f.jobId) throw new Refused(400, ['a signature belongs to a job: send jobId']);
@@ -174,8 +174,8 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
     const p = rows[0];
     if (!p) throw new Refused(404, ['no such photo']);
     if (p.purged_at) throw new Refused(410, [`this photo is no longer kept: ${p.purge_reason}`]);
-    // The company logo is for everyone in the company; other photos for whoever took them, or the office.
-    if (p.kind !== 'logo' && p.taken_by !== req.actor.id && !can(req.actor, 'view_all_job_cards')) throw new Refused(403, ['not your photo']);
+    // The company logo and letterhead are for everyone in the company; other photos for whoever took them, or the office.
+    if (!['logo', 'letterhead'].includes(p.kind) && p.taken_by !== req.actor.id && !can(req.actor, 'view_all_job_cards')) throw new Refused(403, ['not your photo']);
     reply.header('content-type', p.content_type ?? 'image/jpeg').header('cache-control', 'private, max-age=86400');
     return reply.send(openFile(p.file_path));
   });

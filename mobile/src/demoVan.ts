@@ -6,7 +6,7 @@ import type { Flag } from './types.ts';
 import type { DemoOfficeState } from './demoOffice.ts';
 import type { DemoStockState } from './demoStock.ts';
 
-export interface DemoDepartment { id: string; name: string; managerId: string | null; active?: boolean; logoPhotoId?: string | null }
+export interface DemoDepartment { id: string; name: string; managerId: string | null; active?: boolean; logoPhotoId?: string | null; partsReport?: boolean }
 export interface DemoVanState {
   departments: DemoDepartment[];
   /** Department of each person (technicians mostly). */
@@ -22,7 +22,7 @@ export function seedVan(): DemoVanState {
       // The usual five (Admin is the office staff's).
       { id: 'dep-admin', name: 'Admin', managerId: null },
       { id: 'dep-elec', name: 'Electrical', managerId: null },
-      { id: 'dep-ref', name: 'Foodservice', managerId: 'mgr-1' },
+      { id: 'dep-ref', name: 'Foodservice', managerId: 'mgr-1', partsReport: true },
       { id: 'dep-plumb', name: 'Plumbing', managerId: null },
       { id: 'dep-svc', name: 'Service', managerId: null },
     ],
@@ -43,6 +43,7 @@ export class DemoVan {
     // the usual departments it did not have yet are added.
     const ref = v.departments.find(d => d.name === 'Refrigeration');
     if (ref && !v.departments.some(d => d.name === 'Foodservice')) ref.name = 'Foodservice';
+    for (const d of v.departments) if (d.name === 'Foodservice' && d.partsReport === undefined) d.partsReport = true;
     for (const [id, name] of [['dep-admin', 'Admin'], ['dep-elec', 'Electrical'], ['dep-svc', 'Service'], ['dep-plumb', 'Plumbing']] as const) {
       if (!v.departments.some(d => d.name === name)) v.departments.push({ id: v.departments.some(d => d.id === id) ? `${id}-2` : id, name, managerId: null });
     }
@@ -245,4 +246,7 @@ export class DemoVan {
     }
     return good(this.check(userId, this.name(by) ?? by));
   }
+
+  /** Whether this technician's department asks for the parts report. */
+  partsReport(userId: string) { return !!this.deptOf(userId)?.partsReport; }
 }

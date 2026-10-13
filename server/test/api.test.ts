@@ -29,6 +29,8 @@ let owner: pg.Pool;    // owner connection, no company set
 let appDb: pg.Pool;    // the app's own restricted connection
 let app: FastifyInstance;
 // What the pretend invoice reader 'sees' on the next photo.
+// Emails the server would send.
+let mailBox: { to: string[]; subject: string; html: string; pictures: { cid: string }[] }[] = [];
 let fakeReader: InvoiceReader = async () => { throw new Error('no invoice expected'); };
 const ids: Record<string, string> = {};
 const tokens: Record<string, string> = {};
@@ -127,7 +129,7 @@ before(async () => {
   await db.query("INSERT INTO stock_movements (stock_item_id, qty, kind, from_stockroom, to_technician_id, created_by) VALUES ($1, 2, 'assign', true, $2, $3)", [ids.seal, ids.tech, ids.admin]);
   ids.policy = (await q("INSERT INTO policy_versions (version, body) VALUES ('1.0', 'Vehicle and App Monitoring Policy') RETURNING id", [])).id;
 
-  app = await buildApp(appDb, { jwtSecret: 'x'.repeat(40), invoiceReader: (img, mime) => fakeReader(img, mime) });
+  app = await buildApp(appDb, { jwtSecret: 'x'.repeat(40), invoiceReader: (img, mime) => fakeReader(img, mime), mailer: async m => { mailBox.push(m as never); } });
 });
 
 after(async () => {
@@ -1485,7 +1487,7 @@ test('departments: switched off and on; people moved out first; nobody put in on
 });
 
 test('timesheets: only the CEO fills in one the technician did not submit, marked as filled in by the CEO', async () => {
-  const date = '2026-10-08';
+  const date = '2026-09-21';
   assert.equal((await call('hr', 'POST', `/timesheets/${ids.tech2}/${date}/fill`, {})).status, 403, 'not HR');
   assert.equal((await call('manager', 'POST', `/timesheets/${ids.tech2}/${date}/fill`, {})).status, 403, 'not the manager');
   assert.equal((await call('admin', 'POST', `/timesheets/${ids.tech2}/${date}/fill`, {})).status, 403, 'not the admin');
@@ -1575,6 +1577,49 @@ test('credit notes: part or all of a sent invoice, with a reason; the office fil
   assert.equal(d.credits.length, 2); assert.equal(d.invoice.status, 'paid', 'the invoice itself does not change');
   assert.equal((await call('admin', 'GET', '/jobs')).body.find((j: { id: string }) => j.id === inv.job_id).billing, 'credited');
   await assert.rejects(db.query('DELETE FROM credit_notes WHERE invoice_id = $1', [inv.id]), 'credit notes are kept');
+});
+
+test('parts report: a Foodservice technician who needs parts reports it step by step before leaving site; it becomes a quote and goes out on the letterhead', async () => {
+  const sent: { to: string[]; subject: string; html: string; pictures: { cid: string }[] }[] = [];
+  mailBox = sent;
+  await db.query('UPDATE departments SET parts_report = true WHERE id = $1', [ids.dept]);
+  const created = await call('admin', 'POST', '/jobs', { jobType: 'breakdown', storeId: ids.store, faultReported: 'Combi oven not heating', scheduledDate: '2026-10-12', leadTechnicianId: ids.tech });
+  const J = `/jobs/${created.body.id}`;
+  await call('tech', 'POST', `${J}/go`, { at: at(9) });
+  await call('tech', 'POST', `${J}/arrive`, { at: at(9, 20), position: STORE, managerName: 'Sipho', safety: SAFE });
+  await call('tech', 'POST', `${J}/start`, { at: at(9, 25) });
+  const card = (await call('tech', 'GET', J)).body;
+  assert.equal(card.parts_report_required, true, 'his department asks for it');
+  const later = { at: at(11), progress: 'Heating element burnt out, needs a new one from Rational', reason: 'waiting_for_parts', plannedReturn: '2026-10-15', managerInformed: 'Sipho' };
+  assert.equal((await call('tech', 'POST', `${J}/continue-later`, later)).status, 400, 'he must say whether another quote is needed');
+  assert.equal((await call('tech', 'POST', `${J}/continue-later`, { ...later, quoteNeeded: true })).status, 409, 'the report first');
+  const pic = async (kind: string) => (await upload('tech', '/photos', { kind, takenAt: at(10), jobId: created.body.id })).body.id as string;
+  const report = { at: at(10, 30), machinePhotoId: await pic('report_machine'), serialPhotoId: await pic('report_serial'), serialText: 'E11SI2201', partPhotoId: await pic('report_part'),
+    partDescription: 'Heating element 9 kW', partQty: 1, extraPhotoIds: [await pic('report_extra')], notes: 'Element shorted to earth' };
+  assert.equal((await call('tech', 'POST', `${J}/parts-report`, { ...report, serialPhotoId: report.machinePhotoId })).status, 400, 'each photo of its own kind');
+  assert.equal((await call('tech2', 'POST', `${J}/parts-report`, report)).status, 403, 'only someone on the job');
+  const r = await call('tech', 'POST', `${J}/parts-report`, report);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.ok(r.body.quoteNumber, 'a draft quote for the office');
+  assert.equal((await call('tech', 'POST', `${J}/continue-later`, { ...later, quoteNeeded: true })).status, 200, 'now he can leave');
+  const q = (await call('admin', 'GET', `/quotes/${r.body.quoteId}`)).body;
+  assert.equal(q.quote.from_technician, true); assert.match(q.lines[0].description, /Heating element/);
+  // The letterhead: the CEO's, used on the email.
+  const top = await upload('director', '/photos', { kind: 'letterhead', takenAt: at(8) });
+  assert.equal((await call('admin', 'PUT' as 'POST', '/company/letterhead', { headerPhotoId: top.body.id })).status, 403, 'only the CEO');
+  assert.equal((await call('director', 'PUT' as 'POST', '/company/letterhead', { headerPhotoId: top.body.id })).status, 200);
+  assert.equal((await call('tech', 'GET', '/company/letterhead')).body.headerPhotoId, top.body.id, 'everyone uses it');
+  const full = (await call('admin', 'GET', `/parts-reports/${r.body.id}`)).body;
+  assert.equal(full.report.serial_text, 'E11SI2201'); assert.equal(full.canEmail, true);
+  assert.equal((await call('tech2', 'GET', `/parts-reports/${r.body.id}`)).status, 403);
+  assert.equal((await call('admin', 'POST', `/parts-reports/${r.body.id}/email`, { to: ['not-an-email'] })).status, 400);
+  const e = await call('admin', 'POST', `/parts-reports/${r.body.id}/email`, { to: ['manager@store.test'], message: 'Please see the report below.' });
+  assert.equal(e.status, 200, JSON.stringify(e.body));
+  assert.equal(sent.length, 1); assert.deepEqual(sent[0].to, ['manager@store.test']);
+  assert.match(sent[0].html, /cid:letterhead-top/, 'on the letterhead');
+  assert.match(sent[0].html, /E11SI2201/); assert.ok(sent[0].pictures.length >= 4, 'the photos go with it');
+  assert.equal((await call('admin', 'GET', `/parts-reports/${r.body.id}`)).body.emails.length, 1, 'kept');
+  await db.query('UPDATE departments SET parts_report = false WHERE id = $1', [ids.dept]);
 });
 
 test('phone menus: the CEO or an admin pins tabs per position; everyone gets their own position\'s choice', async () => {

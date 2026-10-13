@@ -3,9 +3,13 @@
 import { useEffect, useState } from 'react';
 import { useStore } from './state.tsx';
 
+// Photos taken during this visit, kept when someone else signs in on the same screen (the test drive
+// switches between people, and the office should still see the technician's photos).
+const seen = new Map<string, string>();
+
 export function usePhotoUri(id: string | null | undefined): string | null {
   const s = useStore();
-  const local = id ? s.cache.photoUris?.[id] ?? null : null;
+  const local = id ? s.cache.photoUris?.[id] ?? seen.get(id) ?? null : null;
   const [uri, setUri] = useState<string | null>(local);
   useEffect(() => {
     if (!id) { setUri(null); return; }
@@ -29,5 +33,6 @@ export function usePhotoUri(id: string | null | undefined): string | null {
 
 /** Remember a photo taken here so it shows at once. */
 export function rememberPhoto(s: ReturnType<typeof useStore>, id: string, uri: string) {
+  seen.set(id, uri);
   s.patchCache(c => ({ ...c, photoUris: { ...c.photoUris, [id]: uri } }));
 }

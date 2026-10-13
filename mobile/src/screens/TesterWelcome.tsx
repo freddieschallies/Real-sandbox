@@ -23,6 +23,7 @@ const STEPS: [string, string[]][] = [
     'Queries: Zanele (the office) asked about an access card; answer her. Or send another technician a question.',
     'My tools and PPE (on My day): what the stockroom has on his name.',
     'Timesheet (on My day): yesterday\'s timesheet, made by the app from his jobs: travel, work, paused and time not accounted for. Check it and submit it; time not accounted for needs a word.',
+    'Parts report: on a job you started, tap Continue later and answer "Is another quote needed?" Yes: the app takes you step by step through photos of the machine, the serial tag (type it if unclear) and the part, then more photos. It goes to the office as a quote; open it on the job to print or email it.',
     'Quotes (on My day): a new quote for a store, with an older job card linked for reference; or open a job that is not finished and tap "Submit a quote for this job". Add hours, parts and things to buy; it goes to the office to price and send.',
   ]],
   ['As stock controller (Lindiwe)', [
@@ -77,6 +78,7 @@ const STEPS: [string, string[]][] = [
     'Ask the CEO to give her the stockroom: a Stockroom tab appears at the top and she has the stock controller\'s full screens.',
   ]],
   ['As the CEO (Lilanie)', [
+    'Settings → Letterhead: add a picture of the top and the bottom of your letterhead. Every report, quote, invoice and timesheet then prints and emails on it.',
     'Timesheets: open a sheet a technician did not submit (Missing) and tap "Fill in and submit for him". Only the CEO can; it shows as filled in by you and he is told.',
     'The company logo is in the header of every screen and on every quote, invoice and timesheet. Change it under Accounts → Company ("Change the logo"); each company sets its own.',
     'Everything: the office, plus Stockroom and Fleet tabs at the top to open those screens.',

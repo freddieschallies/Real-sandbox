@@ -25,9 +25,11 @@ import { registerStockRoutes } from './routes/stock.ts';
 import { registerFleetRoutes } from './routes/fleet.ts';
 import { registerWorkshopRoutes } from './routes/workshop.ts';
 import type { InvoiceReader } from './invoiceReader.ts';
+import { mailerFromEnv, type Mailer } from './mailer.ts';
+import { registerReportRoutes } from './routes/reports.ts';
 
 /** db must connect as the app's own database role (no superuser, no row-level-security bypass). */
-export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boolean; corsOrigins?: string[]; invoiceReader?: InvoiceReader | null }) {
+export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boolean; corsOrigins?: string[]; invoiceReader?: InvoiceReader | null; mailer?: Mailer | null }) {
   if (!opts.jwtSecret || opts.jwtSecret.length < 32) throw new Error('JWT secret must be at least 32 characters');
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 1_000_000, trustProxy: true });
   registerErrors(app);
@@ -51,6 +53,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerDepartmentRoutes(app);
   registerTimesheetRoutes(app);
   registerMenuRoutes(app);
+  registerReportRoutes(app, opts.mailer === undefined ? mailerFromEnv() : opts.mailer);
   registerAccessRoutes(app, db);
   registerPlatformRoutes(app, db);
   registerStockRoutes(app, db, opts.invoiceReader ?? null);

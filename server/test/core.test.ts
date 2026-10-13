@@ -456,3 +456,11 @@ test('phone menu: up to five tabs show; more go under More; pinned ones first, a
   assert.ok(M.usualTabs('admin').includes('settings') && !M.usualTabs('management').includes('settings'));
   assert.deepEqual(M.usualTabs('technician'), []);
 });
+
+test('email: one HTML message with its pictures inside, lines starting with a dot doubled', async () => {
+  const { buildMime } = await import('../src/mailer.ts');
+  const raw = buildMime('ZSP <reports@zsp.test>', { to: ['a@b.test'], subject: 'Site report 1001', html: '<p>Hi</p>', text: 'Hi\n.hidden', pictures: [{ cid: 'part', mime: 'image/jpeg', data: Buffer.from([1, 2, 3]) }] });
+  assert.match(raw, /multipart\/related/); assert.match(raw, /Content-ID: <part>/); assert.match(raw, /To: a@b\.test/);
+  assert.ok(!/\r\n\.[^.]/.test(raw), 'no line starts with a single dot');
+  assert.match(buildMime('x@y.test', { to: ['a@b.test'], subject: 'Verslag – ü', html: '', text: '', pictures: [] }), /Subject: =\?UTF-8\?B\?/);
+});

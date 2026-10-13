@@ -1,6 +1,7 @@
 // Quotes, invoices and the link to Sage Pastel Partner, for whoever the CEO gave quotes and invoices.
 // A quote or invoice is made here on the company letterhead, sent, and then exported in an import
 // batch for Pastel, so the books stay in Pastel.
+import { letterheadBottom, letterheadTop } from '../letterhead.tsx';
 import { BrandLogo, brandChanged, currentLogo, useBrand } from '../brand.tsx';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Platform, Pressable, Text, TextInput, View } from 'react-native';
@@ -148,19 +149,22 @@ function printDoc(kind: 'quote' | 'invoice', doc: any, lines: Line[], totals: an
   if (Platform.OS !== 'web') return false;
   const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
   const rows = lines.map(l => `<tr><td>${esc(l.description)}</td><td class=r>${l.qty}</td><td class=r>${R(l.unitPriceCents)}</td><td class=r>${R(D.lineTotal(l))}</td></tr>`).join('');
+  // The company's letterhead (set by the CEO), or the plain heading and footer.
+  const plainHead = `<div class=bar></div><div class=head>${currentLogo() ? `<img src="${currentLogo()}" style="height:56px;background:#fff;padding:4px;border-radius:4px;margin-right:14px">` : ''}<div style="flex:1"><h1>${esc(co.trading_name || co.legal_name)}</h1>${co.trading_name ? `<div>${esc(co.legal_name)}</div>` : ''}</div><div class=t>${kind === 'quote' ? 'QUOTATION' : 'TAX INVOICE'}</div></div>`;
+  const plainFoot = `<div class=foot>${esc([co.address, co.phone, co.email].filter(Boolean).join(' · '))}<br>Reg. no. ${esc(co.reg_no || '–')} · VAT no. ${esc(co.vat_no || '–')}</div><div class=bar></div>`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${kind === 'quote' ? 'Quote' : 'Invoice'} ${kind === 'quote' ? doc.quote_number : doc.invoice_number}</title>
 <style>body{font:13px Arial,sans-serif;margin:0;color:#111}.bar{height:10px;background:#E8701A}.head{background:#111;color:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center}
 .head h1{margin:0;font-size:22px;letter-spacing:1px}.head .t{color:#E8701A;font-weight:900;font-size:20px}.body{padding:20px 24px}.two{display:flex;justify-content:space-between;gap:20px}
 table{width:100%;border-collapse:collapse;margin-top:14px}th{text-align:left;border-top:2px solid #111;border-bottom:1px solid #ccc;padding:6px 4px}td{border-bottom:1px solid #eee;padding:6px 4px}.r{text-align:right}
 .tot{text-align:right;margin-top:8px}.tot b{font-size:16px}.foot{background:#111;color:#eee;font-size:11px;padding:10px 24px}@media print{.noprint{display:none}}</style></head><body>
-<div class=bar></div><div class=head>${currentLogo() ? `<img src="${currentLogo()}" style="height:56px;background:#fff;padding:4px;border-radius:4px;margin-right:14px">` : ''}<div style="flex:1"><h1>${esc(co.trading_name || co.legal_name)}</h1>${co.trading_name ? `<div>${esc(co.legal_name)}</div>` : ''}</div><div class=t>${kind === 'quote' ? 'QUOTATION' : 'TAX INVOICE'}</div></div>
+${letterheadTop(plainHead)}
 <div class=body><div class=two><div><b>${kind === 'quote' ? 'Quote for' : 'Invoice to'}</b><br>${esc(doc.client)}<br>${esc(doc.store)}<br>${esc(doc.store_address)}</div>
 <div><b>${kind === 'quote' ? 'Quote no.' : 'Invoice no.'}</b> ${kind === 'quote' ? doc.quote_number : doc.invoice_number}<br><b>Date</b> ${day(doc.sent_at ?? doc.created_at)}<br>
 ${kind === 'quote' ? `<b>Valid until</b> ${day(doc.valid_until)}` : `<b>Due</b> ${day(doc.due_date)}`}${doc.client_ref ? `<br><b>Your order no.</b> ${esc(doc.client_ref)}` : ''}${doc.job_number ? `<br><b>Job</b> ${doc.job_number}` : ''}</div></div>
 ${kind === 'quote' && doc.title ? `<h3>${esc(doc.title)}</h3>` : ''}<table><tr><th>Description</th><th class=r>Qty</th><th class=r>Price</th><th class=r>Total</th></tr>${rows}</table>
 <div class=tot>Total excl. VAT ${R(totals.exVatCents)}<br>VAT ${doc.vat_pct ?? 15}% ${R(totals.vatCents)}<br><b>Total ${R(totals.totalCents)}</b></div>
 ${doc.notes ? `<p>${esc(doc.notes)}</p>` : ''}<p>${esc(kind === 'quote' ? co.quote_terms : co.invoice_terms)}</p>${kind === 'invoice' && co.bank_details ? `<p><b>Banking details:</b> ${esc(co.bank_details)}</p>` : ''}</div>
-<div class=foot>${esc([co.address, co.phone, co.email].filter(Boolean).join(' · '))}<br>Reg. no. ${esc(co.reg_no || '–')} · VAT no. ${esc(co.vat_no || '–')}</div><div class=bar></div>
+${letterheadBottom(plainFoot)}
 <p class=noprint style="padding:12px 24px"><button onclick="print()">Print / save as PDF</button></p></body></html>`;
   const w = window.open('', '_blank');
   if (!w) return false;

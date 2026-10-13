@@ -6,6 +6,7 @@ import { audit, raiseFlag, tx } from '../db.ts';
 import { can } from '../core/permissions.ts';
 import * as J from '../core/jobCard.ts';
 import { isOnJob, loadCard, type JobRow } from '../jobsRepo.ts';
+import { partsReportRequired, reportsOn } from './reports.ts';
 import { useOnJob } from '../stockRepo.ts';
 import { Iso, Point, Refused, Uuid, DateOnly, parse } from '../http.ts';
 import { readUpload, saveFile, removeFile } from '../uploads.ts';
@@ -320,8 +321,16 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     const b = parse(z.object({
       at: Iso, progress: z.string(), plannedReturn: DateOnly, managerInformed: z.string(),
       reason: z.enum(['more_work_needed', 'waiting_for_parts', 'store_access', 'waiting_for_quote_approval', 'other']),
+      // Departments with the parts report: is another quote needed? Yes needs the report from this visit.
+      quoteNeeded: z.boolean().optional(),
     }), req.body);
     return act(req, card => J.continueLater(card, b), async ({ c, row, visitId }) => {
+      if (await partsReportRequired(c, row.id)) {
+        if (b.quoteNeeded === undefined) throw new Refused(400, ['say whether another quote is needed for parts']);
+        if (b.quoteNeeded && !(await c.query('SELECT 1 FROM job_reports WHERE job_id = $1 AND visit_id = $2', [row.id, visitId])).rowCount) {
+          throw new Refused(409, ['the parts report first: the machine or site, the serial tag, the part needed']);
+        }
+      }
       // Close any open pause at the moment he leaves site.
       await c.query('UPDATE visit_pauses SET resumed_at = $2 WHERE visit_id = $1 AND resumed_at IS NULL', [visitId, b.at]);
       await c.query(
@@ -388,6 +397,9 @@ export async function cardView(c: Q, jobId: string) {
       equipment: equipment.rows,
       storeManagers: managers.rows.map(m => m.full_name),
       items: card.items.map(it => ({ ...it, status: J.itemStatus(it, card.jobType), missing: J.missingOnItem(it, card.jobType) })),
+      // Parts report: whether his department asks for it, and the reports already made on this job.
+      parts_report_required: await partsReportRequired(c, jobId),
+      parts_reports: await reportsOn(c, jobId),
     };
   }
 }

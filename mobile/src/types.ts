@@ -73,6 +73,9 @@ export interface CardView {
   equipment: { id: string; brand: string | null; model: string | null; serial: string | null; description: string }[];
   storeManagers: string[];
   items: CardItem[];
+  /** His department asks for the parts report when another quote is needed; the reports already made. */
+  parts_report_required?: boolean;
+  parts_reports?: { id: string; report_number: number; created_at: string; part_description: string; visit_id: string | null; quote_number: number | null; created_by: string }[];
 }
 
 export interface StockLine { id: string; code: string; description: string; unit: string; qty: number }

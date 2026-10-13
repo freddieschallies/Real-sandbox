@@ -39,6 +39,8 @@ export async function readUpload(req: FastifyRequest): Promise<Upload> {
 }
 
 const root = () => process.env.UPLOAD_DIR ?? join(process.cwd(), 'uploads');
+/** Where photo files are kept (for reading them into emails). */
+export const uploadRoot = root;
 
 /** Saves the file in the company's own folder and returns its path relative to the upload folder. */
 export async function saveFile(companyId: string, id: string, up: Upload, takenAt: string): Promise<string> {

@@ -10,6 +10,7 @@ import { nowIso } from '../device.ts';
 import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, Screen, Select, st } from '../ui.tsx';
 import { C } from '../theme.ts';
 import { TITLE as FLAG_TITLE } from '../screens/Flags.tsx';
+import { letterheadBottom, letterheadTop } from '../letterhead.tsx';
 import { currentLogo } from '../brand.tsx';
 import type { Day, Pay } from '../../../server/src/core/timesheet.ts';
 
@@ -294,13 +295,15 @@ function printSheets(d: Export, title: string, company: string): boolean {
     const jobs = x.jobs.map(j => `<tr><td>${j.jobNumber}</td><td>${esc(j.store)}${j.helper ? ' (helping)' : ''}<br><small>${esc(j.fault)}</small></td><td>${time(j.go)}</td><td>${time(j.arrived)}</td><td>${time(j.ended)}</td>
 <td class=r>${hm(j.travelMin)}</td><td class=r>${hm(j.workMin)}</td><td class=r>${hm(j.pausedMin)}</td><td>${esc(j.result)}${j.pauses.length ? `<br><small>${esc(j.pauses.map(p => `${p.label} ${hm(p.minutes)}`).join(', '))}</small>` : ''}</td></tr>`).join('');
     const flags = s.flags.map(f => `<li><b>${esc(FLAG_TITLE[f.flag_type] ?? f.flag_type)}</b>: ${esc(f.question)} <i>(${esc(flagStatus(f))})</i></li>`).join('');
-    return `<section><div class=bar></div><div class=head>${currentLogo() ? `<img src="${currentLogo()}" style="height:48px;background:#fff;padding:3px;border-radius:4px;margin-right:12px">` : ''}<div style="flex:1"><h1>${esc(company)}</h1><div>Daily timesheet</div></div><div class=t>${esc(s.label)}</div></div>
+    const plainHead = `<div class=bar></div><div class=head>${currentLogo() ? `<img src="${currentLogo()}" style="height:48px;background:#fff;padding:3px;border-radius:4px;margin-right:12px">` : ''}<div style="flex:1"><h1>${esc(company)}</h1><div>Daily timesheet</div></div><div class=t>${esc(s.label)}</div></div>`;
+    // On the company letterhead (set by the CEO) when there is one: the sheet's own title under it.
+    return `<section>${letterheadTop(plainHead)}${letterheadTop('') ? `<h2 style="margin:10px 20px 0">Daily timesheet · ${esc(s.label)}</h2>` : ''}
 <div class=body><div class=two><div><b>Technician</b> ${esc(t.full_name)}<br><b>Department</b> ${esc(t.department ?? '–')}</div>
 <div><b>Started</b> ${time(x.start)} · <b>Last job finished</b> ${time(x.end)}<br><b>Vehicle</b> ${esc(x.vehicles.join(', ') || '–')}<br><b>Status</b> ${s.submitted ? `${s.submitted.filledBy ? `Filled in by ${esc(s.submitted.filledBy)}` : 'Submitted'} ${esc(new Date(s.submitted.at).toLocaleString('en-ZA'))}` : s.status === 'none' ? 'No work recorded' : 'NOT SUBMITTED'}</div></div>
 <table class=tot><tr><th>Travelled</th><th>Worked</th><th>Paused</th><th>Not accounted for</th><th>Normal time</th><th>Overtime 1.5×</th><th>Double time 2×</th></tr><tr><td>${hm(x.travelMin)}</td><td>${hm(x.workMin)}</td><td>${hm(x.pausedMin)}</td><td${x.unaccountedMin >= 30 ? ' class=bad' : ''}>${hm(x.unaccountedMin)}</td><td>${hm(s.pay?.normalMin ?? 0)}</td><td>${hm(s.pay?.overtimeMin ?? 0)}</td><td>${hm(s.pay?.doubleMin ?? 0)}</td></tr></table>${s.pay?.holiday ? `<p><b>${esc(s.pay.holiday)}</b>: public holiday, double time.</p>` : s.pay?.dayType === 'sunday' ? '<p><b>Sunday</b>: double time.</p>' : ''}
 <table><tr><th>Job</th><th>Store and fault</th><th>Go</th><th>Arrived</th><th>Left</th><th class=r>Travel</th><th class=r>Work</th><th class=r>Paused</th><th>Result</th></tr>${jobs || '<tr><td colspan=9>No jobs recorded.</td></tr>'}</table>
 <h3>Flags this day</h3>${flags ? `<ul>${flags}</ul>` : '<p>None.</p>'}${s.submitted?.note ? `<p><b>Technician's note:</b> ${esc(s.submitted.note)}</p>` : ''}
-<p class=sign>Technician: ____________________ &nbsp;&nbsp; Manager / HR: ____________________</p></div><div class=bar></div></section>`;
+<p class=sign>Technician: ____________________ &nbsp;&nbsp; Manager / HR: ____________________</p></div>${letterheadBottom('<div class=bar></div>')}</section>`;
   })).join('');
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Timesheets ${esc(title)}</title><style>
 body{font:12px Arial,sans-serif;margin:0;color:#111}section{page-break-after:always}.bar{height:8px;background:#E8701A}.head{background:#111;color:#fff;padding:10px 20px;display:flex;justify-content:space-between;align-items:center}

@@ -4,6 +4,8 @@ import { BottomTabs } from '../BottomTabs.tsx';
 import { BrandLogo } from '../brand.tsx';
 import { usePhoneMenu } from '../menu.tsx';
 import { ModeToggle, ThemeSettings } from '../appearance.tsx';
+import { LetterheadSettings, useLetterhead } from '../letterhead.tsx';
+import { JobReports, PartsReportView } from '../reports/PartsReport.tsx';
 import { useBrand } from '../brand.tsx';
 import { PhoneMenus } from '../menus/PhoneMenus.tsx';
 import { MENU_TABS, officeTabKeys } from '../../../server/src/core/phoneMenu.ts';
@@ -29,7 +31,7 @@ import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
 type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'stores' | 'settings';
-type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | null;
+type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
   cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
@@ -93,6 +95,7 @@ export function OfficeApp() {
     { key: 'settings', label: 'Settings' },
   ];
   const brand = useBrand();
+  useLetterhead(); // ready for printing quotes, invoices and timesheets on the letterhead
   const mine = officeTabKeys(level, work, { people: canPeople, settings: menu.canEdit || brand.canTheme });
   const tabs = allTabs.filter(t => mine.includes(t.key));
   const arrange = () => { setMenuStart(level); go('settings'); };
@@ -122,7 +125,7 @@ export function OfficeApp() {
       {tab === 'vans' ? <VanLists openTech={id => setSel({ kind: 'van', id })} /> : null}
       {tab === 'people' ? <PeopleList key={`people-${sel?.kind === 'leaver' ? sel.id : ''}`} o={o} open={id => setSel({ kind: 'person', id })} openLeaver={id => setSel({ kind: 'leaver', id })} /> : null}
       {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
-      {tab === 'settings' ? <><ThemeSettings />{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
+      {tab === 'settings' ? <><ThemeSettings /><LetterheadSettings />{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
       <Text style={st.small}>{o.d.loadedAt ? `Updated ${when(o.d.loadedAt)}` : o.loading ? 'Loading…' : 'Needs signal to load.'}</Text>
     </ScrollView>
@@ -132,7 +135,8 @@ export function OfficeApp() {
   const detail = (() => {
     if (!sel) return null;
     const wrap = (el: React.ReactNode) => <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60, maxWidth: 820 }}>{el}</ScrollView>;
-    if (sel.kind === 'job') return wrap(<JobDetail key={sel.id} id={sel.id} o={o} canEdit={does('jobs')} />);
+    if (sel.kind === 'job') return wrap(<JobDetail key={sel.id} id={sel.id} o={o} canEdit={does('jobs')} openReport={rid => setSel({ kind: 'report', id: rid })} />);
+    if (sel.kind === 'report') return wrap(<PartsReportView key={sel.id} id={sel.id} />);
     if (sel.kind === 'newjob') return wrap(<NewJob o={o} done={id => setSel(id ? { kind: 'job', id } : null)} />);
     if (sel.kind === 'query') return wrap(<QueryThread key={sel.id} q={qs} id={sel.id} />);
     if (sel.kind === 'newquery') return wrap(<NewQuery key={sel.toId ?? 'new'} q={qs} toId={sel.toId} jobs={o.d.jobs.filter(j => j.status !== 'closed' && j.status !== 'cancelled').map(j => ({ id: j.id, label: `#${j.job_number} ${j.store}` }))} done={() => setSel(null)} />);
@@ -427,7 +431,7 @@ function TechPicker({ o, value, onChange }: { o: OfficeHook; value?: string; onC
   );
 }
 
-function JobDetail({ id, o, canEdit }: { id: string; o: OfficeHook; canEdit: boolean }) {
+function JobDetail({ id, o, canEdit, openReport }: { id: string; o: OfficeHook; canEdit: boolean; openReport: (id: string) => void }) {
   const [c, setC] = useState<CardView | null>(null);
   const [moving, setMoving] = useState(false);
   const [panel, setPanel] = useState<'none' | 'edit' | 'cancel'>('none');
@@ -443,6 +447,7 @@ function JobDetail({ id, o, canEdit }: { id: string; o: OfficeHook; canEdit: boo
         <Pill text={STATUS[j.status]?.text ?? j.status} tone={STATUS[j.status]?.tone ?? 'quiet'} />
         {j.priority === 'urgent' ? <Pill text="Urgent" tone="bad" /> : null}
       </View>
+      <JobReports jobId={id} open={openReport} />
       <Card>
         <Text style={[st.body, { fontWeight: '800' }]}>{j.store}</Text>
         {c?.store_address ? <Text style={st.small}>{c.store_address}</Text> : null}

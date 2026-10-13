@@ -40,6 +40,11 @@ export interface DemoState {
   logoPhotoId?: string;
   /** Tabs pinned to the bottom of the phone, per position (Settings → Phone menus). */
   phoneMenus?: Record<string, string[]>;
+  /** Parts reports (technicians on site), their emails, and the company letterhead. */
+  reports?: { id: string; report_number: number; job_id: string; visit_start: string; created_at: string; created_by: string; created_by_name: string; machine_photo_id: string; serial_photo_id: string;
+    serial_text: string | null; part_photo_id: string; part_description: string; part_qty: number; extra_photo_ids: string[]; notes: string | null; quote_id: string | null; quote_number: number | null }[];
+  reportEmails?: { report_id: string; sent_to: string[]; sent_at: string; ok: boolean; error: string | null; sent_by: string }[];
+  letterhead?: { headerPhotoId: string | null; footerPhotoId: string | null };
   /** The company's colour theme (the director's choice). */
   themeAccent?: 'orange' | 'blue' | 'green';
   fleet?: DemoFleetState;
@@ -163,6 +168,8 @@ export class DemoTransport implements Transport {
       currentState: c.visits.at(-1)?.state ?? 'not_started',
       jobMinutes: J.jobMinutes(c),
       items: c.items.map(it => ({ ...it, status: J.itemStatus(it, c.jobType), missing: J.missingOnItem(it, c.jobType) })),
+      parts_report_required: this.vans().partsReport(j.meta.lead_id ?? 'me'),
+      parts_reports: this.reportsOn(j.meta.id),
     };
   }
 
@@ -302,6 +309,68 @@ export class DemoTransport implements Transport {
   }
 
   /** The office's routes; only office positions get here. */
+
+  private reportsOn(jobId: string) {
+    return (this.state.reports ?? []).filter(r => r.job_id === jobId).sort((a, c) => c.created_at.localeCompare(a.created_at))
+      .map(r => ({ id: r.id, report_number: r.report_number, created_at: r.created_at, part_description: r.part_description, part_qty: r.part_qty, visit_id: null, quote_number: r.quote_number, created_by: r.created_by_name }));
+  }
+  /** Parts reports, emailing them, and the letterhead (as the server). */
+  private reportRoute(p: string, req: Request, b: any): Response | null {
+    let m: RegExpMatchArray | null;
+    const level = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
+    const office = ['admin', 'management', 'director', 'creator', 'stockroom'].includes(level);
+    const ceo = ['director', 'creator'].includes(level);
+    if (p === '/company/letterhead') {
+      if (req.method === 'GET') return ok({ headerPhotoId: this.state.letterhead?.headerPhotoId ?? null, footerPhotoId: this.state.letterhead?.footerPhotoId ?? null, canEdit: ceo });
+      if (!ceo) return refuse(403, 'only the CEO sets the letterhead');
+      const cur = this.state.letterhead ?? { headerPhotoId: null, footerPhotoId: null };
+      this.state.letterhead = { headerPhotoId: b.headerPhotoId === undefined ? cur.headerPhotoId : b.headerPhotoId, footerPhotoId: b.footerPhotoId === undefined ? cur.footerPhotoId : b.footerPhotoId };
+      this.persist(this.state);
+      return ok(this.state.letterhead);
+    }
+    if ((m = p.match(/^\/jobs\/([^/]+)\/parts-reports$/))) return ok(this.reportsOn(m[1]));
+    if ((m = p.match(/^\/jobs\/([^/]+)\/parts-report$/))) {
+      const j = this.findJob(m[1]);
+      if (!j) return refuse(404, 'no such job');
+      const me = this.who.id;
+      if ((j.meta.lead_id ?? 'me') !== me && !(j.meta.helper_ids ?? []).includes(me)) return refuse(403, 'you are not on this job');
+      if (['closed', 'cancelled'].includes(j.card.status)) return refuse(409, 'the job is finished: start a new quote and link the job card for reference');
+      const had = (this.state.reports ?? []).find(r => r.id === b.id);
+      if (had) return ok({ id: had.id, reportNumber: had.report_number, again: true });
+      if (!b.machinePhotoId || !b.serialPhotoId || !b.partPhotoId) return refuse(400, 'the photos of the machine, the serial tag and the part');
+      if (!b.partDescription || b.partDescription.trim().length < 2) return refuse(400, 'what part is needed');
+      const d = this.docs();
+      const q = d.techQuote({ jobId: j.meta.id, title: `Parts needed: ${b.partDescription.trim()}`, notes: [b.serialText ? `Serial: ${b.serialText}` : null, b.notes ?? null, 'See the parts report for photos.'].filter(Boolean).join('\n'),
+        boughtOutLines: [{ description: b.partDescription.trim(), qty: Number(b.partQty ?? 1), estimatedPriceCents: 0 }] },
+        { id: me, name: this.who.name }, [{ id: j.meta.id, status: j.card.status }], () => null);
+      const qb = q.ok ? q.body as { id: string; quoteNumber: number } : null;
+      const list = (this.state.reports ??= []);
+      const n = 1001 + list.length;
+      const r = { id: b.id ?? id('report'), report_number: n, job_id: j.meta.id, visit_start: j.card.visits.at(-1)?.goAt ?? '', created_at: b.at ?? new Date().toISOString(), created_by: me, created_by_name: this.who.name,
+        machine_photo_id: b.machinePhotoId, serial_photo_id: b.serialPhotoId, serial_text: b.serialText?.trim() || null, part_photo_id: b.partPhotoId, part_description: b.partDescription.trim(),
+        part_qty: Number(b.partQty ?? 1), extra_photo_ids: b.extraPhotoIds ?? [], notes: b.notes?.trim() || null, quote_id: qb?.id ?? null, quote_number: qb?.quoteNumber ?? null };
+      list.push(r);
+      this.persist(this.state);
+      return ok({ id: r.id, reportNumber: n, quoteId: r.quote_id, quoteNumber: r.quote_number }, 201);
+    }
+    if ((m = p.match(/^\/parts-reports\/([^/]+)(\/email)?$/))) {
+      const r = (this.state.reports ?? []).find(x => x.id === m![1]);
+      if (!r) return refuse(404, 'no such report');
+      if (r.created_by !== this.who.id && !office) return refuse(403, 'not your report');
+      const j = this.findJob(r.job_id);
+      const store = j ? this.office().o.stores.find(x => x.id === j.meta.store_id) : undefined;
+      if (m[2]) {
+        const to: string[] = Array.isArray(b.to) ? b.to : [];
+        if (!to.length || to.some(x => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x))) return refuse(400, 'a valid email address');
+        (this.state.reportEmails ??= []).unshift({ report_id: r.id, sent_to: to, sent_at: new Date().toISOString(), ok: true, error: null, sent_by: this.who.name });
+        this.persist(this.state);
+        return ok({ ok: true, to, demo: true });
+      }
+      return ok({ report: { ...r, technician: r.created_by_name, job_number: j?.meta.job_number ?? null, fault_reported: j?.meta.fault_reported ?? '', store: j?.meta.store ?? '', store_address: j?.meta.store_address ?? null,
+        store_email: null, client: store?.client ?? '' }, emails: (this.state.reportEmails ?? []).filter(e => e.report_id === r.id), canEmail: true });
+    }
+    return null;
+  }
 
   /** A technician's quotes: on his jobs not finished, or new for a store with a job card for reference. */
   private techQuoteRoute(p: string, req: Request, b: any): Response | null {
@@ -783,6 +852,8 @@ export class DemoTransport implements Transport {
     if (mr) return mr;
     const tq = this.techQuoteRoute(p, req, b);
     if (tq) return tq;
+    const rr = this.reportRoute(p, req, b);
+    if (rr) return rr;
     const ceoLevel = ['director', 'creator'].includes(this.office().levelOf(this.who.id) ?? this.who.level);
     if (p === '/company/brand') return ok({ name: 'ZSP (demo)', logoPhotoId: this.state.logoPhotoId ?? null, logoDataUri: this.state.logoPhotoId ? null : DEMO_LOGO,
       accent: this.state.themeAccent ?? 'orange', canTheme: ceoLevel });
@@ -1024,7 +1095,15 @@ export class DemoTransport implements Transport {
     if ((m = p.match(/^\/jobs\/([^/]+)\/arrive$/))) {
       return this.rule(m[1], c => J.arrive(c, { at: b.at, vehiclePosition: b.position, managerName: b.managerName, safety: b.safety, outsideReason: b.outsideReason }));
     }
-    if ((m = p.match(/^\/jobs\/([^/]+)\/continue-later$/))) return this.rule(m[1], c => J.continueLater(c, b));
+    if ((m = p.match(/^\/jobs\/([^/]+)\/continue-later$/))) {
+      const j = this.findJob(m[1]);
+      if (j && this.vans().partsReport(j.meta.lead_id ?? 'me')) {
+        if (b.quoteNeeded === undefined) return refuse(400, 'say whether another quote is needed for parts');
+        const start = j.card.visits.at(-1)?.goAt ?? j.card.visits.at(-1)?.arrivedAt ?? '';
+        if (b.quoteNeeded && !(this.state.reports ?? []).some(r => r.job_id === j.meta.id && r.created_at >= start)) return refuse(409, 'the parts report first: the machine or site, the serial tag, the part needed');
+      }
+      return this.rule(m[1], c => J.continueLater(c, b));
+    }
     if ((m = p.match(/^\/jobs\/([^/]+)\/close$/))) {
       return this.rule(m[1], c => J.close(c, b.signOff.signature ? { signature: true, managerName: b.signOff.managerName } : b.signOff, b.at), j => {
         if (b.signOff.signature) j.meta.manager_name = b.signOff.managerName;

@@ -24,7 +24,7 @@ export async function createCompany(db: Db, name: string, creator: { name: strin
     )).rows[0].id;
     await c.query('INSERT INTO logins (email, user_id, company_id) VALUES ($1, $2, $3)', [email, userId, companyId]);
     // The usual departments to start with; HR or the CEO switches off what the business doesn't do.
-    for (const d of STANDARD_DEPARTMENTS.filter(x => x.startsOn)) await c.query('INSERT INTO departments (name) VALUES ($1)', [d.name]);
+    for (const d of STANDARD_DEPARTMENTS.filter(x => x.startsOn)) await c.query('INSERT INTO departments (name, parts_report) VALUES ($1, $2)', [d.name, !!d.partsReport]);
     await c.query("INSERT INTO audit_log (action, entity, entity_id, details) VALUES ('company_created', 'company', $1, $2)", [companyId, JSON.stringify({ name })]);
     await c.query('COMMIT');
     return { companyId, creatorUserId: userId };
