@@ -1,11 +1,11 @@
-// The stockroom's tool store: shared tools and step ladders, each with a serial number and a barcode
+// The stockroom's tool store: shared tools and step ladders, each with a serial number and a QR code
 // sticker. Scan a sticker (camera, a handheld scanner, or type the code or serial) to find the tool.
 // Book out: to a person, for one of their open jobs, and they sign for it on this screen. Sign back:
 // its condition, and the person returning it signs. A tool not back the morning after its job is done
 // is flagged to the person.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, Text, TextInput, View } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { CodeScanner } from '../CodeScanner.tsx';
 import { useStore } from '../state.tsx';
 import { nowIso } from '../device.ts';
 import { SignaturePad, type SignaturePadHandle } from '../SignaturePad.tsx';
@@ -44,7 +44,8 @@ export function ToolStore() {
     if (r?.status === 200) { setOpen(r.body.id); setF('all'); setCode(''); setMsg(null); } else setMsg({ tone: 'bad', text: reasons(r) });
   };
   const tools = d?.tools ?? [];
-  const list = tools.filter(t => f === 'all' ? t.active || !!t.out : f === 'out' ? !!t.out : f === 'late' ? !!t.out?.overdue : f === 'in' ? t.active && !t.out : t.kind === 'ladder' && t.active);
+  const list = tools.filter(t => f === 'all' ? t.active || !!t.out : f === 'out' ? !!t.out : f === 'late' ? !!t.out?.overdue : f === 'in' ? t.active && !t.out : t.kind === 'ladder' && t.active)
+    .sort((a, b) => Number(b.id === open) - Number(a.id === open)); // the one just scanned on top
   const company = s.session?.company.name ?? '';
   const sticker = (t: StoreTool) => ({ title: t.name, sub: t.serial ? `S/N ${t.serial}` : null, code: t.barcode, foot: 'Stockroom: sign it out and back in' });
   const print = (ts: StoreTool[]) => setMsg(printStickers('Tool store stickers', company, ts.map(sticker)) ? null : { tone: 'bad', text: Platform.OS === 'web' ? 'The browser blocked the print window: allow pop-ups for this site.' : 'Print stickers from the office computer.' });
@@ -61,8 +62,9 @@ export function ToolStore() {
             autoCapitalize="characters" style={[st.input, { flex: 1, minWidth: 0 }]} accessibilityLabel="Tool code" returnKeyType="search" />
           <Button label="Find" onPress={() => find(code)} style={{ width: 90 }} />
         </View>
-        {Platform.OS !== 'web' ? <Button label={camera ? 'Close the camera' : 'Scan with the camera'} kind="secondary" onPress={() => setCamera(!camera)} /> : <Text style={st.small}>A handheld barcode scanner types the code here by itself.</Text>}
-        {camera ? <ToolCamera onCode={c => { setCamera(false); find(c); }} /> : null}
+        <Button label={camera ? 'Close the camera' : 'Scan with the camera'} kind="secondary" onPress={() => setCamera(!camera)} />
+        {Platform.OS === 'web' ? <Text style={st.small}>On a computer, a handheld scanner types the code here by itself.</Text> : null}
+        {camera ? <CodeScanner onCode={c => { setCamera(false); find(c); }} height={240} hint="Hold the tool's sticker inside the box" /> : null}
       </Card>
       {msg ? <Notice tone={msg.tone} title={msg.text} /> : null}
       {err ? <Notice tone="bad" title="Could not load" lines={[err]} /> : null}
@@ -93,18 +95,6 @@ export function ToolStore() {
   );
 }
 
-function ToolCamera({ onCode }: { onCode: (c: string) => void }) {
-  const [perm, ask] = useCameraPermissions();
-  const seen = useRef(false);
-  if (!perm?.granted) return <Button label="Allow the camera" onPress={ask} />;
-  return (
-    <View style={{ height: 260, borderRadius: 10, overflow: 'hidden' }}>
-      <CameraView style={{ flex: 1 }} facing="back" barcodeScannerSettings={{ barcodeTypes: ['code128', 'qr', 'code39', 'ean13'] }}
-        onBarcodeScanned={r => { if (r.data && !seen.current) { seen.current = true; onCode(r.data); } }} />
-    </View>
-  );
-}
-
 /** One tool: its sticker, book out or sign back, its history, and editing. */
 function ToolPanel({ t, d, print, changed }: { t: StoreTool; d: Data; print: () => void; changed: (tone: 'good' | 'bad', text: string) => void }) {
   const s = useStore();
@@ -117,7 +107,7 @@ function ToolPanel({ t, d, print, changed }: { t: StoreTool; d: Data; print: () 
   };
   return (
     <View style={{ gap: 10, marginTop: 6 }}>
-      <Barcode value={t.barcode} height={56} />
+      <Barcode value={t.barcode} size={120} />
       {t.notes ? <Text style={st.small}>{t.notes}</Text> : null}
       {t.active && t.condition !== 'lost' ? (t.out ? <SignBack t={t} changed={changed} /> : <BookOut t={t} d={d} changed={changed} />) : null}
       <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>

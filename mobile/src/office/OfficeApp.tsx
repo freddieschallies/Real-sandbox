@@ -8,6 +8,7 @@ import { LetterheadSettings, useLetterhead } from '../letterhead.tsx';
 import { StorageSettings } from '../storage.tsx';
 import { JobReports, PartsReportView } from '../reports/PartsReport.tsx';
 import { WorkshopBoard } from './WorkshopBoard.tsx';
+import { PrintBarcodes } from './PrintBarcodes.tsx';
 import { MachineMoves } from '../screens/Workshop.tsx';
 import { useBrand } from '../brand.tsx';
 import { PhoneMenus } from '../menus/PhoneMenus.tsx';
@@ -33,7 +34,7 @@ import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
-type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'settings';
+type Tab = 'today' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
 type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
@@ -96,6 +97,7 @@ export function OfficeApp() {
     { key: 'people', label: 'People' },
     { key: 'repairs', label: 'Workshop', count: o.d.jobs.filter(j => j.ready_to_deliver && j.status !== 'closed' && j.status !== 'cancelled').length || undefined },
     { key: 'stores', label: 'Stores' },
+    { key: 'barcodes', label: 'QR codes' },
     { key: 'settings', label: 'Settings' },
   ];
   const brand = useBrand();
@@ -129,6 +131,7 @@ export function OfficeApp() {
       {tab === 'vans' ? <VanLists openTech={id => setSel({ kind: 'van', id })} /> : null}
       {tab === 'people' ? <PeopleList key={`people-${sel?.kind === 'leaver' ? sel.id : ''}`} o={o} open={id => setSel({ kind: 'person', id })} openLeaver={id => setSel({ kind: 'leaver', id })} /> : null}
       {tab === 'repairs' ? <WorkshopBoard o={o} openJob={id => go('jobs', { kind: 'job', id })} /> : null}
+      {tab === 'barcodes' ? <PrintBarcodes /> : null}
       {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
       {tab === 'settings' ? <><ThemeSettings /><LetterheadSettings /><StorageSettings />{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}

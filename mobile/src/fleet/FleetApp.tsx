@@ -50,7 +50,7 @@ export function FleetApp() {
     { key: 'jobs', label: 'Jobs', count: f.d.jobs.length },
     { key: 'stock', label: 'Stock', count: ws.data?.belowMin },
     { key: 'techs', label: 'Techs' },
-    { key: 'codes', label: 'Barcodes' },
+    { key: 'codes', label: 'QR codes' },
   ];
 
   const list = (

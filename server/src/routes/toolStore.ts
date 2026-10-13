@@ -6,7 +6,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { audit, raiseFlag, tx, type Q } from '../db.ts';
 import { can } from '../core/permissions.ts';
-import { newCode, validCode } from '../core/code128.ts';
+import { newCode, validCode } from '../core/qr.ts';
 import { Refused, Uuid, parse } from '../http.ts';
 import { notify } from './field.ts';
 
@@ -189,6 +189,18 @@ export function registerToolStoreRoutes(app: FastifyInstance) {
       }
       return (await tools(c, 't.id = $1', [id]))[0];
     });
+  });
+
+  // Every sticker in the company, for printing: vehicles and the tool store. The office (admin and up),
+  // the mechanic and the stock controller; codes are only changed by the mechanic and the stockroom.
+  app.get('/barcodes', async req => {
+    const a = req.actor;
+    if (!(can(a, 'assign_jobs') || can(a, 'manage_fleet') || can(a, 'assign_stock') || ['director', 'creator'].includes(a.level))) {
+      throw new Refused(403, ['printing stickers is for the office, the mechanic and the stockroom']);
+    }
+    const vehicles = (await req.db.query('SELECT id, registration, description, make, model, barcode FROM vehicles WHERE active ORDER BY registration')).rows;
+    const tools = (await req.db.query('SELECT id, name, kind, serial, barcode, condition FROM store_tools WHERE active ORDER BY kind, name')).rows;
+    return { vehicles, tools };
   });
 
   // The person's own: what they have from the tool store, and when it is due back.

@@ -196,6 +196,15 @@ export class DemoTransport implements Transport {
   }
   private toolRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
+    if (p === '/barcodes') {
+      const lvl = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
+      if (lvl === 'technician' || lvl === 'hr') return refuse(403, 'printing stickers is for the office, the mechanic and the stockroom');
+      const vs = this.fleet().s.vehicles as { id: string; registration: string; description?: string | null; make: string | null; model: string | null; barcode?: string }[];
+      vs.forEach((v, i) => { v.barcode ??= v.registration === 'ND 412-778' ? 'ZSP-V07' : `ZSP-V${String(i + 10).padStart(2, '0')}`; });
+      this.persist(this.state);
+      return ok({ vehicles: vs.map(v => ({ id: v.id, registration: v.registration, description: v.description ?? null, make: v.make, model: v.model, barcode: v.barcode })),
+        tools: this.tools().s.tools.filter(t => t.active).map(t => ({ id: t.id, name: t.name, kind: t.kind, serial: t.serial, barcode: t.barcode, condition: t.condition })) });
+    }
     if (p === '/me/tools') { const r = this.tools().mine(this.who.id); this.persist(this.state); return ok(r); }
     if (!p.startsWith('/tool-store')) return null;
     if (!this.does('stockroom')) return refuse(403, 'the stockroom keeps the tool store');

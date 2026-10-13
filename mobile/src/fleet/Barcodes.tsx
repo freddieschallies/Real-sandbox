@@ -1,4 +1,4 @@
-// The mechanic's Barcodes tab: each vehicle's sticker code, shown as a barcode, printed as stickers,
+// The mechanic's QR codes tab: each vehicle's sticker code, shown as a QR code, printed as stickers,
 // changed for a new one (when a sticker is lost or damaged: the old one stops working at once), or
 // set to the code of a sticker already in the vehicle. Technicians scan it to drive the vehicle.
 import React, { useEffect, useState } from 'react';
@@ -24,7 +24,7 @@ export function VehicleBarcodes() {
   const list = (rows ?? []).filter(v => !q.trim() || `${v.registration} ${v.make ?? ''} ${v.model ?? ''} ${v.barcode}`.toLowerCase().includes(q.trim().toLowerCase()));
   return (
     <>
-      <Heading>Vehicle barcodes</Heading>
+      <Heading>Vehicle QR codes</Heading>
       <Body quiet>Each vehicle's sticker. Technicians scan it (or the licence disc) to drive the vehicle. Print the stickers, put one inside the windscreen or on the dashboard.</Body>
       {rows?.length ? <Button label={`Print all stickers (${rows.length})`} onPress={() => print(rows)} /> : null}
       <Field label="Find a vehicle" value={q} onChangeText={setQ} placeholder="Registration, make or code" />
@@ -50,7 +50,7 @@ function VehicleCode({ v, canEdit, print, changed }: { v: Row; canEdit: boolean;
         <Text style={[st.body, { fontWeight: '800', fontSize: 18 }]}>{v.registration}</Text>
         <Text style={[st.small, { flex: 1 }]}>{[v.make, v.model].filter(Boolean).join(' ') || v.description}</Text>
       </View>
-      <Barcode value={v.barcode} />
+      <Barcode value={v.barcode} size={140} />
       <Text style={[st.body, { fontFamily: Platform.OS === 'web' ? 'monospace' : undefined, letterSpacing: 1 }]}>{v.barcode}</Text>
       <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
         <Button label="Print sticker" kind="secondary" onPress={print} style={{ flexGrow: 1 }} />

@@ -523,23 +523,6 @@ test('image size from the file header: PNG and JPEG', () => {
   assert.equal(imageSize(Buffer.from('not an image')), null);
 });
 
-import { CODE128_PATTERNS, code128Values, code128Widths, newVehicleCode, validVehicleCode } from '../src/core/code128.ts';
-test('Code 128 stickers: every symbol 11 modules wide with even bars, the checksum, and new codes', () => {
-  assert.equal(CODE128_PATTERNS.length, 107);
-  assert.equal(new Set(CODE128_PATTERNS).size, 107, 'every symbol different');
-  for (const p of CODE128_PATTERNS.slice(0, 106)) {
-    const w = [...p].map(Number);
-    assert.equal(w.reduce((a, b) => a + b, 0), 11, p);
-    assert.equal((w[0] + w[2] + w[4]) % 2, 0, `bars even in ${p}`);
-  }
-  // "PJJ123C" in set B.
-  assert.deepEqual(code128Values('PJJ123C'), [104, 48, 42, 42, 17, 18, 19, 35, 55, 106], 'checksum: (104 + sum of value × position) mod 103');
-  assert.equal(code128Widths('AB').reduce((a, b) => a + b, 0), 11 * 4 + 13);
-  assert.throws(() => code128Values('é'));
-  const c = newVehicleCode();
-  assert.match(c, /^V-[A-HJ-NP-Z2-9]{6}$/); assert.ok(validVehicleCode(c));
-  assert.ok(validVehicleCode('ZSP-V07')); assert.ok(!validVehicleCode('zsp v07'));
-});
 
 import { toolDue } from '../src/routes/toolStore.ts';
 test('tool store: a tool is due back when its job is done, and late from 10:00 the morning after', () => {
@@ -549,4 +532,21 @@ test('tool store: a tool is due back when its job is done, and late from 10:00 t
   assert.equal(toolDue({ outAt: out, jobId: 'j', jobClosedAt: closed, jobOpen: false }, new Date('2026-10-14T09:59:00+02:00')).overdue, false);
   assert.equal(toolDue({ outAt: out, jobId: 'j', jobClosedAt: closed, jobOpen: false }, new Date('2026-10-14T10:00:00+02:00')).overdue, true);
   assert.equal(toolDue({ outAt: out, jobId: null, jobClosedAt: null, jobOpen: false }, new Date('2026-10-13T10:01:00+02:00')).overdue, true, 'no job: back the same day');
+});
+
+
+import { newVehicleCode, qrMatrix, qrSvg, validVehicleCode } from '../src/core/qr.ts';
+test('QR stickers: the right size for the code, the three corner squares, the same code every time, new codes', () => {
+  const m = qrMatrix('ZSP-V07');
+  assert.equal(m.length, 21, 'a short code fits version 1 (21 × 21)');
+  const corner = (x: number, y: number) => [0, 1, 2, 3, 4, 5, 6].every(i => m[y][x + i] && m[y + 6][x + i] && m[y + i][x] && m[y + i][x + 6]) && m[y + 3][x + 3] && !m[y + 1][x + 1];
+  assert.ok(corner(0, 0) && corner(14, 0) && corner(0, 14), 'finder squares in three corners');
+  assert.deepEqual(qrMatrix('ZSP-V07'), m, 'the same code every time');
+  assert.equal(qrMatrix('x'.repeat(60)).length, 4 * 4 + 17, 'longer text, bigger code');
+  assert.equal(qrMatrix('y'.repeat(150)).length, 4 * 8 + 17, 'version 8 for 150 characters at level M');
+  assert.throws(() => qrMatrix('z'.repeat(300)));
+  assert.match(qrSvg('T-4KQ7MA'), /^<svg[^>]+viewBox="0 0 29 29"/);
+  const c = newVehicleCode();
+  assert.match(c, /^V-[A-HJ-NP-Z2-9]{6}$/); assert.ok(validVehicleCode(c));
+  assert.ok(validVehicleCode('ZSP-V07')); assert.ok(!validVehicleCode('zsp v07'));
 });

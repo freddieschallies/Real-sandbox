@@ -1797,6 +1797,10 @@ test('tool store: tools and ladders with serials and barcodes, booked out for a 
   assert.equal(hist.length, 1); assert.equal(hist[0].return_condition, 'damaged'); assert.ok(hist[0].out_signature_photo_id && hist[0].return_signature_photo_id);
   await assert.rejects(db.query('UPDATE tool_bookings SET return_note = $1 WHERE id = $2', ['changed', hist[0].id]), 'kept as signed');
   await assert.rejects(db.query('DELETE FROM tool_bookings WHERE id = $1', [hist[0].id]));
+  // The admin prints every sticker: vehicles and tools.
+  const all = await call('admin', 'GET', '/barcodes');
+  assert.equal(all.status, 200); assert.ok(all.body.vehicles.length >= 1); assert.ok(all.body.tools.some((t: { serial: string }) => t.serial === 'LAD-2401'));
+  assert.equal((await call('tech', 'GET', '/barcodes')).status, 403);
 });
 
 test('phone menus: the CEO or an admin pins tabs per position; everyone gets their own position\'s choice', async () => {

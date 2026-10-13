@@ -5,6 +5,7 @@ import { Platform, Pressable, Text, View } from 'react-native';
 import type { BarcodeType } from 'expo-camera';
 import { describeCode, parseLicenceDisc } from '../../../server/src/core/vehicleCode.ts';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { CodeScanner } from '../CodeScanner.tsx';
 import { useStore } from '../state.tsx';
 import { useNav } from '../nav.tsx';
 import { nowIso } from '../device.ts';
@@ -25,7 +26,7 @@ export function Scan() {
   const nav = useNav();
   const [perm, ask] = useCameraPermissions();
   const [code, setCode] = useState('');
-  const [typed, setTyped] = useState(Platform.OS === 'web');
+  const [typed, setTyped] = useState(false);
   const [mode, setMode] = useState<Mode>('driving');
   const [reason, setReason] = useState<Reason>('usual');
   const [note, setNote] = useState('');
@@ -79,7 +80,8 @@ export function Scan() {
       {reasons ? <Notice tone="bad" title="Still needed:" lines={reasons} /> : null}
 
       {!code && !typed ? (
-        perm?.granted ? (
+        Platform.OS === 'web' ? <CodeScanner onCode={c => { if (!code) setCode(c); }} hint="Point at the vehicle sticker or the licence disc" />
+        : perm?.granted ? (
           <View style={{ height: 300, borderRadius: 10, overflow: 'hidden', backgroundColor: '#000' }}>
             <CameraView style={{ flex: 1 }} facing="back" enableTorch={torch}
               barcodeScannerSettings={{ barcodeTypes: ALL_CODES }}
@@ -117,7 +119,7 @@ export function Scan() {
             </Card>
           ) : null}
           <Button label={mode === 'driving' ? 'Next' : 'Confirm'} onPress={next} busy={checking} />
-          <Button label="Scan again" kind="quiet" onPress={() => { setCode(''); setTyped(Platform.OS === 'web'); }} />
+          <Button label="Scan again" kind="quiet" onPress={() => { setCode(''); setTyped(false); }} />
         </>
       ) : null}
     </Screen>

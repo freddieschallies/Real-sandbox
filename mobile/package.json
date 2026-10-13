@@ -30,7 +30,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "test": "node --experimental-transform-types --no-warnings --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "export:web": "expo export --platform web && node scripts/copy-zxing.mjs dist"
   },
   "private": true
 }

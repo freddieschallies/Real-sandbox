@@ -9,7 +9,7 @@ import * as F from '../core/fleet.ts';
 import { DateOnly, Iso, Refused, Uuid, parse } from '../http.ts';
 import { managerOf, notify } from './field.ts';
 import { useFromWorkshop } from '../stockRepo.ts';
-import { newVehicleCode, validVehicleCode } from '../core/code128.ts';
+import { newVehicleCode, validVehicleCode } from '../core/qr.ts';
 
 const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
 
@@ -108,7 +108,7 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
   });
 
   // ---- Barcode stickers ---------------------------------------------------------------------
-  // Each vehicle's own code, printed as a Code 128 sticker that technicians scan to drive it.
+  // Each vehicle's own code, printed as a QR sticker that technicians scan to drive it.
   app.get('/fleet/barcodes', async req => {
     viewer(req);
     const { rows } = await req.db.query('SELECT id, registration, description, make, model, barcode FROM vehicles WHERE active ORDER BY registration');

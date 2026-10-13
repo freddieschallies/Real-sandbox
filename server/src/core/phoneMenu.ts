@@ -13,7 +13,7 @@ export const MENU_TABS: Record<MenuApp, { key: string; label: string }[]> = {
     { key: 'timesheets', label: 'Timesheets' }, { key: 'flags', label: 'Flags' }, { key: 'people', label: 'People' },
     { key: 'map', label: 'Team map' }, { key: 'vans', label: 'Van stock' }, { key: 'queries', label: 'Queries' },
     { key: 'quotes', label: 'Quotes' }, { key: 'invoices', label: 'Invoices' }, { key: 'accounts', label: 'Accounts' },
-    { key: 'handovers', label: 'Handovers' }, { key: 'repairs', label: 'Workshop' }, { key: 'stores', label: 'Stores' }, { key: 'settings', label: 'Settings' },
+    { key: 'handovers', label: 'Handovers' }, { key: 'repairs', label: 'Workshop' }, { key: 'stores', label: 'Stores' }, { key: 'barcodes', label: 'QR codes' }, { key: 'settings', label: 'Settings' },
   ],
   stockroom: [
     { key: 'issue', label: 'To issue' }, { key: 'receive', label: 'To receive' }, { key: 'room', label: 'Stock' },
@@ -22,7 +22,7 @@ export const MENU_TABS: Record<MenuApp, { key: string; label: string }[]> = {
   ],
   fleet: [
     { key: 'vehicles', label: 'Vehicles' }, { key: 'map', label: 'Map' }, { key: 'bookings', label: 'Booked' },
-    { key: 'faults', label: 'Faults' }, { key: 'jobs', label: 'Jobs' }, { key: 'stock', label: 'Stock' }, { key: 'techs', label: 'Techs' }, { key: 'codes', label: 'Barcodes' },
+    { key: 'faults', label: 'Faults' }, { key: 'jobs', label: 'Jobs' }, { key: 'stock', label: 'Stock' }, { key: 'techs', label: 'Techs' }, { key: 'codes', label: 'QR codes' },
   ],
 };
 
@@ -44,7 +44,7 @@ export function officeTabKeys(level: string, work: Partial<Record<WorkArea, bool
     vans: does('vanstock'), departments: does('hr'),
     // HR and the CEO always have every timesheet; a department manager his own technicians'.
     timesheets: does('hr') || ['management', 'hr', 'director', 'creator'].includes(level),
-    people: opts.people, repairs: jobsSide, stores: jobsSide, settings: opts.settings,
+    people: opts.people, repairs: jobsSide, stores: jobsSide, barcodes: jobsSide, settings: opts.settings,
   };
   return MENU_TABS.office.map(t => t.key).filter(k => on[k]);
 }
