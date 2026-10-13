@@ -56,7 +56,7 @@ function ScanInvoice({ jobId }: { jobId?: string }) {
     <Screen title="Scan supplier invoice" onBack={nav.back} right={<SyncPill />}>
       <Body quiet>Photograph the whole invoice, flat and in good light. The lines are read for you; you only check them.</Body>
       {photo ? <Image source={{ uri: photo.uri }} style={{ width: '100%', aspectRatio: 3 / 4, borderRadius: 10, backgroundColor: C.panel2 }} resizeMode="contain" /> : null}
-      <Button label={photo ? 'Retake photo' : 'Take photo of the invoice'} kind={photo ? 'quiet' : 'primary'} onPress={async () => { const p = await takePhoto(); if (p) setPhoto(p); }} />
+      <Button label={photo ? 'Retake photo' : 'Take photo of the invoice'} kind={photo ? 'quiet' : 'primary'} onPress={async () => { const p = await takePhoto('document'); if (p) setPhoto(p); }} />
       <Label>Bought for</Label>
       <Choice options={jobs.options} value={forJob} onChange={setForJob} labels={jobs.labels} />
       <Text style={st.small}>Stock for a job stays on your name until it is used on that job card or returned to the stockroom.</Text>

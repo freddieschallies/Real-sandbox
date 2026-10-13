@@ -306,6 +306,20 @@ test('offline replay: the same request sent twice is applied once', async () => 
   assert.equal(misuse.status, 422, 'a key cannot be reused for a different request');
 });
 
+test('photo size: pictures that did not go through the app\'s compressor are refused; the CEO sees the storage used', async () => {
+  // A PNG header that says 6000 × 4000.
+  const big = Buffer.alloc(40); big.writeUInt32BE(0x89504e47, 0); big.writeUInt32BE(0x0d0a1a0a, 4); big.writeUInt32BE(6000, 16); big.writeUInt32BE(4000, 20);
+  const boundary = '----rsbig';
+  const payload = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="kind"\r\n\r\nstock_item\r\n--${boundary}\r\nContent-Disposition: form-data; name="takenAt"\r\n\r\n2026-10-12T08:00:00+02:00\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="p.png"\r\nContent-Type: image/png\r\n\r\n`), big, Buffer.from(`\r\n--${boundary}--\r\n`)]);
+  const r = await app.inject({ method: 'POST', url: '/photos', payload, headers: { authorization: `Bearer ${tokens.tech}`, 'content-type': `multipart/form-data; boundary=${boundary}` } });
+  assert.equal(r.statusCode, 400); assert.match(r.json().reasons[0], /6000 × 4000/);
+  const ok = await upload('tech', '/photos', { kind: 'stock_item', takenAt: '2026-10-12T08:00:00+02:00' });
+  assert.equal(ok.status, 201, 'a small one is fine');
+  const st = await call('director', 'GET', '/company/storage');
+  assert.equal(st.status, 200); assert.ok(st.body.photos >= 1 && st.body.bytes > 0 && Array.isArray(st.body.kinds));
+  assert.equal((await call('admin', 'GET', '/company/storage')).status, 403);
+});
+
 test('photo uploads: images only, stored and readable', async () => {
   const J = `/jobs/${ids.job3}`;
   const item = (await call('tech', 'GET', J)).body.items[0].id;

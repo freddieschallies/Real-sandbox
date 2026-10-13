@@ -62,7 +62,7 @@ export function ProfileTop({ p, reload }: { p: Profile; reload: () => void }) {
   const s = useStore();
   const n = p.now;
   const changePhoto = async () => {
-    const ph = await takePhoto();
+    const ph = await takePhoto('profile');
     if (!ph) return;
     const id = s.newId();
     rememberPhoto(s, id, ph.uri);

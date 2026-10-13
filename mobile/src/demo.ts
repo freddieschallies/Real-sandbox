@@ -35,6 +35,8 @@ export interface DemoState {
   flags: Flag[];
   vehicle: Today['vehicle'];
   photos: number;
+  /** Sizes of the photos sent in the test drive (for the CEO's storage figures). */
+  photoSizes?: { kind: string; bytes: number; at: string }[];
   /** The demo van: who drove it last and what the last handover recorded. */
   van?: { lastDriverMe: boolean; odometerKm: number; problems: H.CheckKey[] };
   stockControl?: DemoStockState;
@@ -971,6 +973,23 @@ export class DemoTransport implements Transport {
   async send(req: Request): Promise<Response> {
     if (this.noSignal) throw new Offline('demo: no signal');
     await new Promise(r => setTimeout(r, 25));
+    if (req.upload && req.method === 'POST') {
+      const u = req.upload.fileUri;
+      const bytes = u.startsWith('data:') ? Math.round((u.length - u.indexOf(',') - 1) * 3 / 4) : 0;
+      if (bytes) { (this.state.photoSizes ??= []).unshift({ kind: req.upload.fields.kind ?? 'photo', bytes, at: new Date().toISOString() }); this.state.photoSizes.splice(400); }
+    }
+    if (req.path === '/company/storage') {
+      const lvl = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
+      if (!['director', 'creator'].includes(lvl)) return refuse(403, 'the storage figures are for the CEO');
+      const all = this.state.photoSizes ?? [];
+      const since = Date.now() - 30 * 86_400_000;
+      const by = new Map<string, { photos: number; bytes: number }>();
+      for (const x of all) { const k = by.get(x.kind) ?? { photos: 0, bytes: 0 }; k.photos++; k.bytes += x.bytes; by.set(x.kind, k); }
+      const bytes = all.reduce((n, x) => n + x.bytes, 0);
+      const recent = all.filter(x => Date.parse(x.at) > since);
+      return ok({ photos: all.length, bytes, photos30: recent.length, bytes30: recent.reduce((n, x) => n + x.bytes, 0), over1mb: all.filter(x => x.bytes > 1_000_000).length,
+        averageBytes: all.length ? Math.round(bytes / all.length) : 0, kinds: [...by].map(([kind, v]) => ({ kind, ...v })).sort((a, b) => b.bytes - a.bytes).slice(0, 8), demo: true });
+    }
     // A slip in the demo must never leave a screen blank: answer with the error instead.
     // In the real-data demo, the company's real people and stores stand in for the made-up ones.
     try { return realDeep(await this.handle(req)); } catch (e) {

@@ -3,7 +3,11 @@
   "compilerOptions": {
     "strict": true,
     "noEmit": true,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "moduleSuffixes": [
+      ".web",
+      ""
+    ]
   },
   "include": [
     "**/*.ts",

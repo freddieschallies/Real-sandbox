@@ -143,6 +143,22 @@ async function saveInspection(c: Q, me: string, v: { id: string; registration: s
 }
 
 export function registerFieldRoutes(app: FastifyInstance, db: Db) {
+  // How much photo storage the company uses (the CEO's Settings): photos are made smaller on the
+  // phone, and this shows whether that is working.
+  app.get('/company/storage', async req => {
+    if (!['director', 'creator'].includes(req.actor.level)) throw new Refused(403, ['the storage figures are for the CEO']);
+    const t = (await req.db.query(
+      `SELECT count(*)::int AS photos, coalesce(sum(bytes), 0)::bigint AS bytes,
+              count(*) FILTER (WHERE synced_at > now() - interval '30 days')::int AS photos_30,
+              coalesce(sum(bytes) FILTER (WHERE synced_at > now() - interval '30 days'), 0)::bigint AS bytes_30,
+              count(*) FILTER (WHERE bytes > 1000000)::int AS over_1mb
+         FROM photos WHERE purged_at IS NULL`)).rows[0];
+    const kinds = (await req.db.query(
+      `SELECT kind::text, count(*)::int AS photos, coalesce(sum(bytes), 0)::bigint AS bytes FROM photos WHERE purged_at IS NULL GROUP BY kind ORDER BY 3 DESC LIMIT 8`)).rows;
+    return { photos: t.photos, bytes: Number(t.bytes), photos30: t.photos_30, bytes30: Number(t.bytes_30), over1mb: t.over_1mb,
+      averageBytes: t.photos ? Math.round(Number(t.bytes) / t.photos) : 0, kinds: kinds.map(k => ({ ...k, bytes: Number(k.bytes) })) };
+  });
+
   // ---- Photos that aren't on a work item: slips and signatures -----------
 
   app.post('/photos', async (req, reply) => {

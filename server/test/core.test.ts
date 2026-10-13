@@ -4,6 +4,7 @@ import { actorWithDefaults as A, can, departmentsFor, effectivePermissions } fro
 import * as J from '../src/core/jobCard.ts';
 import * as R from '../src/core/rules.ts';
 import * as M from '../src/core/phoneMenu.ts';
+import { imageSize } from '../src/uploads.ts';
 
 // ---- Permissions -----------------------------------------------------------
 
@@ -511,4 +512,13 @@ test('email: one HTML message with its pictures inside, lines starting with a do
   assert.match(raw, /multipart\/related/); assert.match(raw, /Content-ID: <part>/); assert.match(raw, /To: a@b\.test/);
   assert.ok(!/\r\n\.[^.]/.test(raw), 'no line starts with a single dot');
   assert.match(buildMime('x@y.test', { to: ['a@b.test'], subject: 'Verslag – ü', html: '', text: '', pictures: [] }), /Subject: =\?UTF-8\?B\?/);
+});
+
+test('image size from the file header: PNG and JPEG', () => {
+  const png = Buffer.alloc(24); png.writeUInt32BE(0x89504e47, 0); png.writeUInt32BE(1600, 16); png.writeUInt32BE(1200, 20);
+  assert.deepEqual(imageSize(png), { width: 1600, height: 1200 });
+  // JPEG: SOI, an APP0 segment, then a baseline frame of 1200 high by 1600 wide.
+  const jpg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x04, 0xb0, 0x06, 0x40, 0x03, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(imageSize(jpg), { width: 1600, height: 1200 });
+  assert.equal(imageSize(Buffer.from('not an image')), null);
 });

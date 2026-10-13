@@ -197,7 +197,7 @@ function Materials({ jobId, itemId, editable, lines, onRefused }: { jobId: strin
             <View style={{ flex: 1 }}><Field label="Qty" value={qty} onChangeText={setQty} keyboardType="decimal-pad" /></View>
             <View style={{ flex: 1 }}><Field label="Price paid (R)" value={price} onChangeText={setPrice} keyboardType="decimal-pad" /></View>
           </View>
-          <Button label={slip ? 'Slip photo taken ✓ (retake)' : 'Photo of the slip'} kind="secondary" onPress={async () => { const p = await takePhoto(); if (p) setSlip(p); }} />
+          <Button label={slip ? 'Slip photo taken ✓ (retake)' : 'Photo of the slip'} kind="secondary" onPress={async () => { const p = await takePhoto('document'); if (p) setSlip(p); }} />
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <Button label="Cancel" kind="quiet" onPress={() => setMode('none')} style={{ flex: 1 }} />
             <Button label="Add" onPress={addBought} style={{ flex: 1 }} />

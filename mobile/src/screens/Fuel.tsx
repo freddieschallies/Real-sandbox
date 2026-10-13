@@ -36,7 +36,7 @@ export function Fuel() {
       {!v ? <Button label="Scan into a vehicle" kind="secondary" onPress={() => nav.push({ name: 'scan' })} /> : null}
       <Field label="Litres" value={litres} onChangeText={setLitres} keyboardType="decimal-pad" placeholder="e.g. 54.3" />
       <Field label="Amount paid (R)" value={amount} onChangeText={setAmount} keyboardType="decimal-pad" placeholder="e.g. 1250.00" />
-      <Button label={slip ? 'Slip photo taken ✓ (retake)' : 'Photo of the fuel slip'} kind="secondary" onPress={async () => { const p = await takePhoto(); if (p) setSlip(p); }} />
+      <Button label={slip ? 'Slip photo taken ✓ (retake)' : 'Photo of the fuel slip'} kind="secondary" onPress={async () => { const p = await takePhoto('document'); if (p) setSlip(p); }} />
       <Body quiet>Litres are checked against the tank size and the tracker's distance since the last fill-up.</Body>
       <Button label="Save fuel" onPress={save} />
     </Screen>

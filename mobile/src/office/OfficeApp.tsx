@@ -5,6 +5,7 @@ import { BrandLogo } from '../brand.tsx';
 import { usePhoneMenu } from '../menu.tsx';
 import { ModeToggle, ThemeSettings } from '../appearance.tsx';
 import { LetterheadSettings, useLetterhead } from '../letterhead.tsx';
+import { StorageSettings } from '../storage.tsx';
 import { JobReports, PartsReportView } from '../reports/PartsReport.tsx';
 import { WorkshopBoard } from './WorkshopBoard.tsx';
 import { MachineMoves } from '../screens/Workshop.tsx';
@@ -129,7 +130,7 @@ export function OfficeApp() {
       {tab === 'people' ? <PeopleList key={`people-${sel?.kind === 'leaver' ? sel.id : ''}`} o={o} open={id => setSel({ kind: 'person', id })} openLeaver={id => setSel({ kind: 'leaver', id })} /> : null}
       {tab === 'repairs' ? <WorkshopBoard o={o} openJob={id => go('jobs', { kind: 'job', id })} /> : null}
       {tab === 'stores' ? <StoreList o={o} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} /> : null}
-      {tab === 'settings' ? <><ThemeSettings /><LetterheadSettings />{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
+      {tab === 'settings' ? <><ThemeSettings /><LetterheadSettings /><StorageSettings />{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
       <Text style={st.small}>{o.d.loadedAt ? `Updated ${when(o.d.loadedAt)}` : o.loading ? 'Loading…' : 'Needs signal to load.'}</Text>
     </ScrollView>
