@@ -6,7 +6,7 @@ import type { Db, Q } from './db.ts';
 import { audit } from './db.ts';
 import { keepIfRefused, openCompanyConnection } from './tenancy.ts';
 import { Refused, parse } from './http.ts';
-import { CATALOGUE, can, effectivePermissions, workOf, type Actor, type LoginLevel, type Override } from './core/permissions.ts';
+import { CATALOGUE, can, effectivePermissions, looksAfterLogins, workOf, type Actor, type LoginLevel, type Override } from './core/permissions.ts';
 
 declare module 'fastify' {
   interface FastifyRequest { actor: Actor }
@@ -170,6 +170,8 @@ export function registerAuth(app: FastifyInstance, db: Db) {
 
   // Changing your own password signs you out on every other phone; this one stays signed in.
   app.post('/me/password', async req => {
+    // Only the admin and the CEO change their own password here; everyone else gets a new setup code from them.
+    if (!looksAfterLogins(req.actor)) throw new Refused(403, ['ask Admin or the CEO for a new setup code to change your password']);
     const b = parse(z.object({ current: z.string().max(200), password: z.string().max(200) }), req.body);
     const u = (await req.db.query('SELECT id, full_name, login_level, email, password_hash, session_epoch FROM users WHERE id = $1 FOR UPDATE', [req.actor.id])).rows[0];
     if (!(await bcrypt.compare(b.current, u.password_hash))) throw new Refused(403, ['your current password is wrong']);

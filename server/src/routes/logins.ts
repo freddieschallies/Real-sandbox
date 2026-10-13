@@ -5,7 +5,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { audit, tx, type Q } from '../db.ts';
-import { HR_POSITIONS, LEVELS, POSITION_LABEL, TRADES, can, editsProfiles, type Actor, type LoginLevel, type Trade } from '../core/permissions.ts';
+import { HR_POSITIONS, LEVELS, POSITION_LABEL, TRADES, can, editsProfiles, looksAfterLogins, type Actor, type LoginLevel, type Trade } from '../core/permissions.ts';
 import { Refused, Uuid, parse } from '../http.ts';
 import { hashCode, newSetupCode } from '../auth.ts';
 import { ensureSomeoneCanManageAccess } from './access.ts';
@@ -17,7 +17,8 @@ export const CODE_DAYS = 7;
 export function managesLogin(a: Actor, target: { id: string; login_level: string }): boolean {
   if (target.id === a.id) return false;
   if (can(a, 'manage_access')) return target.login_level !== 'creator' || a.level === 'creator';
-  if (editsProfiles(a)) return HR_POSITIONS.includes(target.login_level as LoginLevel);
+  // The admin looks after everyone's login except the directors' and the CEO's.
+  if (a.level === 'admin') return target.login_level !== 'director' && target.login_level !== 'creator';
   return false;
 }
 
@@ -56,11 +57,15 @@ export function registerLoginRoutes(app: FastifyInstance) {
   const office = (req: FastifyRequest) => {
     if (!editsProfiles(req.actor)) throw new Refused(403, ['only HR or the CEO looks after logins']);
   };
+  // Logins and passwords are for the admin and the CEO only.
+  const logins = (req: FastifyRequest) => {
+    if (!looksAfterLogins(req.actor)) throw new Refused(403, ['only Admin or the CEO looks after logins and passwords']);
+  };
   const may = (req: FastifyRequest, u: { id: string; login_level: string; full_name: string }) => {
-    if (u.id === req.actor.id) throw new Refused(403, ['change your own password under "My password"']);
+    if (u.id === req.actor.id) throw new Refused(403, ['change your own password under Settings → My password']);
     if (!managesLogin(req.actor, u)) {
       throw new Refused(403, [can(req.actor, 'manage_access') ? 'only the Creator looks after the Creator\'s login'
-        : `HR looks after the logins of technicians, admin, department managers and stock controllers; ${u.full_name.split(' ')[0]}'s is the CEO's`]);
+        : `the admin looks after everyone's login except the directors' and the CEO's; ${u.full_name.split(' ')[0]}'s is the CEO's`]);
     }
   };
 
@@ -100,7 +105,7 @@ export function registerLoginRoutes(app: FastifyInstance) {
 
   // ---- One person's login ----------------------------------------------------------------------
   app.get('/people/:id/login', async (req: FastifyRequest<{ Params: { id: string } }>) => {
-    office(req);
+    logins(req);
     const id = parse(Uuid, req.params.id);
     return tx(req.db, async c => {
       const u = await target(c, id);
@@ -122,7 +127,7 @@ export function registerLoginRoutes(app: FastifyInstance) {
   // It replaces any code still waiting and unlocks a locked login. The current password keeps
   // working until the person uses the code.
   app.post('/people/:id/login/code', async (req: FastifyRequest<{ Params: { id: string } }>) => {
-    office(req);
+    logins(req);
     const id = parse(Uuid, req.params.id);
     return tx(req.db, async c => {
       const u = await target(c, id);
@@ -152,7 +157,7 @@ export function registerLoginRoutes(app: FastifyInstance) {
   });
 
   app.post('/people/:id/login/stop', async (req: FastifyRequest<{ Params: { id: string } }>) => {
-    office(req);
+    logins(req);
     const id = parse(Uuid, req.params.id);
     const b = parse(z.object({ reason: z.string().trim().max(500).optional() }), req.body ?? {});
     return tx(req.db, async c => {
@@ -168,7 +173,7 @@ export function registerLoginRoutes(app: FastifyInstance) {
   });
 
   app.post('/people/:id/login/allow', async (req: FastifyRequest<{ Params: { id: string } }>) => {
-    office(req);
+    logins(req);
     const id = parse(Uuid, req.params.id);
     return tx(req.db, async c => {
       const u = await target(c, id);
@@ -184,7 +189,7 @@ export function registerLoginRoutes(app: FastifyInstance) {
 
   // A lost or changed phone: every phone signed in as this person is signed out; the password stays.
   app.post('/people/:id/login/sign-out', async (req: FastifyRequest<{ Params: { id: string } }>) => {
-    office(req);
+    logins(req);
     const id = parse(Uuid, req.params.id);
     return tx(req.db, async c => {
       const u = await target(c, id);

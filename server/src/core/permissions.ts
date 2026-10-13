@@ -209,6 +209,16 @@ export function workOf(p: Permissions): Record<WorkArea, boolean> {
 }
 
 /** Who edits people's profiles (contact and personal details) and ends their employment: the CEO and HR. */
+/**
+ * Who looks after logins and passwords (setup codes for a first sign-in or a new password, stopping
+ * a login, signing out a lost phone): the admin and the CEO (whoever has Positions and access).
+ * They are also the only ones who change their own password in the app (Settings); everyone else
+ * asks them for a new setup code.
+ */
+export function looksAfterLogins(a: Actor): boolean {
+  return a.level === 'admin' || can(a, 'manage_access');
+}
+
 export function editsProfiles(a: Actor): boolean {
   return can(a, 'manage_access') || can(a, 'assign_departments');
 }

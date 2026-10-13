@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Db, Q } from '../db.ts';
 import { audit, tx } from '../db.ts';
-import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, POSITION_LABEL, TRADES, WORK_AREAS, can, isScoped, workOf, type Action, type LoginLevel, type Trade, type WorkArea, seesPeople, HR_POSITIONS, editsProfiles } from '../core/permissions.ts';
+import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, POSITION_LABEL, TRADES, WORK_AREAS, can, isScoped, workOf, type Action, type LoginLevel, type Trade, type WorkArea, seesPeople, HR_POSITIONS, editsProfiles, looksAfterLogins } from '../core/permissions.ts';
 import { LOGIN_STATE_SQL } from './logins.ts';
 import { Refused, Uuid, parse } from '../http.ts';
 import { loadActor } from '../auth.ts';
@@ -116,7 +116,8 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
   app.get('/people', async req => {
     if (!seesPeople(req.actor)) throw new Refused(403, ['people are not part of your work']);
     const manage = can(req.actor, 'manage_access');
-    const logins = editsProfiles(req.actor);
+    const logins = editsProfiles(req.actor) || looksAfterLogins(req.actor);
+    const adds = editsProfiles(req.actor);
     const { rows } = await req.db.query(
       `SELECT u.id, u.full_name, u.login_level, u.trade, d.name AS department, u.status, p.photo_id, ${LOGIN_STATE_SQL} AS login
          FROM users u LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.status <> 'left' ORDER BY u.full_name`);
@@ -127,8 +128,8 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
     }
     return {
       canManage: manage,
-      // HR and the CEO add people and give them their logins.
-      canAdd: logins, addPositions: logins ? (manage ? LEVELS.filter(l => l !== 'creator' || req.actor.level === 'creator') : HR_POSITIONS) : [],
+      // HR and the CEO add people; Admin and the CEO give them their logins and new passwords (setup codes).
+      canAdd: adds, canLogins: looksAfterLogins(req.actor), addPositions: adds ? (manage ? LEVELS.filter(l => l !== 'creator' || req.actor.level === 'creator') : HR_POSITIONS) : [],
       canSetPositions: manage || can(req.actor, 'set_positions'),
       settablePositions: manage ? LEVELS : can(req.actor, 'set_positions') ? HR_POSITIONS : [],
       positions: LEVELS.map(l => ({ level: l, label: POSITION_LABEL[l] })),

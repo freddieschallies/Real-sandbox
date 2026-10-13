@@ -33,7 +33,7 @@ import { Avatar, ProfileDetails, ProfileTop, useProfile } from './Profile.tsx';
 import { Accounts, InvoiceDetail, InvoiceList, NewQuote, QuoteDetail, QuoteList, useBooks } from './Books.tsx';
 import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries.tsx';
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
-import { ChangePassword } from '../screens/MyPassword.tsx';
+import { MyPasswordSettings } from '../screens/MyPassword.tsx';
 import { AddPerson, LOGIN_PILL, LoginCard } from './Logins.tsx';
 import { ImportCustomers, StoreDetail, StoreList, pointFrom } from './Stores.tsx';
 import { BreakdownAlert, BreakdownById, BreakdownList, BreakdownSettings, type Bd } from './Breakdowns.tsx';
@@ -151,8 +151,7 @@ export function OfficeApp() {
       {tab === 'repairs' ? <WorkshopBoard o={o} openJob={id => go('jobs', { kind: 'job', id })} /> : null}
       {tab === 'barcodes' ? <PrintBarcodes /> : null}
       {tab === 'stores' ? <StoreList o={o} canEdit={does('stores')} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} importIt={does('stores') ? () => setSel({ kind: 'importcustomers' }) : undefined} open={id => setSel({ kind: 'store', id })} /> : null}
-      {tab === 'settings' ? <>{does('access') ? <BreakdownSettings /> : null}<ThemeSettings /><LetterheadSettings /><StorageSettings />{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
-      <ChangePassword />
+      {tab === 'settings' ? <>{does('access') ? <BreakdownSettings /> : null}<ThemeSettings /><LetterheadSettings /><StorageSettings />{does('access') || level === 'admin' ? <MyPasswordSettings /> : null}{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
       <Text style={st.small}>{o.d.loadedAt ? `Updated ${when(o.d.loadedAt)}` : o.loading ? 'Loading…' : 'Needs signal to load.'}</Text>
     </ScrollView>
@@ -912,7 +911,7 @@ function PersonDetail({ id, o, ask, ended }: { id: string; o: OfficeHook; ask?: 
           })}
         </Card>
       )}
-      {p.canAdd ? <LoginCard key={`login-${x.id}`} userId={x.id} name={x.full_name} phone={prof.p?.contact?.phone} changed={() => o.load?.()} /> : null}
+      {p.canLogins ? <LoginCard key={`login-${x.id}`} userId={x.id} name={x.full_name} phone={prof.p?.contact?.phone} changed={() => o.load?.()} /> : null}
       {prof.p?.canTerminate ? <EndEmployment id={x.id} name={x.full_name} done={ended} /> : null}
     </>
   );

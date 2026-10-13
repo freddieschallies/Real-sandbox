@@ -773,6 +773,8 @@ export class DemoTransport implements Transport {
     const manages = this.does('access');
     // The CEO and HR edit profiles, end employment and keep the terminated staff.
     const hrOrCeo = manages || this.does('hr');
+    // Logins and passwords (setup codes) are for Admin and the CEO only.
+    const loginsToo = manages || (this.office().levelOf(this.who.id) ?? this.who.level) === 'admin';
     if (p === '/people' && req.method === 'POST') {
       if (!hrOrCeo) return refuse(403, 'only HR or the CEO looks after logins');
       const vn = this.vans();
@@ -790,22 +792,24 @@ export class DemoTransport implements Transport {
         const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
         list.canAdd = true;
         list.addPositions = manages ? Object.keys(POSITION_LABEL).filter(x => x !== 'creator' || lvl === 'creator') : HR_POSITIONS;
-        list.people = list.people.map(x => ({ ...x, login: L.listState(x.id) }));
       }
+      // Logins and passwords: Admin and the CEO.
+      (list as { canLogins?: boolean }).canLogins = loginsToo;
+      if (hrOrCeo || loginsToo) { const L = this.loginBook(); list.people = list.people.map(x => ({ ...x, login: L.listState(x.id) })); }
       return ok(list);
     }
     if ((m = p.match(/^\/people\/([^/]+)\/login(?:\/(code|stop|allow|sign-out))?$/))) {
-      if (!hrOrCeo) return refuse(403, 'only HR or the CEO looks after logins');
+      if (!loginsToo) return refuse(403, 'only Admin or the CEO looks after logins and passwords');
       const L = this.loginBook();
       const id = m[1];
       const left = (this.state.office!.leavers ?? []).some(l => l.person.id === id);
       const target = this.state.office!.people.find(x => x.id === id);
       if (!target && !left) return refuse(404, 'no such person');
       const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
-      const may = !!target && L.manages({ id: this.who.id, level: lvl, ceo: manages, hr: this.does('hr') }, target);
+      const may = !!target && L.manages({ id: this.who.id, level: lvl, ceo: manages }, target);
       if (!m[2]) return ok(L.info(id, may, id === this.who.id, left));
-      if (id === this.who.id) return refuse(403, 'change your own password under "Change my password"');
-      if (!may) return refuse(403, manages ? "only the Creator looks after the Creator's login" : `HR looks after the logins of technicians, admin, department managers and stock controllers; ${target?.full_name.split(' ')[0] ?? 'this'}'s is the CEO's`);
+      if (id === this.who.id) return refuse(403, 'change your own password under Settings → My password');
+      if (!may) return refuse(403, manages ? "only the Creator looks after the Creator's login" : `the admin looks after everyone's login except the directors' and the CEO's; ${target?.full_name.split(' ')[0] ?? 'this'}'s is the CEO's`);
       const r = m[2] === 'code' ? L.issueCode(id, this.who.name, REAL ? REAL.company.name : 'ZSP')
         : m[2] === 'stop' ? L.stop(id, this.who.name) : m[2] === 'allow' ? L.allow(id, this.who.name) : L.signOutAll(id, this.who.name);
       return done(r);
@@ -1293,6 +1297,8 @@ export class DemoTransport implements Transport {
         stockCover: !work.stockroom && this.covers() });
     }
     if (p === '/me/password') {
+      const myLevel = this.office().levelOf(this.who.id) ?? this.who.level;
+      if (myLevel !== 'admin' && !this.does('access')) return refuse(403, 'ask Admin or the CEO for a new setup code to change your password');
       const pr = this.office().loginPeople().find(x => x.id === this.who.id);
       const r = this.loginBook().change(this.who.id, this.who.name, pr?.email ?? '', String(b.current ?? ''), String(b.password ?? ''));
       this.persist(this.state);

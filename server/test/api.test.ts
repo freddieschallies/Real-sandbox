@@ -1982,7 +1982,7 @@ test('a disabled login stops working immediately', async () => {
   assert.equal((await call('tech2', 'GET', '/jobs')).status, 401);
 });
 
-test('own logins: HR adds a person, gives a setup code; he chooses his own password and stays signed in 30 days', async () => {
+test('own logins: HR adds a person, Admin gives the setup code; he chooses his own password and stays signed in 30 days', async () => {
   // HR adds a technician (not a director: that is the CEO's).
   assert.equal((await call('hr', 'POST', '/people', { fullName: 'Sizwe Dlamini', email: 'sizwe@zsp.test', position: 'director' })).status, 403);
   assert.equal((await call('tech', 'POST', '/people', { fullName: 'Sizwe Dlamini', email: 'sizwe@zsp.test', position: 'technician' })).status, 403, 'not a technician\'s work');
@@ -1996,8 +1996,13 @@ test('own logins: HR adds a person, gives a setup code; he chooses his own passw
   // Without a password he cannot sign in at all.
   assert.equal((await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: '!' })).status, 401);
 
+  // Passwords and setup codes are for Admin and the CEO only: not HR.
+  assert.equal((await call('hr', 'POST', `/people/${sizwe}/login/code`, {})).status, 403, 'HR does not give codes');
+  assert.equal((await call('hr', 'GET', `/people/${sizwe}/login`)).status, 403);
+  assert.equal((await call('admin', 'GET', '/people')).body.canLogins, true, 'admin looks after logins');
+  assert.equal((await call('hr', 'GET', '/people')).body.canLogins, false);
   // The code: shown once, ready to send. Only its hash is kept.
-  const code = await call('hr', 'POST', `/people/${sizwe}/login/code`, {});
+  const code = await call('admin', 'POST', `/people/${sizwe}/login/code`, {});
   assert.equal(code.status, 200, JSON.stringify(code.body));
   assert.match(code.body.code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
   assert.match(code.body.message, /sizwe@zsp\.test/);
@@ -2023,13 +2028,14 @@ test('own logins: HR adds a person, gives a setup code; he chooses his own passw
   const c2 = JSON.parse(Buffer.from(short.body.token.split('.')[1], 'base64url').toString());
   assert.ok(c2.exp - c2.iat <= 12 * 3600);
   // Nobody in the office knows his password: HR sees the log, not the password.
-  const info = (await call('hr', 'GET', `/people/${sizwe}/login`)).body;
+  const info = (await call('admin', 'GET', `/people/${sizwe}/login`)).body;
   assert.equal(info.state, 'on');
   assert.ok(info.lastSignIn);
   assert.ok(info.history.some((h: { change: string }) => /own password/.test(h.change)));
-  assert.equal((await call('hr', 'GET', `/people/${ids.creator}/login`)).body.canManage, false, 'HR does not touch the CEO\'s login');
-  assert.equal((await call('hr', 'POST', `/people/${ids.creator}/login/code`, {})).status, 403);
-  assert.equal((await call('hr', 'POST', `/people/${ids.hr}/login/stop`, {})).status, 403, 'not your own');
+  assert.equal((await call('admin', 'GET', `/people/${ids.creator}/login`)).body.canManage, false, 'Admin does not touch the CEO\'s login');
+  assert.equal((await call('admin', 'POST', `/people/${ids.creator}/login/code`, {})).status, 403);
+  assert.equal((await call('admin', 'POST', `/people/${ids.admin}/login/stop`, {})).status, 403, 'not your own');
+  assert.equal((await call('admin', 'GET', `/people/${ids.hr}/login`)).body.canManage, true, 'Admin resets HR\'s password too');
 });
 
 test('own logins: wrong passwords lock it; a lost phone is signed out; a stopped login stops at once', async () => {
@@ -2040,7 +2046,7 @@ test('own logins: wrong passwords lock it; a lost phone is signed out; a stopped
   assert.match(locked.body.reasons[0], /15 minutes/);
   assert.equal((await call('hr', 'GET', '/people')).body.people.find((p: { id: string }) => p.id === sizwe).login, 'locked', 'HR sees it is locked');
   // A new code unlocks; the old password still works until he uses it.
-  const code = (await call('hr', 'POST', `/people/${sizwe}/login/code`, {})).body.code;
+  const code = (await call('admin', 'POST', `/people/${sizwe}/login/code`, {})).body.code;
   assert.equal((await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: 'Ladder-77-blue' })).status, 200);
   // A code is cancelled after five wrong tries.
   for (let i = 0; i < 5; i++) await call('', 'POST', '/auth/setup', { email: 'sizwe@zsp.test', code: 'ZZZZ-ZZZZ', password: 'Ladder-77-blue' });
@@ -2048,27 +2054,41 @@ test('own logins: wrong passwords lock it; a lost phone is signed out; a stopped
 
   // Lost phone: every phone signed in as him is signed out; he signs in again with his password.
   assert.equal((await call('sizwe', 'GET', '/me')).status, 200);
-  assert.equal((await call('hr', 'POST', `/people/${sizwe}/login/sign-out`, {})).status, 200);
+  assert.equal((await call('admin', 'POST', `/people/${sizwe}/login/sign-out`, {})).status, 200);
   assert.equal((await call('sizwe', 'GET', '/me')).status, 401);
   tokens.sizwe = (await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: 'Ladder-77-blue', remember: true })).body.token;
   assert.equal((await call('sizwe', 'GET', '/me')).status, 200);
 
-  // He changes his password: this phone stays in (a new token), others are out.
-  const old = tokens.sizwe;
-  assert.equal((await call('sizwe', 'POST', '/me/password', { current: 'nope', password: 'Bucket-42-green' })).status, 403);
-  const ch = await call('sizwe', 'POST', '/me/password', { current: 'Ladder-77-blue', password: 'Bucket-42-green' });
-  assert.equal(ch.status, 200);
+  // A technician does not change his own password: Admin or the CEO gives him a new setup code.
+  const own = await call('sizwe', 'POST', '/me/password', { current: 'Ladder-77-blue', password: 'Bucket-42-green' });
+  assert.equal(own.status, 403);
+  assert.match(own.body.reasons[0], /Admin or the CEO/);
+  const reset = (await call('admin', 'POST', `/people/${sizwe}/login/code`, {})).body.code;
+  const re = await call('', 'POST', '/auth/setup', { email: 'sizwe@zsp.test', code: reset, password: 'Bucket-42-green', remember: true });
+  assert.equal(re.status, 200, JSON.stringify(re.body));
   assert.equal((await call('sizwe', 'GET', '/me')).status, 401, 'the old sign-in is gone');
-  tokens.sizwe = ch.body.token;
+  tokens.sizwe = re.body.token;
   assert.equal((await call('sizwe', 'GET', '/me')).status, 200);
-  assert.equal(JSON.parse(Buffer.from(ch.body.token.split('.')[1], 'base64url').toString()).r, true, 'still kept signed in on his phone');
+
+  // Admin changes her own password (Settings): this browser stays in (a new token), others are out.
+  const adminOld = tokens.admin;
+  assert.equal((await call('admin', 'POST', '/me/password', { current: 'nope', password: 'Bucket-42-green' })).status, 403);
+  const ch = await call('admin', 'POST', '/me/password', { current: PW, password: 'Office-Kettle-58' });
+  assert.equal(ch.status, 200, JSON.stringify(ch.body));
+  assert.equal((await call('admin', 'GET', '/me')).status, 401, 'the old sign-in is gone');
+  tokens.admin = ch.body.token;
+  assert.equal((await call('admin', 'GET', '/me')).status, 200);
+  // (and back, for the other tests)
+  tokens.admin = (await call('admin', 'POST', '/me/password', { current: 'Office-Kettle-58', password: PW })).body.token;
+  assert.notEqual(tokens.admin, adminOld);
+  assert.equal((await call('admin', 'GET', '/me')).status, 200);
 
   // Stopped: at once, on every phone; the right password is told it is stopped.
-  assert.equal((await call('hr', 'POST', `/people/${sizwe}/login/stop`, { reason: 'On suspension' })).status, 200);
+  assert.equal((await call('admin', 'POST', `/people/${sizwe}/login/stop`, { reason: 'On suspension' })).status, 200);
   assert.equal((await call('sizwe', 'GET', '/me')).status, 401);
   assert.equal((await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: 'Bucket-42-green' })).status, 403);
   assert.equal((await call('hr', 'GET', '/people')).body.people.find((p: { id: string }) => p.id === sizwe).login, 'stopped');
-  assert.equal((await call('hr', 'POST', `/people/${sizwe}/login/allow`, {})).status, 200);
+  assert.equal((await call('admin', 'POST', `/people/${sizwe}/login/allow`, {})).status, 200);
   assert.equal((await call('', 'POST', '/auth/login', { email: 'sizwe@zsp.test', password: 'Bucket-42-green' })).status, 200);
 
   // His email changes: he signs in with the new one.

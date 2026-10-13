@@ -1,9 +1,21 @@
-// Change my own password. Every other phone signed in as me is signed out; this one stays in.
+// Change my own password: only the admin and the CEO, under Settings. Everyone else asks them for a
+// new setup code. Every other phone signed in as me is signed out; this one stays in.
 import React, { useState } from 'react';
 import { View } from 'react-native';
 import { useStore } from '../state.tsx';
-import { Button, Card, Heading, Notice } from '../ui.tsx';
+import { Body, Button, Card, Heading, Notice } from '../ui.tsx';
 import { PasswordField, passwordProblem } from './Login.tsx';
+
+/** Settings → My password (admin and CEO). */
+export function MyPasswordSettings() {
+  return (
+    <Card>
+      <Heading>My password</Heading>
+      <Body quiet>Technicians and the rest of the team do not change passwords themselves: under People, open the person, then Login → Reset password (a new setup code to send them).</Body>
+      <ChangePassword />
+    </Card>
+  );
+}
 
 export function ChangePassword() {
   const s = useStore();

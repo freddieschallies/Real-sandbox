@@ -18,7 +18,6 @@ import { C, S } from '../theme.ts';
 import { CATEGORY_LABEL, useStockroom, type Activity, type Category, type Holding, type RoomItem } from './useStockroom.ts';
 import { Choice } from '../ui.tsx';
 import type { StockRequest, StockReturn } from '../types.ts';
-import { ChangePassword } from '../screens/MyPassword.tsx';
 
 // The stockroom's own colour, so nobody confuses it with the technician app.
 const K = { band: '#1E6F6A', bandText: '#E8FFFB', tick: '#3FB57A' };
@@ -85,7 +84,6 @@ export function StockroomApp() {
       {tab === 'tools' ? <ToolStore /> : null}
       {tab === 'live' ? <LiveFeed items={room.ctl.activity ?? []} seen={room.ctl.seenActivityAt ?? null} invoices={room.ctl.invoices} /> : null}
       {tab === 'items' ? <NewItemList items={room.ctl.room.filter(i => i.needsReview)} open={id => setSel({ kind: 'item', id })} /> : null}
-      <ChangePassword />
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} disabled={s.waiting > 0} /> : null}
       {room.ctl.loadedAt ? <Text style={st.small}>Updated {when(room.ctl.loadedAt)}</Text> : <Text style={st.small}>{room.loading ? 'Loading…' : 'Needs signal to load.'}</Text>}
     </ScrollView>

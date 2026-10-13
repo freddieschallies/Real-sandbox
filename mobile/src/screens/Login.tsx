@@ -94,7 +94,7 @@ export function Login({ demo, back }: { demo?: boolean; back?: () => void } = {}
           <Toggle label="Keep me signed in on this phone (30 days)" value={remember} onChange={setRemember} />
           {!remember ? <Text style={st.small}>Signed out after 12 hours. Turn this off on a computer other people use.</Text> : null}
           <Button label="Sign in" onPress={signIn} busy={busy === 'server'} disabled={(needServer && !url) || !email.trim() || !password} />
-          <Text style={st.small}>Forgot your password? Ask the office (HR or the CEO) for a setup code, then tap "I have a setup code".</Text>
+          <Text style={st.small}>Forgot your password, or want a new one? Ask Admin or the CEO for a setup code, then tap "I have a setup code".</Text>
         </>
       ) : (
         <>

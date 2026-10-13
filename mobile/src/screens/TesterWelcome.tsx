@@ -71,8 +71,8 @@ const STEPS: [string, string[]][] = [
     'Departments: tap Edit on a department to rename it or give it a logo; the new name and logo show everywhere at once.',
     'People: open anyone and edit their contact and personal details. At the bottom, "End … employment": they come off every list, their login stops, and they move to Terminated staff (bottom of People) with their record and what was still on their name.',
     'Staff records: open anyone under People to add an issue or a warning, or delete one (a line keeps who deleted it and when).',
-    'Own logins: People → "Add a person" (name, email, position). On the person, "Login" → "Give a setup code": a one-time code to send by WhatsApp. Then tap "Back to the test guide", "Sign in with your own login", "I have a setup code": the email, the code, and a password only that person knows. Every person signs in as themselves; the CEO can also do this for the positions that are the CEO\'s.',
-    'Login on anyone\'s profile: give a new code when they forget the password, "Sign out of every phone" when a phone is lost, or stop the login. Five wrong passwords lock it for 15 minutes. Everything is logged.',
+    'Own logins: People → "Add a person" (name, email, position). Then switch to Admin (or the CEO): People → the person → "Login" → "Give a setup code": a one-time code to send by WhatsApp. Then tap "Back to the test guide", "Sign in with your own login", "I have a setup code": the email, the code, and a password only that person knows. Every person signs in as themselves; the CEO can also do this for the positions that are the CEO\'s.',
+    'Passwords are not HR\'s: only Admin and the CEO give setup codes and reset passwords.',
     'She does not see jobs, quotes or the stockroom.',
   ]],
   ['As the office admin (Zanele)', [
@@ -84,6 +84,7 @@ const STEPS: [string, string[]][] = [
     'Jobs: open a job for any technician (Thabo sees it on his phone at once), edit anything on it (every change is written on the job and the technician is told), move it, or cancel it.',
     'Job status: every job shows one status. Open jobs: Assigned, In progress, Continue later. Closed jobs say where the money stands: Done · to invoice, Invoiced · INV n, Paid, Credited, or Closed · no charge (warranty, callback, goodwill, contract, no fault found). Cancelled jobs say who cancelled: the client or us. Open a closed job → Invoicing → "Close at no charge" with the reason; it leaves the To invoice list. Jobs → Invoicing filters No charge and Cancelled.',
     'Queries: send any technician a question (switch to Tech to see it on Thabo\'s My day and answer it).',
+    'Passwords: only Admin and the CEO. People → open someone → Login → "Reset … password (new setup code)": a one-time code to WhatsApp them (it also unlocks a login locked by five wrong passwords). "Sign out of every phone" when a phone is lost, or stop the login. Nobody changes a password on the main screens; Admin and the CEO change their own under Settings → My password. Everything is logged.',
     'People: she can see everyone, but cannot change positions unless the CEO switches on "Positions and access" for her.',
     'Workshop: machines in the workshop (being repaired, or ready to go back), the loan machines and which store each one is at, and where the workshop is. Jobs → "Workshop & loans" filters the job list the same way. A workshop repair (a machine the client brings in) is a job type on New job.',
     'Stores → Bring in customers: choose a customer list saved as CSV (export it from Servcraft or Excel; the real server also reads Excel files). The app guesses which column is the customer, the site and the address; check them, see what will come in, and bring them in. Every address is then found on the map by itself: "Check the pin" means only the suburb was found (open it in Google Maps, then "The pin is right" or paste the right point); "No pin yet" means the address was not found. A store with no pin still works: the technician\'s first Arrived there suggests the pin.',
@@ -136,7 +137,7 @@ export function TesterWelcome() {
       <Button label={R('Open as office admin (Zanele)')} kind="secondary" onPress={() => go('admin')} busy={busy === 'admin'} />
       <Button label={R('Open as CEO (Lilanie)')} kind="secondary" onPress={() => go('office')} busy={busy === 'office'} />
       <Button label="Sign in with your own login" kind="quiet" onPress={() => setOwn(true)} />
-      <Text style={st.small}>For someone HR or the CEO added under People and gave a setup code: the email and the password they chose (first time: "I have a setup code").</Text>
+      <Text style={st.small}>For someone added under People who was given a setup code by Admin or the CEO: the email and the password they chose (first time: "I have a setup code").</Text>
       {STEPS.map(([title, lines]) => (
         <Card key={title}>
           <Heading>{R(title)}</Heading>

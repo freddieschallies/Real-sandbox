@@ -14,7 +14,6 @@ const bad = (status: number, ...reasons: string[]): Res => ({ ok: false, status,
 
 export const CODE_DAYS = 7;
 const MAX_WRONG = 5;
-const HR_POSITIONS = ['technician', 'admin', 'management', 'stockroom'];
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
 function scramble(salt: string, text: string): string {
@@ -46,10 +45,11 @@ export class DemoLogins {
   }
 
   /** Whether someone at `level` (with `ceo`: manages access) looks after the login of `target`. */
-  manages(me: { id: string; level: string; ceo: boolean; hr: boolean }, target: { id: string; login_level: string }) {
+  manages(me: { id: string; level: string; ceo: boolean }, target: { id: string; login_level: string }) {
     if (target.id === me.id) return false;
     if (me.ceo) return target.login_level !== 'creator' || me.level === 'creator';
-    return me.hr && HR_POSITIONS.includes(target.login_level);
+    // The admin looks after everyone's login except the directors' and the CEO's.
+    return me.level === 'admin' && target.login_level !== 'director' && target.login_level !== 'creator';
   }
 
   info(id: string, canManage: boolean, mine: boolean, left: boolean) {

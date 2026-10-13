@@ -20,7 +20,6 @@ import type { Fault, FleetJob, FleetVehicle } from './types.ts';
 import { DUE, K, SEV, STATUS, TYPE_LABEL, dayName, km, today, when, SLOT_LABEL } from './common.ts';
 import { WorkshopItem, WorkshopList, useWorkshop } from './Workshop.tsx';
 import { AssignScreen, BookingScreen, BookingsList, DailyCheckHistory, DailyCheckScreen, DailyChecksCard, FleetMap, NewBooking, TechList } from './FleetExtra.tsx';
-import { ChangePassword } from '../screens/MyPassword.tsx';
 
 type Tab = 'vehicles' | 'map' | 'bookings' | 'faults' | 'jobs' | 'stock' | 'techs' | 'codes';
 export type Sel = { kind: 'vehicle'; id: string } | { kind: 'job'; id: string } | { kind: 'newjob'; vehicleId: string; bookingId?: string } | { kind: 'report'; vehicleId: string }
@@ -65,7 +64,6 @@ export function FleetApp() {
       {tab === 'techs' ? <TechList f={f} open={open} /> : null}
       {tab === 'codes' ? <VehicleBarcodes /> : null}
       {tab === 'stock' ? <WorkshopList ws={ws} role="mechanic" open={id => open({ kind: 'wsitem', id })} /> : null}
-      <ChangePassword />
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} disabled={s.waiting > 0} /> : null}
       <Text style={st.small}>{f.d.loadedAt ? `Updated ${when(f.d.loadedAt)}` : f.loading ? 'Loading…' : 'Needs signal to load.'}</Text>
     </ScrollView>

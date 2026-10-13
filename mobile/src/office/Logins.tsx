@@ -148,7 +148,7 @@ export function LoginCard({ userId, name, phone, changed }: { userId: string; na
       {info.canManage ? (
         <View style={{ gap: 8 }}>
           {info.email ? (
-            <Button label={info.hasPassword ? `New setup code (${first} forgot the password${info.locked ? ', or is locked' : ''})` : info.state === 'code' ? 'Give a new setup code' : `Give ${first} a setup code`}
+            <Button label={info.hasPassword ? `Reset ${first}'s password (new setup code${info.locked ? ', also unlocks it' : ''})` : info.state === 'code' ? 'Give a new setup code' : `Give ${first} a setup code`}
               kind={info.hasPassword ? 'secondary' : 'primary'} busy={busy === 'code'} onPress={() => act('code', '')} />
           ) : null}
           {info.state === 'stopped' && info.hasPassword ? <Button label="Allow the login again" kind="secondary" busy={busy === 'allow'} onPress={() => act('allow', `${first} can sign in again with his own password.`)} /> : null}

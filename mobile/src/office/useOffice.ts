@@ -34,7 +34,7 @@ export interface JobChange { changed_at: string; by: string; field: string; old_
 
 export interface OfficeData {
   overview: Overview | null; jobs: OfficeJob[]; stores: Store[]; techs: Tech[]; flags: OfficeFlag[]; handovers: Inspection[];
-  people: { canManage?: boolean; canSetPositions?: boolean; settablePositions?: string[]; canAdd?: boolean; addPositions?: string[]; positions: { level: string; label: string }[]; trades?: { key: string; label: string }[]; areas?: { key: string; label: string }[]; people: Person[] } | null; loadedAt: string | null;
+  people: { canManage?: boolean; canSetPositions?: boolean; settablePositions?: string[]; canAdd?: boolean; canLogins?: boolean; addPositions?: string[]; positions: { level: string; label: string }[]; trades?: { key: string; label: string }[]; areas?: { key: string; label: string }[]; people: Person[] } | null; loadedAt: string | null;
 }
 const EMPTY: OfficeData = { overview: null, jobs: [], stores: [], techs: [], flags: [], handovers: [], people: null, loadedAt: null };
 
