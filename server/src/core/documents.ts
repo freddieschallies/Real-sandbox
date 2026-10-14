@@ -78,7 +78,8 @@ export function invoiceDraft(j: JobForInvoice, p: PriceRules): DocLine[] {
 }
 
 /** Rates the CEO sets. */
-export const RATE_KEYS = ['labour_per_hour', 'call_out', 'travel_per_km', 'travel_per_hour', 'bought_out_markup_pct'] as const;
+export const RATE_KEYS = ['labour_per_hour', 'call_out', 'travel_per_km', 'travel_per_hour', 'bought_out_markup_pct', 'labour_cost_per_hour', 'vehicle_cost_per_km'] as const;
 export const RATE_LABEL: Record<(typeof RATE_KEYS)[number], string> = {
   labour_per_hour: 'Labour per hour (excl. VAT)', call_out: 'Call-out fee (excl. VAT)', travel_per_km: 'Travel per km (excl. VAT)', travel_per_hour: 'Travel time per hour (excl. VAT)', bought_out_markup_pct: 'Mark-up on bought-out items (%)',
+  labour_cost_per_hour: 'What an hour of a technician costs us (wages and all), for profit per job', vehicle_cost_per_km: 'What a km costs us (fuel, tyres, services), for profit per job',
 };

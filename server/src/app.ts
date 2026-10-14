@@ -16,6 +16,8 @@ import { registerDocumentRoutes } from './routes/documents.ts';
 import { registerPastelRoutes } from './routes/pastel.ts';
 import { registerSupplierInvoiceRoutes } from './routes/supplierInvoices.ts';
 import { registerClientRateRoutes } from './routes/clientRates.ts';
+import { registerDebtorRoutes } from './routes/debtors.ts';
+import { registerProfitRoutes } from './routes/profit.ts';
 import { registerPeopleRoutes, registerTerminationRoutes } from './routes/people.ts';
 import { registerLoginRoutes } from './routes/logins.ts';
 import { registerStaffRoutes } from './routes/staff.ts';
@@ -56,6 +58,8 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerDocumentRoutes(app);
   registerPastelRoutes(app);
   registerClientRateRoutes(app);
+  registerDebtorRoutes(app);
+  registerProfitRoutes(app);
   registerTerminationRoutes(app);
   registerPeopleRoutes(app);
   registerLoginRoutes(app);

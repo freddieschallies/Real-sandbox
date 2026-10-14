@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { holdOfStore, jobOpenedOnHold } from './debtors.ts';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { Db, Q } from '../db.ts';
@@ -32,6 +33,8 @@ export const NewJob = z.object({
   leadTechnicianId: Uuid,
   helperIds: z.array(Uuid).default([]),
   maintenanceSteps: z.array(z.string().min(1)).default([]),
+  /** The client is on hold and the job must go ahead anyway (Accounts is told). */
+  holdOk: z.boolean().optional(),
 });
 
 /** Opens a job (from the office's New job, or a breakdown from the queue). Returns its id. */
@@ -41,6 +44,9 @@ export async function createJob(c: Q, actorId: string, b: z.infer<typeof NewJob>
   // so nothing can be linked to another company's records.
   const store = await c.query('SELECT 1 FROM stores WHERE id = $1', [b.storeId]);
   if (!store.rowCount) throw new Refused(400, ['unknown store']);
+  // A client that is not paying: the job is only opened when the office confirms it must go ahead.
+  const hold = await holdOfStore(c, b.storeId);
+  if (hold && !b.holdOk) throw new Refused(409, [`${hold.client} is on hold: ${hold.reason}. Tick "Open it anyway" if this job must go ahead (Accounts is told).`]);
   const techs = await c.query("SELECT id FROM users WHERE id = ANY($1) AND login_level = 'technician' AND status = 'active'", [[b.leadTechnicianId, ...b.helperIds]]);
   const ok = new Set(techs.rows.map(r => r.id));
   if (!ok.has(b.leadTechnicianId)) throw new Refused(400, ['lead technician must be an active technician']);
@@ -56,6 +62,7 @@ export async function createJob(c: Q, actorId: string, b: z.infer<typeof NewJob>
   for (const h of b.helperIds) await c.query('INSERT INTO job_helpers (job_id, user_id) VALUES ($1, $2)', [jobId, h]);
   for (const st of b.maintenanceSteps) await c.query('INSERT INTO planned_maintenance_checks (job_id, step) VALUES ($1, $2)', [jobId, st]);
   await audit(c, actorId, 'job_created', 'job', jobId, { jobNumber: rows[0].job_number });
+  if (hold) await jobOpenedOnHold(c, actorId, hold, jobId, rows[0].job_number);
   return jobId;
 }
 
@@ -94,6 +101,7 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     const mine = !can(req.actor, 'view_all_job_cards');
     const { rows } = await req.db.query(
       `SELECT j.id, j.job_number, j.job_type, j.priority, j.status, j.scheduled_date, j.fault_reported, nc.reason AS no_charge_reason, nc.note AS no_charge_note, j.cancelled_by_party, j.cancel_note,
+              (SELECT cl.on_hold FROM clients cl WHERE cl.id = s.client_id) AS client_on_hold,
               s.name AS store, u.full_name AS lead_technician, j.lead_technician_id,
               -- Billing, for the office's filters: its invoice (not cancelled) and anything credited.
               inv.invoice_number, inv.status::text AS invoice_status,

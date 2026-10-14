@@ -2436,3 +2436,65 @@ test('Accounts: checks every job card, scans and approves supplier invoices, cli
   assert.ok(!lines.some(l => l.kind === 'travel'), 'travel is switched off for this client');
   assert.equal((await call('books', 'DELETE', `/office/clients/${ids.client}/rates`)).status, 200, 'back to the company rates');
 });
+
+test('debtors: who owes what by age; an account on hold warns before a job is opened, and Accounts is told', async () => {
+  const D = await import('../src/core/debtors.ts');
+  assert.equal(D.ageBand('2026-09-01', '2026-10-14'), 'd30');
+  assert.equal(D.ageBand('2026-06-01', '2026-10-14'), 'd120');
+  const a = D.ageAnalysis([
+    { id: '1', number: 1, clientId: 'c', client: 'C', date: '2026-10-01', due: '2026-10-31', totalCents: 11500, creditedCents: 0 },
+    { id: '2', number: 2, clientId: 'c', client: 'C', date: '2026-07-01', due: '2026-07-31', totalCents: 23000, creditedCents: 3000 },
+    { id: '3', number: 3, clientId: 'c', client: 'C', date: '2026-07-01', due: null, totalCents: 5000, creditedCents: 5000 },
+  ], '2026-10-14');
+  assert.deepEqual([a.clients[0].total, a.clients[0].bands.current, a.clients[0].bands.d90, a.clients[0].overdue, a.clients[0].invoices], [31500, 11500, 20000, 20000, 2], 'fully credited invoices owe nothing');
+
+  assert.equal((await call('tech', 'GET', '/office/debtors')).status, 403);
+  const list = await call('books', 'GET', '/office/debtors');
+  assert.equal(list.status, 200, JSON.stringify(list.body));
+  assert.equal(list.body.canHold, true);
+  assert.equal((await call('admin', 'GET', '/office/debtors')).body.canHold, false, 'Admin sees the list but does not put accounts on hold');
+
+  // On hold: a reason first; then a job warns, and only goes ahead when confirmed.
+  assert.equal((await call('admin', 'POST', `/office/clients/${ids.client}/hold`, { on: true, reason: 'Nothing paid since July' })).status, 403);
+  assert.equal((await call('books', 'POST', `/office/clients/${ids.client}/hold`, { on: true })).status, 400);
+  assert.equal((await call('books', 'POST', `/office/clients/${ids.client}/hold`, { on: true, reason: 'Nothing paid since July' })).status, 200);
+  assert.ok(((await call('admin', 'GET', '/office/stores')).body as { id: string; client_on_hold: boolean }[]).find(s => s.id === ids.store)!.client_on_hold);
+  const job = { jobType: 'breakdown', storeId: ids.store, faultReported: 'Cold room warm', scheduledDate: '2026-10-15', leadTechnicianId: ids.tech };
+  const warned = await call('admin', 'POST', '/jobs', job);
+  assert.equal(warned.status, 409);
+  assert.match(warned.body.reasons[0], /on hold: Nothing paid since July/);
+  const anyway = await call('admin', 'POST', '/jobs', { ...job, holdOk: true });
+  assert.equal(anyway.status, 201, JSON.stringify(anyway.body));
+  assert.ok((await call('books', 'GET', '/me/notifications')).body.some((n: { kind: string }) => n.kind === 'job_on_hold'), 'Accounts is told');
+  const detail = (await call('books', 'GET', `/office/debtors/${ids.client}`)).body;
+  assert.equal(detail.client.on_hold, true);
+  assert.ok(detail.history.some((h: { job_number: number | null }) => h.job_number), 'the job opened anyway is on the record');
+  assert.ok(((await call('admin', 'GET', '/jobs')).body as { client_on_hold: boolean }[]).some(j => j.client_on_hold));
+  // Off hold: jobs open as usual.
+  assert.equal((await call('books', 'POST', `/office/clients/${ids.client}/hold`, { on: false })).status, 200);
+  assert.equal((await call('admin', 'POST', '/jobs', job)).status, 201);
+  assert.ok(((await call('books', 'GET', '/office/debtors')).body.clients as { clientId: string }[]).every(c => c.clientId !== ids.client || true));
+});
+
+test('profit per job: invoiced less credits against labour, travel, parts and bought-out costs; by client, technician and month', async () => {
+  const P = await import('../src/core/profit.ts');
+  const j = P.jobProfit({ jobId: 'j', jobNumber: 1, client: 'C', store: 'S', technician: 'T', month: '2026-10', closed: '2026-10-10', revenueCents: 150000, noCharge: false,
+    labourMinutes: 180, km: 40, kmEstimated: true, partsCostCents: 30000, partsWithoutCost: 0, boughtOutCents: 5000 }, { labourCostPerHourCents: 20000, vehicleCostPerKmCents: 500 });
+  assert.deepEqual([j.labourCostCents, j.travelCostCents, j.costCents, j.profitCents, j.marginPct], [60000, 20000, 115000, 35000, 23.3]);
+  const nc = P.jobProfit({ ...j, revenueCents: null, noCharge: true }, { labourCostPerHourCents: 20000, vehicleCostPerKmCents: 500 });
+  assert.equal(nc.profitCents, -115000, 'closed at no charge: all cost');
+  const open = P.jobProfit({ ...j, revenueCents: null }, { labourCostPerHourCents: 20000, vehicleCostPerKmCents: 500 });
+  assert.equal(open.profitCents, null, 'not invoiced yet: waits');
+  assert.deepEqual(P.groupProfit([j, nc, open], 'client').map(g => [g.key, g.jobs, g.profitCents, g.noCharge]), [['C', 2, -80000, 1]]);
+
+  assert.equal((await call('admin', 'GET', '/office/profit')).status, 403, 'for the CEO and Accounts');
+  assert.equal((await call('creator', 'PUT', '/office/rates', { labour_cost_per_hour: 18000, vehicle_cost_per_km: 450 })).status, 200);
+  const r = await call('books', 'GET', '/office/profit?from=2020-01-01');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.ratesSet, true);
+  assert.ok(r.body.jobs.length >= 1, 'closed jobs are in');
+  const inv = r.body.jobs.find((x: { revenueCents: number | null }) => x.revenueCents !== null);
+  if (inv) assert.equal(inv.profitCents, inv.revenueCents - inv.costCents);
+  assert.ok(r.body.byClient.length >= 1 && r.body.byMonth.length >= 1 && r.body.byTechnician.length >= 1);
+  assert.equal(r.body.totals.profitCents, r.body.totals.revenueCents - r.body.totals.costCents);
+});

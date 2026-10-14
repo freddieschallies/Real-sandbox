@@ -56,6 +56,7 @@ function StoreCard({ s, onPress }: { s: Store; onPress: () => void }) {
     <Card onPress={onPress} accessibilityLabel={`Store ${s.name}`}>
       <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>{s.name}</Text>
+        {s.client_on_hold ? <Pill text="On hold" tone="bad" /> : null}
         {p ? <Pill text={p.text} tone={p.tone} /> : null}
         {s.open_jobs ? <Pill text={`${s.open_jobs} open`} tone="info" /> : null}
       </View>

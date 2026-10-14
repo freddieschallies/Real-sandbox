@@ -447,7 +447,11 @@ export class DemoTransport implements Transport {
       !b.leadTechnicianId ? 'the lead technician' : null].filter(Boolean) as string[];
     if (missing.length) return refuse(400, ...missing);
     if (b.jobType === 'planned_maintenance' && !(b.maintenanceSteps ?? []).length) return refuse(400, 'planned maintenance needs its checklist steps');
+    // A client that is not paying: only when the office confirms the job must go ahead (Accounts is told).
+    const hold = this.docs().holdOf(store!.client);
+    if (hold && !b.holdOk) return refuse(409, `${store!.client} is on hold: ${hold.reason}. Tick "Open it anyway" if this job must go ahead (Accounts is told).`);
     const n = Math.max(...this.state.jobs.map(j => j.meta.job_number)) + 1;
+    if (hold) this.docs().openedOnHold(store!.client, n, this.who.name);
     const j = officeJob(n, b.jobType, b.priority ?? 'normal', store!, b.faultReported.trim(), { id: b.leadTechnicianId, name: o.name(b.leadTechnicianId) }, b.scheduledDate, b.helperIds ?? [], b.clientOrderRef);
     j.meta.checklist = (b.maintenanceSteps ?? []).map((step: string, i: number) => ({ id: `chk-${n}-${i}`, step, done: false }));
     this.state.jobs.push(j);
@@ -918,7 +922,7 @@ export class DemoTransport implements Transport {
       return ok({ jobId: j.meta.id, changes: ch.map(([field, old, nw]) => ({ field, old, new: nw })) });
     }
     if (p === '/office/overview') return ok(o.overview());
-    if (p === '/office/stores' && req.method === 'GET') return ok(o.stores());
+    if (p === '/office/stores' && req.method === 'GET') { const dd = this.docs(); return ok(o.stores().map(s => ({ ...s, client_on_hold: !!dd.holdOf(s.client), hold_reason: dd.holdOf(s.client)?.reason ?? null }))); }
     if (p === '/office/stores') return done(o.addStore(b));
     if ((m = p.match(/^\/office\/stores\/([^/]+)\/pin$/))) return this.does('stores') ? done(o.pin(m[1], b.action === 'confirm' ? 'confirm' : 'lookup', this.who.name)) : refuse(403, 'you cannot change stores');
     if ((m = p.match(/^\/office\/stores\/([^/]+)$/)) && req.method === 'PUT') return this.does('stores') ? done(o.editStore(m[1], b)) : refuse(403, 'you cannot change stores');
@@ -929,7 +933,7 @@ export class DemoTransport implements Transport {
       return ok(o.jobs(q.get('status')).map(j => {
         const dj = this.findJob(j.id);
         const r = dj ? this.repairView(dj) : null;
-        return { ...j, ...d.billingOf(j.id), ...(r ? { machine_at: r.machine_at, loans_out: r.loans_out, ready_to_deliver: r.ready_to_deliver } : {}) };
+        return { ...j, ...d.billingOf(j.id), client_on_hold: !!d.holdOf(this.state.office!.stores.find(x => x.id === (dj?.meta as { store_id?: string } | undefined)?.store_id)?.client), ...(r ? { machine_at: r.machine_at, loans_out: r.loans_out, ready_to_deliver: r.ready_to_deliver } : {}) };
       }));
     }
     if (p === '/jobs') return this.newOfficeJob(o, b);
@@ -967,7 +971,7 @@ export class DemoTransport implements Transport {
     this.office();
     const d = this.state.docs ?? (this.state.docs = seedDocs());
     const items = this.stock().s.items;
-    return new DemoDocs(d, {
+    const dd = new DemoDocs(d, {
       jobs: this.state.jobs as never,
       stores: this.state.office!.stores,
       minutesOf: id => { const j = this.findJob(id); return j ? J.jobMinutes(j.card) : 0; },
@@ -1004,12 +1008,26 @@ export class DemoTransport implements Transport {
         return { id: j.meta.id, job_number: n };
       },
     });
+    // Two older unpaid invoices for the debtors list (once): their jobs are made closed, long ago.
+    dd.seedAged((n, storeId, daysAgo) => {
+      const st = this.state.office!.stores.find(x => x.id === storeId);
+      if (!st || this.state.jobs.some(j => j.meta.job_number === n)) return null;
+      const end = new Date(Date.now() - (daysAgo + 1) * 86_400_000);
+      const j = officeJob(n, 'breakdown', 'normal', st, 'Cold room not holding temperature', { id: 'tech-2', name: 'Sipho Ndlovu' }, end.toISOString().slice(0, 10), []);
+      j.card.visits = [{ state: 'done', goAt: new Date(end.getTime() - 200 * 60_000).toISOString(), arrivedAt: new Date(end.getTime() - 175 * 60_000).toISOString(),
+        checkedInManager: 'Store manager', safetyCheck: { areaSafe: true, isolated: true, publicClear: true }, startedAt: new Date(end.getTime() - 170 * 60_000).toISOString(), endedAt: end.toISOString(), pauses: [] }] as never;
+      (j.card as { status: string }).status = 'closed';
+      (j as { closedAt?: string }).closedAt = end.toISOString();
+      this.state.jobs.push(j);
+      return j.meta.id;
+    });
+    return dd;
   }
 
   private docRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
     const isDoc = /^\/jobs\/[^/]+\/no-charge$/.test(p) || p.startsWith('/quotes') || p.startsWith('/invoices') || p.startsWith('/pastel') || p.startsWith('/office/supplier-invoices')
-      || /^\/office\/clients\/[^/]+\/rates$/.test(p) || ['/office/company', '/office/rates', '/office/to-invoice'].includes(p);
+      || /^\/office\/clients\/[^/]+\/(rates|hold)$/.test(p) || p.startsWith('/office/debtors') || p === '/office/profit' || ['/office/company', '/office/rates', '/office/to-invoice'].includes(p);
     if (!isDoc) return null;
     if (!['admin', 'accounts', 'management', 'director', 'creator', 'stockroom'].includes(this.who.level) || !this.does('documents')) return refuse(403, 'quotes and invoices are not part of your work');
     const d = this.docs();
@@ -1039,6 +1057,22 @@ export class DemoTransport implements Transport {
       return done(r);
     }
     if (p === '/pastel/suppliers') return ok(sup().suppliers());
+    // Debtors and accounts on hold.
+    if (p === '/office/debtors') return ok(d.debtors(books));
+    if (p === '/office/profit') {
+      if (!books) return refuse(403, 'profit is for the CEO and Accounts');
+      const back = (n: number) => new Date(Date.now() - n * 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+      const r = d.profit(q.get('from') ?? back(90), q.get('to') ?? back(0));
+      this.persist(this.state);
+      return ok(r);
+    }
+    if ((m = p.match(/^\/office\/debtors\/([^/]+)$/))) return ok(d.debtor(decodeURIComponent(m[1]), books));
+    if ((m = p.match(/^\/office\/clients\/([^/]+)\/hold$/))) {
+      if (!books) return refuse(403, 'only the CEO and Accounts put an account on hold');
+      const r = d.setHold(decodeURIComponent(m[1]), !!b.on, b.reason, this.who.name);
+      this.persist(this.state);
+      return done(r);
+    }
     if ((m = p.match(/^\/pastel\/suppliers\/([^/]+)$/))) { const r = sup().setCode(decodeURIComponent(m[1]), b.code); this.persist(this.state); return done(r); }
     // Each client's own rates and mark-up: the CEO and Accounts.
     if ((m = p.match(/^\/office\/clients\/([^/]+)\/rates$/))) {

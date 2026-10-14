@@ -100,6 +100,9 @@ const STEPS: [string, string[]][] = [
     'Approving keeps each part\'s latest cost price, so the clients\' mark-up works from what the parts really cost.',
     'Accounts → Customers: codes and rates → Rates on a client: its own labour, call-out, travel per km and travel time per hour; untick what that client is not charged. Parts mark-up in three bands: the cheaper the part, the bigger the mark-up (e.g. up to R500: 60%, up to R2 000: 40%, more: 25%).',
     'Invoices: make the invoice for a closed job; it is priced with that client\'s rates and mark-up (travel there and back is worked out from the Go and Arrived times, and the km from the workshop).',
+    'Debtors: who owes what, by age (current, 30, 60, 90, 120 days +), counted until each invoice is marked paid. Open a client to see its unpaid invoices.',
+    'Debtors → a client → "Put the account on hold" with the reason. Then switch to Admin and open a New job for one of its stores: it warns in red and only goes ahead with "Open it anyway" (Accounts is told, and it is on the client\'s record).',
+    'Profit: what the closed jobs made: invoiced (less credit notes) against the technicians\' hours on site and driving, the km, the parts at cost and items bought. By client, by technician, by month, or job by job with the worst first. The CEO sets what an hour of a technician and a km cost (Accounts → Company details and rates).',
     'Accounts → Pastel batch: Invoices, Credit notes, Quotations and Supplier invoices, each once. Set the Pastel codes first (Line codes and VAT: also the credit notes and purchases accounts; Supplier codes).',
   ]],
   ['As the CEO (Lilanie)', [

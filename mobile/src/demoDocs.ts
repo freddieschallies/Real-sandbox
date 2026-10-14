@@ -3,6 +3,8 @@
 import * as D from '../../server/src/core/documents.ts';
 import * as P from '../../server/src/core/pastel.ts';
 import * as R from '../../server/src/core/clientRates.ts';
+import * as DB from '../../server/src/core/debtors.ts';
+import * as PF from '../../server/src/core/profit.ts';
 import { REAL } from './demoReal.ts';
 
 type Line = D.DocLine & { id: string };
@@ -23,6 +25,11 @@ export interface DemoDocsState {
   credits?: { id: string; credit_number: number; invoice_id: string; job_id: string; amount_cents: number; vat_pct: number; reason: string; created_at: string; created_by: string; pastel_batch_id?: string | null }[];
   /** Each client's own rates and parts mark-up (by client name in the demo). */
   clientRates?: Record<string, R.ClientRates>;
+  /** Accounts on hold (by client name in the demo), and the record of every change. */
+  holds?: Record<string, { reason: string; by: string; at: string }>;
+  holdLog?: { client: string; on_hold: boolean; reason: string | null; job_number: number | null; by: string; at: string }[];
+  /** Two older unpaid invoices seeded for the debtors list. */
+  agedSeeded?: boolean;
   nextCredit?: number;
   /** Closed at no charge (warranty, callback, ...): the office's billing decision, beside the locked job card. */
   noCharge?: Record<string, { reason: string; note: string | null; by: string; at: string }>;
@@ -330,6 +337,99 @@ export class DemoDocs {
     if (i.status !== 'sent') return bad(409, `the invoice is ${i.status}`);
     Object.assign(i, { status: 'cancelled', cancel_note: note.trim() });
     return good({ id, status: 'cancelled' });
+  }
+
+  // ---- Debtors and accounts on hold ----------------------------------------------------------
+  private openInvoices(): (DB.OpenInvoice & { store: string | null; jobNumber: number | null })[] {
+    return this.d.invoices.filter(i => i.status === 'sent').map(i => {
+      const s = this.storeOf(i);
+      const ex = this.exVat(i.lines);
+      return {
+        id: i.id, number: i.invoice_number, clientId: s?.client ?? '?', client: s?.client ?? '?', store: s?.name ?? null, jobNumber: this.job(i.job_id)?.meta.job_number ?? null,
+        date: (i.sent_at ?? i.created_at).slice(0, 10), due: i.due_date, totalCents: D.totals([{ qty: 1, unitPriceCents: ex }], i.vat_pct).totalCents,
+        creditedCents: D.totals([{ qty: 1, unitPriceCents: this.creditedOn(i.id) }], i.vat_pct).totalCents,
+      };
+    });
+  }
+  holdOf(client: string | null | undefined) { return client ? this.d.holds?.[client] ?? null : null; }
+  debtors(canHold: boolean) {
+    const t = today();
+    const a = DB.ageAnalysis(this.openInvoices(), t);
+    const clients: Record<string, unknown>[] = a.clients.map(c => ({ ...c, pastelCode: this.d.clientCodes[c.client] ?? null, onHold: !!this.holdOf(c.client), holdReason: this.holdOf(c.client)?.reason ?? null }));
+    for (const [n, h] of Object.entries(this.d.holds ?? {})) {
+      if (!a.clients.some(c => c.client === n)) clients.push({ clientId: n, client: n, bands: Object.fromEntries(DB.AGE_BANDS.map(b => [b, 0])), total: 0, overdue: 0, invoices: 0, oldestDays: 0, pastelCode: this.d.clientCodes[n] ?? null, onHold: true, holdReason: h.reason });
+    }
+    return { today: t, totals: a.totals, clients, canHold };
+  }
+  debtor(id: string, canHold: boolean) {
+    const t = today();
+    const invoices = this.openInvoices().filter(i => i.client === id && DB.owing(i) > 0).map(i => ({
+      ...i, owing: DB.owing(i), band: DB.ageBand(i.date, t), days: DB.daysBetween(i.date, t), overdueDays: i.due && i.due < t ? DB.daysBetween(i.due, t) : 0,
+    }));
+    const h = this.holdOf(id);
+    return {
+      client: { id, name: id, pastel_code: this.d.clientCodes[id] ?? null, email: null, phone: null, contact_name: null, on_hold: !!h, hold_reason: h?.reason ?? null, hold_at: h?.at ?? null, hold_by: h?.by ?? null },
+      invoices, summary: DB.ageAnalysis(invoices, t).clients[0] ?? null, history: (this.d.holdLog ?? []).filter(x => x.client === id).slice().reverse(), canHold,
+    };
+  }
+  setHold(client: string, on: boolean, reason: string | undefined, by: string): Res {
+    if (on && (!reason || reason.trim().length < 3)) return bad(400, 'why the account is on hold (the office sees it when opening a job)');
+    if (!on && !this.d.holds?.[client]) return bad(409, `${client} is not on hold`);
+    if (on) (this.d.holds ??= {})[client] = { reason: reason!.trim(), by, at: new Date().toISOString() };
+    else delete this.d.holds![client];
+    (this.d.holdLog ??= []).push({ client, on_hold: on, reason: on ? reason!.trim() : null, job_number: null, by, at: new Date().toISOString() });
+    return good({ id: client, onHold: on, reason: on ? reason!.trim() : null });
+  }
+  /** A job opened anyway while the client is on hold: on the record. */
+  openedOnHold(client: string, jobNumber: number, by: string) {
+    (this.d.holdLog ??= []).push({ client, on_hold: true, reason: `Job ${jobNumber} opened while on hold`, job_number: jobNumber, by, at: new Date().toISOString() });
+  }
+  /** Seeds two older unpaid invoices (for jobs made for it) so the debtors list shows its ages. */
+  seedAged(make: (n: number, storeId: string, daysAgo: number) => string | null) {
+    if (this.d.agedSeeded) return;
+    this.d.agedSeeded = true;
+    const add = (n: number, num: number, storeId: string, daysAgo: number, lines: D.DocLine[], ref: string) => {
+      const jobId = make(n, storeId, daysAgo);
+      if (!jobId) return;
+      const at = new Date(Date.now() - daysAgo * 86_400_000).toISOString();
+      this.d.invoices.push({ id: nid('inv'), invoice_number: num, status: 'sent', job_id: jobId, notes: null, client_ref: ref, created_at: at, sent_at: at,
+        due_date: addDays(at.slice(0, 10), 30), paid_at: null, paid_ref: null, cancel_note: null, created_by: 'Zanele Khoza', vat_pct: 15, pastel_batch_id: null,
+        lines: lines.map(l => ({ ...l, id: nid('dl') })) });
+    };
+    add(10150, 6980, 'harbour', 47, [{ kind: 'labour', description: 'Labour, job 10150', qty: 2.5, unitPriceCents: 65000 }, { kind: 'call_out', description: 'Call-out', qty: 1, unitPriceCents: 45000 }], 'HD-2231');
+    add(10131, 6955, 'esikhawini', 104, [{ kind: 'labour', description: 'Labour, job 10131', qty: 4, unitPriceCents: 65000 }, { kind: 'stock', description: 'Condenser fan motor 10W', qty: 1, unitPriceCents: 89000 }], 'BX-21980');
+  }
+
+  // ---- Profit per job -------------------------------------------------------------------------
+  profit(from: string, to: string) {
+    // The test drive starts with example cost figures (the CEO changes them under Company details and rates).
+    if (this.d.rates.labour_cost_per_hour === undefined) this.d.rates.labour_cost_per_hour = 18_000;
+    if (this.d.rates.vehicle_cost_per_km === undefined) this.d.rates.vehicle_cost_per_km = 450;
+    const cr: PF.CostRates = { labourCostPerHourCents: this.d.rates.labour_cost_per_hour ?? 0, vehicleCostPerKmCents: this.d.rates.vehicle_cost_per_km ?? 0 };
+    const jobs: PF.JobProfit[] = [];
+    for (const j of this.src.jobs) {
+      const closed = (j.closedAt ?? j.card.visits.at(-1)?.endedAt)?.slice(0, 10);
+      if (j.card.status !== 'closed' || !closed || closed < from || closed > to) continue;
+      const s = this.src.stores.find(x => x.id === j.meta.store_id);
+      const invs = this.d.invoices.filter(i => i.job_id === j.meta.id && (i.status === 'sent' || i.status === 'paid'));
+      const credited = (this.d.credits ?? []).filter(c => c.job_id === j.meta.id).reduce((n, c) => n + c.amount_cents, 0);
+      const used = this.src.stockUsed(j.meta.job_number);
+      const travel = this.src.travelOf?.(j.meta.id) ?? null;
+      const people = 1 + (j.meta.helper_ids ?? []).length;
+      jobs.push(PF.jobProfit({
+        jobId: j.meta.id, jobNumber: j.meta.job_number, client: s?.client ?? '?', store: j.meta.store, technician: j.meta.lead_technician, month: closed.slice(0, 7), closed,
+        revenueCents: invs.length ? invs.reduce((n, i) => n + this.exVat(i.lines), 0) - credited : null, noCharge: !!this.d.noCharge?.[j.meta.id],
+        labourMinutes: (this.src.minutesOf(j.meta.id) + (travel?.minutes ?? 0)) * people, km: travel?.km ?? 0, kmEstimated: travel?.kmEstimated ?? false,
+        partsCostCents: used.reduce((n, u) => n + Math.round(u.qty * (u.costCents ?? 0)), 0), partsWithoutCost: used.filter(u => u.costCents == null).length, boughtOutCents: 0,
+      }, cr));
+    }
+    const counted = jobs.filter(x => x.profitCents !== null);
+    const revenue = counted.reduce((n, x) => n + (x.noCharge ? 0 : x.revenueCents ?? 0), 0), cost = counted.reduce((n, x) => n + x.costCents, 0);
+    return {
+      from, to, rates: cr, ratesSet: !!(cr.labourCostPerHourCents && cr.vehicleCostPerKmCents),
+      totals: { jobs: counted.length, notInvoiced: jobs.length - counted.length, revenueCents: revenue, costCents: cost, profitCents: revenue - cost, marginPct: revenue ? Math.round(((revenue - cost) / revenue) * 1000) / 10 : null },
+      jobs, byClient: PF.groupProfit(jobs, 'client'), byTechnician: PF.groupProfit(jobs, 'technician'), byMonth: PF.groupProfit(jobs, 'month'),
+    };
   }
 
   // ---- Each client's rates and mark-up -------------------------------------------------------

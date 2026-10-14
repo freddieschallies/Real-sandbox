@@ -61,7 +61,7 @@ export function registerControlRoutes(app: FastifyInstance) {
   app.get('/office/stores', async req => {
     office(req);
     const { rows } = await req.db.query(
-      `SELECT s.id, s.name, s.branch_code, s.address, s.lat, s.lng, s.geofence_m, c.name AS client, s.pin_status, s.pin_source, s.pin_note, s.pin_at, s.email, s.phone,
+      `SELECT s.id, s.name, s.branch_code, s.address, s.lat, s.lng, s.geofence_m, c.name AS client, c.on_hold AS client_on_hold, c.hold_reason, s.pin_status, s.pin_source, s.pin_note, s.pin_at, s.email, s.phone,
               (SELECT count(*)::int FROM equipment e WHERE e.store_id = s.id) AS equipment,
               (SELECT count(*)::int FROM jobs j WHERE j.store_id = s.id AND j.status NOT IN ('closed', 'cancelled')) AS open_jobs
          FROM stores s JOIN clients c ON c.id = s.client_id ORDER BY c.name, s.name`);

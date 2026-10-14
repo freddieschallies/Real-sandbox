@@ -35,13 +35,15 @@ import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 import { MyPasswordSettings } from '../screens/MyPassword.tsx';
 import { SupplierInvoiceDetail, SupplierInvoiceList } from './SupplierInvoices.tsx';
+import { DebtorDetail, DebtorList } from './Debtors.tsx';
+import { ProfitView } from './Profit.tsx';
 import { AddPerson, LOGIN_PILL, LoginCard } from './Logins.tsx';
 import { ImportCustomers, StoreDetail, StoreList, pointFrom } from './Stores.tsx';
 import { BreakdownAlert, BreakdownById, BreakdownList, BreakdownSettings, type Bd } from './Breakdowns.tsx';
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
-type Tab = 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
-type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | { kind: 'supplierinv'; id: string } | null;
+type Tab = 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
+type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | { kind: 'supplierinv'; id: string } | { kind: 'debtor'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
   cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
@@ -59,7 +61,7 @@ const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: '
 /** On the phone, unless the CEO or an admin pinned others: the first four show and the rest go under More, most used first. */
 const PHONE_ORDER: string[] = MENU_TABS.office.map(t => t.key);
 /** Screens that use the whole width on a computer (no list and detail). */
-const FULL: Tab[] = ['today', 'accounts', 'map', 'departments', 'timesheets', 'settings'];
+const FULL: Tab[] = ['today', 'profit', 'accounts', 'map', 'departments', 'timesheets', 'settings'];
 const OFFICE_LEVELS = ['admin', 'accounts', 'management', 'hr', 'director', 'creator'];
 export const isOffice = (level?: string) => OFFICE_LEVELS.includes(level ?? '');
 
@@ -94,6 +96,7 @@ export function OfficeApp() {
   }, [bdTick]);
   // Supplier invoices: the list looks again when one is saved, approved or queried.
   const [supTick, setSupTick] = useState(0);
+  const [debTick, setDebTick] = useState(0);
   const bdDone = (jobId?: string) => { setBdTick(t => t + 1); o.load(); if (jobId) go('jobs', { kind: 'job', id: jobId }); else setSel(null); };
 
   const menu = usePhoneMenu();
@@ -108,6 +111,8 @@ export function OfficeApp() {
     { key: 'quotes', label: 'Quotes', count: books.quotes.filter(q => q.status === 'draft').length || undefined },
     { key: 'invoices', label: 'Invoices', count: books.toInvoice.length || undefined },
     { key: 'supplier', label: 'Supplier invoices', short: 'Suppliers' },
+    { key: 'debtors', label: 'Debtors' },
+    { key: 'profit', label: 'Profit' },
     { key: 'accounts', label: 'Accounts', short: 'Pastel' },
     { key: 'flags', label: 'Flags', count: ov?.flags?.unresolved },
     { key: 'handovers', label: 'Handovers', short: 'Approve', count: ov?.handoversAwaitingApproval },
@@ -145,6 +150,8 @@ export function OfficeApp() {
       {tab === 'quotes' ? <QuoteList b={books} open={id => setSel({ kind: 'quote', id })} add={() => setSel({ kind: 'newquote' })} /> : null}
       {tab === 'invoices' ? <InvoiceList b={books} open={id => setSel({ kind: 'invoice', id })} /> : null}
       {tab === 'supplier' ? <SupplierInvoiceList open={id => setSel({ kind: 'supplierinv', id })} selected={sel?.kind === 'supplierinv' ? sel.id : null} tick={supTick} /> : null}
+      {tab === 'debtors' ? <DebtorList open={id => setSel({ kind: 'debtor', id })} selected={sel?.kind === 'debtor' ? sel.id : null} tick={debTick} /> : null}
+      {tab === 'profit' ? <ProfitView openJob={id => go('jobs', { kind: 'job', id })} /> : null}
       {tab === 'accounts' ? <Accounts b={books} canPrices={does('prices')} canBooks={does('books')} /> : null}
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
       {tab === 'handovers' ? <HandoverList o={o} open={id => setSel({ kind: 'handover', id })} /> : null}
@@ -184,6 +191,7 @@ export function OfficeApp() {
     if (sel.kind === 'breakdown') return wrap(<BreakdownById key={`${sel.id}-${bdTick}`} id={sel.id} b={sel.b} o={o} logIt={b => setSel({ kind: 'bdlog', b })} done={bdDone} />);
     if (sel.kind === 'store') return wrap(<StoreDetail key={sel.id} id={sel.id} o={o} canEdit={does('stores')} done={close} />);
     if (sel.kind === 'importcustomers') return wrap(<ImportCustomers o={o} done={close} />);
+    if (sel.kind === 'debtor') return wrap(<DebtorDetail key={sel.id} id={sel.id} changed={() => { setDebTick(t => t + 1); o.load(); }} openInvoice={id => go('invoices', { kind: 'invoice', id })} />);
     if (sel.kind === 'supplierinv') return wrap(<SupplierInvoiceDetail key={sel.id} id={sel.id} changed={() => setSupTick(t => t + 1)} />);
     if (sel.kind === 'bdlog') {
       const b = sel.b;
@@ -370,6 +378,7 @@ function JobRow({ j, on, onPress }: { j: OfficeJob; on: boolean; onPress: () => 
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Text style={[st.body, { fontWeight: '800' }]}>#{j.job_number}</Text>
         <Text numberOfLines={1} style={[st.body, { flex: 1 }]}>{j.store}</Text>
+        {j.client_on_hold && j.status !== 'closed' && j.status !== 'cancelled' ? <Pill text="On hold" tone="bad" /> : null}
         {j.status === 'continue_later' && j.machine_at === 'workshop' ? <Pill text={j.ready_to_deliver ? 'Ready to deliver' : 'In the workshop'} tone={j.ready_to_deliver ? 'good' : 'warn'} />
           : <OutcomePill j={j} />}
       </View>
@@ -406,6 +415,7 @@ export function NewJob({ o, done, start, path, title }: { o: OfficeHook; done: (
   const [steps, setSteps] = useState('');
   const [ans, setAns] = useState<Answer | null>(null);
   const [busy, setBusy] = useState(false);
+  const [holdOk, setHoldOk] = useState(false);
   const days = Array.from({ length: 10 }, (_, i) => ymd(new Date(Date.now() + i * 86_400_000)));
   const stores = o.d.stores.filter(s => !storeQ.trim() || `${s.client} ${s.name} ${s.address ?? ''}`.toLowerCase().includes(storeQ.trim().toLowerCase())).slice(0, 8);
   const store = o.d.stores.find(s => s.id === storeId);
@@ -413,9 +423,11 @@ export function NewJob({ o, done, start, path, title }: { o: OfficeHook; done: (
   const submit = async () => {
     const missing = [!storeId ? 'which store' : null, fault.trim().length < 3 ? 'what the fault is' : null, !lead ? 'the lead technician' : null,
       type === 'planned_maintenance' && !steps.trim() ? 'the maintenance checklist steps (one per line)' : null].filter(Boolean) as string[];
+    if (store?.client_on_hold && !holdOk) missing.push(`${store.client} is on hold: tick "Open it anyway" if the job must go ahead`);
     if (missing.length) { setAns({ ok: false, reasons: missing }); return; }
     setBusy(true);
     const r = await o.send('POST', path ?? '/jobs', {
+      ...(store?.client_on_hold && holdOk ? { holdOk: true } : {}),
       jobType: type, priority, storeId, faultReported: fault.trim(), scheduledDate: date, leadTechnicianId: lead, helperIds: helpers,
       ...(ref.trim() ? { clientOrderRef: ref.trim() } : {}), maintenanceSteps: type === 'planned_maintenance' ? steps.split('\n').map(x => x.trim()).filter(Boolean) : [],
     });
@@ -434,7 +446,7 @@ export function NewJob({ o, done, start, path, title }: { o: OfficeHook; done: (
         <Card style={{ borderColor: K.stripe }}>
           <Text style={[st.body, { fontWeight: '800' }]}>{store.name}</Text>
           <Text style={st.small}>{store.client}{store.address ? ` · ${store.address}` : ''}{store.open_jobs ? ` · ${store.open_jobs} open job${store.open_jobs > 1 ? 's' : ''} there already` : ''}</Text>
-          <Button label="Change store" kind="quiet" onPress={() => setStoreId(undefined)} style={{ minHeight: 40 }} />
+          <Button label="Change store" kind="quiet" onPress={() => { setStoreId(undefined); setHoldOk(false); }} style={{ minHeight: 40 }} />
         </Card>
       ) : (
         <>
@@ -444,10 +456,22 @@ export function NewJob({ o, done, start, path, title }: { o: OfficeHook; done: (
               style={{ padding: 12, borderRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.panel }}>
               <Text style={[st.body, { fontWeight: '700' }]}>{s.name}</Text>
               <Text style={st.small}>{s.client}{s.address ? ` · ${s.address}` : ''}</Text>
+              {s.client_on_hold ? <Text style={[st.small, { color: C.bad, fontWeight: '700' }]}>Account on hold</Text> : null}
             </Pressable>
           ))}
         </>
       )}
+      {store?.client_on_hold ? (
+        <Card style={{ borderColor: C.bad, borderWidth: 2 }}>
+          <Text style={[st.body, { fontWeight: '800', color: C.bad }]}>{store.client}: account on hold</Text>
+          <Text style={st.body}>{(store.hold_reason ?? 'Not paying').replace(/[.\s]*$/, '.')} Check with Accounts before sending a technician.</Text>
+          <Pressable onPress={() => setHoldOk(!holdOk)} accessibilityRole="checkbox" accessibilityState={{ checked: holdOk }} accessibilityLabel="Open it anyway"
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44 }}>
+            <Text style={{ fontSize: 20, color: holdOk ? C.bad : C.quiet }}>{holdOk ? '☑' : '☐'}</Text>
+            <Text style={st.body}>Open it anyway (Accounts and the CEO are told)</Text>
+          </Pressable>
+        </Card>
+      ) : null}
       <Label>Type</Label>
       <Choice options={['breakdown', 'planned_maintenance', 'installation', 'quote_visit', 'follow_up', 'workshop_repair'] as const} value={type} onChange={setType} labels={TYPE} />
       <Label>Priority</Label>
@@ -513,6 +537,7 @@ function JobDetail({ id, o, canEdit, canDocs, openReport }: { id: string; o: Off
         <Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>Job {j.job_number}</Text>
         <OutcomePill j={j} />
         {j.priority === 'urgent' && j.status !== 'closed' && j.status !== 'cancelled' ? <Pill text="Urgent" tone="bad" /> : null}
+        {j.client_on_hold ? <Pill text="Account on hold" tone="bad" /> : null}
       </View>
       <JobReports jobId={id} open={openReport} />
       <Card>
