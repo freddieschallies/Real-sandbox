@@ -80,9 +80,95 @@ No ports are opened on the office router; the server makes the connection outwar
 
 ## Updating
 
+Every company runs on this one server, so one update reaches all of them at once. Follow this
+checklist every time.
+
+### Before
+
+1. **Pick a quiet time:** an evening or a weekend, when the technicians are not on site. The app is
+   down for under a minute while it restarts. Customers who rely on it: tell them a day before.
+2. **Know what is changing.** Read the update notes (the GitHub commit messages, or the "What's new"
+   note). Updates are only applied after the automatic tests have passed and the change has been tried
+   in the test drive.
+3. **Note the version you are on now**, so you can go back to it:
+
+   ```bash
+   cd ~/real-sandbox && git log --oneline -1
+   ```
+
+   Write down the code at the start of the line (e.g. `5ce888f`).
+4. **Make a backup now** (on top of the nightly one):
+
+   ```bash
+   cd ~/real-sandbox/deploy
+   docker compose exec backup bash -c 'stamp=$(date +%Y-%m-%d-%H%M); pg_dump -h db -U realsandbox -Fc realsandbox > /backups/db-before-update-$stamp.dump && tar -czf /backups/photos-before-update-$stamp.tar.gz -C /data uploads'
+   ls -lh backups | tail -3
+   ```
+
+   The two new files must be there and not 0 bytes. If they are not, stop: do not update.
+
+### Update
+
 ```bash
 cd ~/real-sandbox && git pull && cd deploy && docker compose --env-file .env up -d --build
 ```
+
+Any changes to the database are applied by themselves when the server starts, once. They only ever
+add to the database (new tables, new columns): nothing that is in it is changed or deleted.
+
+### Check
+
+1. Watch it start: `docker compose logs api --tail 50`. You should see `applying 0xx_…` for each
+   database change, then the server listening, and no red errors.
+2. On a computer: sign in, open a job, an invoice and a timesheet.
+3. Ask one technician to open the app on his phone and check his day.
+
+### If something is wrong: go back
+
+Go back to the version you wrote down:
+
+```bash
+cd ~/real-sandbox && git checkout 5ce888f && cd deploy && docker compose --env-file .env up -d --build
+```
+
+(Use your own code instead of `5ce888f`.) Because database changes only add, the older version runs
+on the newer database; nothing is lost. Report what went wrong. When the fix is ready, come back to the
+latest version with `cd ~/real-sandbox && git checkout main && git pull`, then the update command again.
+
+**Last resort only: restore the backup.** This puts the database back to the moment of the backup:
+anything entered after it (jobs, timesheets, invoices) is lost. Use it only if the data itself is damaged.
+
+```bash
+cd ~/real-sandbox/deploy
+docker compose stop api
+docker compose exec -T db pg_restore -U realsandbox -d realsandbox --clean --if-exists < backups/db-before-update-YYYY-MM-DD-HHMM.dump
+docker compose start api
+```
+
+### The phone app
+
+- **Screens and rules** (nearly every update): once over-the-air updates are switched on, phones load
+  the new version by themselves the next time the app opens. *Not set up yet: it is done with the
+  phone app build (see the server setup list).* Until then, a new phone build is installed on the phones.
+- **Changes to the phone itself** (a new permission, camera or GPS feature, a new Android or iPhone
+  version): a new build goes to the Play Store / App Store and people update the app there. This is rare.
+- Phones that are offline or not yet updated keep working: every update is made to work with the
+  previous version of the phone app for a while. Once over-the-air updates are on, the app also tells
+  anyone on a version that is too old to update before carrying on.
+
+### Rules every update follows (for whoever builds it)
+
+- Database changes only add (new tables and columns); nothing is renamed or deleted in one go.
+- The previous version of the phone app keeps working with the new server.
+- The automatic tests pass, and the change is tried in the test drive, before it reaches this server.
+- Customers' real data never goes into the code or the test drive used by others.
+
+### Later, with several paying companies
+
+- A **test copy of the server** (a second, cheap machine or a cloud server) with a copy of the data:
+  every update goes there first for a day, then here.
+- A short **"What's new"** note to customers with each update.
+- Updates on a fixed, announced evening (e.g. Tuesday 20:00), except urgent fixes.
 
 ## Breakdowns: Gmail inboxes and the WhatsApp group
 
