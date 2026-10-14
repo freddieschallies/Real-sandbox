@@ -32,34 +32,53 @@ export function missingToSend(d: { lines: DocLine[]; to?: string | null }): stri
 /** Labour is charged per started quarter hour. */
 export const quarterHours = (minutes: number) => Math.ceil(minutes / 15) / 4;
 
+import { markedUp, type PriceRules } from './clientRates.ts';
+
 export interface JobForInvoice {
   jobType: string;
   jobNumber: number;
   minutesOnSite: number;
   technicians: number;
   visits: number;
-  stockUsed: { stockItemId: string; description: string; qty: number; sellingPriceCents: number | null }[];
+  stockUsed: { stockItemId: string; description: string; qty: number; sellingPriceCents: number | null; costCents?: number | null }[];
   boughtOut: { description: string; qty: number; costCents: number }[];
+  /** Driving to the job and back, all visits: km (from the tracker, or estimated) and minutes. */
+  travel?: { km: number; minutes: number; kmEstimated: boolean } | null;
 }
 
-/** The draft invoice for a closed job: labour from the job timers, call-outs, parts used and items bought. */
-export function invoiceDraft(j: JobForInvoice, rates: Record<string, number>): DocLine[] {
+/**
+ * The draft invoice for a closed job: labour from the job timers, call-outs, travel, parts used and
+ * items bought, priced with the client's own rates and mark-up (or the company's). A rate switched
+ * off for the client is not charged at all. Everything can still be changed before it is sent.
+ */
+export function invoiceDraft(j: JobForInvoice, p: PriceRules): DocLine[] {
   const lines: DocLine[] = [];
   const hours = quarterHours(j.minutesOnSite);
-  if (hours > 0) {
-    lines.push({ kind: 'labour', description: `Labour, job ${j.jobNumber}${j.technicians > 1 ? ` (${j.technicians} technicians)` : ''}`, qty: Math.round(hours * j.technicians * 100) / 100, unitPriceCents: rates.labour_per_hour ?? 0 });
+  if (hours > 0 && p.labour !== null) {
+    lines.push({ kind: 'labour', description: `Labour, job ${j.jobNumber}${j.technicians > 1 ? ` (${j.technicians} technicians)` : ''}`, qty: Math.round(hours * j.technicians * 100) / 100, unitPriceCents: p.labour });
   }
-  if (j.jobType === 'breakdown' && j.visits > 0) {
-    lines.push({ kind: 'call_out', description: j.visits > 1 ? `Call-out (${j.visits} visits)` : 'Call-out', qty: j.visits, unitPriceCents: rates.call_out ?? 0 });
+  if (j.jobType === 'breakdown' && j.visits > 0 && p.callOut !== null) {
+    lines.push({ kind: 'call_out', description: j.visits > 1 ? `Call-out (${j.visits} visits)` : 'Call-out', qty: j.visits, unitPriceCents: p.callOut });
   }
-  for (const s of j.stockUsed) lines.push({ kind: 'stock', description: s.description, qty: s.qty, unitPriceCents: s.sellingPriceCents ?? 0, stockItemId: s.stockItemId });
-  const markup = rates.bought_out_markup_pct ?? 0;
-  for (const b of j.boughtOut) lines.push({ kind: 'bought_out', description: b.description, qty: b.qty, unitPriceCents: Math.round(b.costCents * (1 + markup / 100)) });
+  if (j.travel && j.travel.km > 0 && p.travelKm !== null) {
+    lines.push({ kind: 'travel', description: `Travel, there and back${j.visits > 1 ? ` (${j.visits} visits)` : ''}${j.travel.kmEstimated ? ' (estimated km)' : ''}`, qty: Math.round(j.travel.km), unitPriceCents: p.travelKm });
+  }
+  if (j.travel && j.travel.minutes > 0 && p.travelHour !== null) {
+    lines.push({ kind: 'travel', description: `Travel time, there and back${j.visits > 1 ? ` (${j.visits} visits)` : ''}`, qty: quarterHours(j.travel.minutes), unitPriceCents: p.travelHour });
+  }
+  for (const s of j.stockUsed) {
+    const price = p.markup && s.costCents ? markedUp(s.costCents, p.markup) : s.sellingPriceCents ?? 0;
+    lines.push({ kind: 'stock', description: s.description, qty: s.qty, unitPriceCents: price, stockItemId: s.stockItemId });
+  }
+  for (const b of j.boughtOut) {
+    const price = p.markup ? markedUp(b.costCents, p.markup) : Math.round(b.costCents * (1 + p.boughtOutPct / 100));
+    lines.push({ kind: 'bought_out', description: b.description, qty: b.qty, unitPriceCents: price });
+  }
   return lines;
 }
 
 /** Rates the CEO sets. */
-export const RATE_KEYS = ['labour_per_hour', 'call_out', 'travel_per_km', 'bought_out_markup_pct'] as const;
+export const RATE_KEYS = ['labour_per_hour', 'call_out', 'travel_per_km', 'travel_per_hour', 'bought_out_markup_pct'] as const;
 export const RATE_LABEL: Record<(typeof RATE_KEYS)[number], string> = {
-  labour_per_hour: 'Labour per hour (excl. VAT)', call_out: 'Call-out fee (excl. VAT)', travel_per_km: 'Travel per km (excl. VAT)', bought_out_markup_pct: 'Mark-up on bought-out items (%)',
+  labour_per_hour: 'Labour per hour (excl. VAT)', call_out: 'Call-out fee (excl. VAT)', travel_per_km: 'Travel per km (excl. VAT)', travel_per_hour: 'Travel time per hour (excl. VAT)', bought_out_markup_pct: 'Mark-up on bought-out items (%)',
 };

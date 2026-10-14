@@ -1,4 +1,4 @@
-// Reads a photographed supplier invoice into lines. Uses Claude (vision) when ANTHROPIC_API_KEY is set;
+// Reads a supplier invoice (a photo, or a PDF the office scanned or got by email) into lines. Uses Claude (vision) when ANTHROPIC_API_KEY is set;
 // without it, invoices still work: the technician types the lines from the photo.
 // The technician always checks what was read before it counts, and any change he makes is recorded.
 
@@ -41,7 +41,7 @@ const SCHEMA = {
   },
 };
 
-const PROMPT = `This is a photo of a South African supplier's tax invoice or till slip for parts bought by a maintenance technician.
+const PROMPT = `This is a South African supplier's tax invoice or till slip (a photo or a PDF) for a maintenance company: parts, materials or services.
 Read it exactly as printed. Amounts are in rand; give them in cents (R 1 234,50 = 123450).
 One entry per printed line item. Do not invent lines or codes; use null when something isn't printed or can't be read.
 Leave out delivery notes, payment lines, change and rounding. If it is not an invoice or slip, set readable to false.`;
@@ -57,7 +57,9 @@ export function claudeInvoiceReader(apiKey: string, model = process.env.INVOICE_
         messages: [{
           role: 'user',
           content: [
-            { type: 'image', source: { type: 'base64', media_type: mime, data: image.toString('base64') } },
+            mime === 'application/pdf'
+              ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: image.toString('base64') } }
+              : { type: 'image', source: { type: 'base64', media_type: mime, data: image.toString('base64') } },
             { type: 'text', text: PROMPT },
           ],
         }],

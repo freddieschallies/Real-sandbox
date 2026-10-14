@@ -3,15 +3,15 @@
 // type may do, or what one person may do. The effective access is worked out once per request
 // and carried on the Actor, so checks here stay simple and pure.
 
-export type LoginLevel = 'technician' | 'mechanic' | 'admin' | 'stockroom' | 'management' | 'hr' | 'director' | 'creator';
+export type LoginLevel = 'technician' | 'mechanic' | 'admin' | 'accounts' | 'stockroom' | 'management' | 'hr' | 'director' | 'creator';
 
 /** The positions HR gives and takes; the others (mechanic, HR, director, CEO) stay with the CEO. */
-export const HR_POSITIONS: LoginLevel[] = ['technician', 'admin', 'management', 'stockroom'];
-export const LEVELS: LoginLevel[] = ['technician', 'mechanic', 'admin', 'stockroom', 'management', 'hr', 'director', 'creator'];
+export const HR_POSITIONS: LoginLevel[] = ['technician', 'admin', 'accounts', 'management', 'stockroom'];
+export const LEVELS: LoginLevel[] = ['technician', 'mechanic', 'admin', 'accounts', 'stockroom', 'management', 'hr', 'director', 'creator'];
 
 /** What each position is called on screen. The CEO assigns one position to each person. */
 export const POSITION_LABEL: Record<LoginLevel, string> = {
-  technician: 'Technician', mechanic: 'Mechanic (fleet)', admin: 'Admin', stockroom: 'Stock controller',
+  technician: 'Technician', mechanic: 'Mechanic (fleet)', admin: 'Admin', accounts: 'Accounts', stockroom: 'Stock controller',
   management: 'Department manager', hr: 'HR', director: 'Director / CEO', creator: 'Creator (system owner)',
 };
 
@@ -48,6 +48,8 @@ export const CATALOGUE = {
   view_quotes_invoices_stock: { group: 'Office', label: 'See quotes, invoices and stock', scoped: false },
   prepare_quotes_invoices:    { group: 'Office', label: 'Prepare and send quotes and invoices', scoped: false },
   set_prices:                 { group: 'Office', label: 'Set prices and rates', scoped: false },
+  set_client_rates:           { group: 'Office', label: "Set each client's rates and parts mark-up", scoped: false },
+  process_supplier_invoices:  { group: 'Office', label: 'Process supplier invoices: check, approve, send to Pastel', scoped: false },
 
   view_fleet:                 { group: 'Fleet', label: 'See the fleet: vehicles, faults, km, mechanic job cards', scoped: false },
   manage_fleet:               { group: 'Fleet', label: 'Run the fleet: mechanic job cards, vehicle status, faults', scoped: false },
@@ -100,6 +102,12 @@ const officeWork: Permissions = {
 // when he is out: issuing stock and tools and signing tools back (receiving deliveries and stock
 // counts stay with the stockroom). The stock controller is told who did what.
 const admin: Permissions = { ...officeWork, set_phone_menu: true, assign_stock: true };
+// Accounts (the bookkeeper): checks every job card (without changing them), prices and sends
+// quotes and invoices, credit notes, closing at no charge, supplier invoices, each client's rates
+// and mark-up, and the Pastel batches.
+const accounts: Permissions = {
+  view_all_job_cards: true, view_quotes_invoices_stock: true, prepare_quotes_invoices: true, process_supplier_invoices: true, set_client_rates: true,
+};
 const stockroom: Permissions = { ...officeWork, manage_stockroom: true, assign_stock: true, run_stocktake: true };
 // A department manager runs his technicians: monitors them, assigns jobs, checks job cards and sets
 // his department's van stock list. Quotes, invoices and the stockroom are not part of it unless the
@@ -116,11 +124,11 @@ const director: Permissions = {
   ...stockroom, ...management, ...hr, set_van_stock: ALL,
   view_live_driving_markers: ALL, view_flags: ALL, resolve_flags: ALL, view_employee_log: ALL, write_employee_log: ALL,
   edit_technician_settings: ALL, mark_technician_left: ALL, view_former_technicians: ALL,
-  set_prices: true, view_director_digest: true, view_company_reports: true, manage_access: true, manage_fleet: true, set_phone_menu: true,
+  set_prices: true, set_client_rates: true, process_supplier_invoices: true, view_director_digest: true, view_company_reports: true, manage_access: true, manage_fleet: true, set_phone_menu: true,
 };
 const creator: Permissions = { ...director, manage_users: true, manage_system_settings: true, view_audit_log: true };
 
-export const DEFAULTS: Record<LoginLevel, Permissions> = { technician, mechanic, admin, stockroom, management, hr, director, creator };
+export const DEFAULTS: Record<LoginLevel, Permissions> = { technician, mechanic, admin, accounts, stockroom, management, hr, director, creator };
 
 // ---- Changes the CEO makes -----------------------------------------------------
 
@@ -193,6 +201,8 @@ export const WORK_AREAS = {
   fleet:     { label: "Fleet (the mechanic's work)", actions: ['view_fleet', 'manage_fleet'] },
   flags:     { label: 'Flags and approvals', actions: ['view_flags', 'resolve_flags'] },
   prices:    { label: 'Prices and rates', actions: ['set_prices'] },
+  jobcards:  { label: 'See every job card (without changing them)', actions: ['view_all_job_cards'] },
+  books:     { label: "Accounts: supplier invoices and each client's rates and mark-up", actions: ['process_supplier_invoices', 'set_client_rates'] },
   access:    { label: 'Positions and access (People)', actions: ['manage_access'] },
   hr:        { label: 'HR: positions, departments, staff records and timesheets', actions: ['view_employee_log', 'write_employee_log', 'assign_departments', 'view_timesheets', 'set_positions'] },
   vanstock:  { label: 'Van stock lists (bill of quantities)', actions: ['set_van_stock'] },

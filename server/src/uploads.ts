@@ -48,6 +48,17 @@ const root = () => process.env.UPLOAD_DIR ?? join(process.cwd(), 'uploads');
 /** Where photo files are kept (for reading them into emails). */
 export const uploadRoot = root;
 
+/** A scanned document (photo or PDF, e.g. a supplier invoice) saved like a photo. */
+export async function saveDocument(companyId: string, id: string, buffer: Buffer, mime: string, at: string): Promise<string> {
+  const ext = mime === 'application/pdf' ? 'pdf' : TYPES[mime];
+  if (!ext) throw new UploadError('a photo (JPEG, PNG or WebP) or a PDF');
+  const rel = join(companyId, at.slice(0, 4), at.slice(5, 7), `${id}.${ext}`);
+  const full = join(root(), rel);
+  await mkdir(join(full, '..'), { recursive: true });
+  await writeFile(full, buffer, { flag: 'wx' });
+  return rel;
+}
+
 /** Saves the file in the company's own folder and returns its path relative to the upload folder. */
 export async function saveFile(companyId: string, id: string, up: Upload, takenAt: string): Promise<string> {
   const rel = join(companyId, takenAt.slice(0, 4), takenAt.slice(5, 7), `${id}.${TYPES[up.mimetype]}`);

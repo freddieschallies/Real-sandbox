@@ -401,14 +401,70 @@ test('workshop counts: pouring losses within the allowance are noted, bigger one
 
 test('quotes and invoices: totals with VAT, labour per quarter hour, draft from a closed job', async () => {
   const D = await import('../src/core/documents.ts');
+  const R = await import('../src/core/clientRates.ts');
   assert.deepEqual(D.totals([{ qty: 1.5, unitPriceCents: 65000 }, { qty: 2, unitPriceCents: 12050 }], 15), { exVatCents: 121600, vatCents: 18240, totalCents: 139840 });
   assert.equal(D.quarterHours(61), 1.25);
   assert.equal(D.quarterHours(0), 0);
   const lines = D.invoiceDraft({ jobType: 'breakdown', jobNumber: 10231, minutesOnSite: 95, technicians: 2, visits: 1,
     stockUsed: [{ stockItemId: 's1', description: 'Water inlet valve', qty: 1, sellingPriceCents: null }], boughtOut: [{ description: 'Hose clamp', qty: 2, costCents: 1000 }] },
-    { labour_per_hour: 65000, call_out: 45000, bought_out_markup_pct: 20 });
+    R.priceRules({ labour_per_hour: 65000, call_out: 45000, bought_out_markup_pct: 20 }, null));
   assert.deepEqual(lines.map(l => [l.kind, l.qty, l.unitPriceCents]), [['labour', 3.5, 65000], ['call_out', 1, 45000], ['stock', 1, 0], ['bought_out', 2, 1200]]);
   assert.deepEqual(D.missingToSend({ lines }), ['line 3 (Water inlet valve): a price']);
+});
+
+test("a client's own rates: switched-off rates are not charged; parts marked up in three price bands", async () => {
+  const D = await import('../src/core/documents.ts');
+  const R = await import('../src/core/clientRates.ts');
+  const company = { labour_per_hour: 65000, call_out: 45000, travel_per_km: 850, travel_per_hour: 30000, bought_out_markup_pct: 20 };
+  const own = R.startingRates(company);
+  assert.equal(own.rates.labour_per_hour.cents, 65000, 'starts from the company rates');
+  own.rates.labour_per_hour.cents = 58000;
+  own.rates.travel_per_hour.on = false;   // this client is not charged travel time
+  own.markup.bands = [{ upToCents: 50000, pct: 60 }, { upToCents: 200000, pct: 40 }, { upToCents: null, pct: 25 }];
+  assert.deepEqual(R.ratesProblems(own), []);
+  // The cheaper the part, the bigger the mark-up.
+  assert.equal(R.markedUp(10000, own.markup), 16000, 'R100 part: 60%');
+  assert.equal(R.markedUp(50000, own.markup), 80000, 'R500 is still the first band');
+  assert.equal(R.markedUp(150000, own.markup), 210000, 'R1 500 part: 40%');
+  assert.equal(R.markedUp(400000, own.markup), 500000, 'R4 000 part: 25%');
+  const job = { jobType: 'breakdown', jobNumber: 10240, minutesOnSite: 60, technicians: 1, visits: 1,
+    stockUsed: [{ stockItemId: 's1', description: 'Fan motor', qty: 1, sellingPriceCents: 99900, costCents: 150000 }, { stockItemId: 's2', description: 'Fuse', qty: 2, sellingPriceCents: 1500, costCents: null }],
+    boughtOut: [{ description: 'Hose clamp', qty: 2, costCents: 1000 }], travel: { km: 42, minutes: 50, kmEstimated: true } };
+  const lines = D.invoiceDraft(job, R.priceRules(company, own));
+  assert.deepEqual(lines.map(l => [l.kind, l.qty, l.unitPriceCents]), [
+    ['labour', 1, 58000], ['call_out', 1, 45000], ['travel', 42, 850],
+    ['stock', 1, 210000], ['stock', 2, 1500], ['bought_out', 2, 1600],
+  ], 'no travel time line; a part without a cost keeps its selling price');
+  assert.match(lines[2].description, /estimated km/);
+  // Everything switched off: only the parts.
+  for (const k of R.CLIENT_RATE_KEYS) own.rates[k].on = false;
+  own.markup.on = false;
+  assert.deepEqual(D.invoiceDraft(job, R.priceRules(company, own)).map(l => l.kind), ['stock', 'stock', 'bought_out']);
+  assert.equal(D.invoiceDraft(job, R.priceRules(company, own)).find(l => l.kind === 'bought_out')!.unitPriceCents, 1200, 'mark-up off: the company mark-up on bought-out items');
+  // Bands must go up; a rate that is on needs an amount.
+  own.rates.call_out = { on: true, cents: 0 };
+  own.markup.bands = [{ upToCents: 200000, pct: 60 }, { upToCents: 50000, pct: 40 }, { upToCents: null, pct: 25 }];
+  assert.deepEqual(R.ratesProblems(own), ['Call-out fee: a rate, or untick it', 'mark-up: the second band must end above the first']);
+  assert.ok(Math.abs(R.kmBetween({ lat: -28.78, lng: 32.04 }, { lat: -28.75, lng: 31.9 }) - 14.0) < 1);
+});
+
+test('Pastel: credit notes and supplier invoices go to their own code', async () => {
+  const P = await import('../src/core/pastel.ts');
+  const s = { yearStartMonth: 3, taxType: '01', codes: { credit: { code: '1050000', lineType: 6 as const } }, store: null };
+  const credit = { kind: 'credit' as const, number: 9001, customerCode: 'SPA001', date: '2026-10-13', dueDate: null, orderNumber: 'INV 7001', message: 'Charged twice',
+    deliverTo: [], contact: null, codeFor: 'credit' as const, lines: [{ kind: 'other' as const, description: 'Credit inv 7001', qty: 1, unitPriceCents: 120000 }] };
+  assert.deepEqual(P.missingForPastel(credit, s), []);
+  const file = P.pastelFile([credit], s, 15);
+  assert.match(file, /^Header,,,,SPA001,8,13\/10\/2026,INV 7001,/);
+  assert.match(file, /\r\nDetail,0,1,1200\.00,1380\.00,,01,0,0,1050000,Credit inv 7001,6,,\r\n$/);
+  const sup = { ...credit, kind: 'supplier_invoice' as const, number: 'IN-55', customerCode: null, codeFor: 'purchases' as const, noVat: true };
+  assert.deepEqual(P.missingForPastel(sup, s), ["the supplier's Pastel code", 'a Pastel code for supplier invoices (the purchases account) (Accounts, Pastel codes)']);
+  const s2 = { ...s, codes: { purchases: { code: '2000000', lineType: 6 as const } } };
+  assert.match(P.pastelFile([{ ...sup, customerCode: 'VOL001' }], s2, 15), /Detail,0,1,1200\.00,1200\.00,,00,/, 'no VAT: tax type 00');
+  // Lines that add up go as they are; otherwise one line for the whole invoice.
+  const lines = [{ description: 'Valve', qty: 2, unitPriceCents: 25000 }, { description: 'Ties', qty: 1, unitPriceCents: 5000 }];
+  assert.equal(P.supplierLines({ number: 'A1', supplier: 'Voltex', totalCents: 63250, vatCents: 8250, vatPct: 15, lines }).length, 2);
+  assert.deepEqual(P.supplierLines({ number: 'A1', supplier: 'Voltex', totalCents: 70000, vatCents: null, vatPct: 15, lines }).map(l => [l.description, l.unitPriceCents]), [['Voltex invoice A1', 60870]]);
 });
 
 test('order list: how many to order', async () => {

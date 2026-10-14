@@ -132,6 +132,7 @@ before(async () => {
   await user('tech2', 'technician');
   await user('stock', 'stockroom');
   await user('mech', 'mechanic');
+  await user('books', 'accounts');
   await db.query('UPDATE departments SET manager_id = $1 WHERE id = $2', [ids.manager, ids.dept]);
   ids.client = (await q("INSERT INTO clients (name) VALUES ('FreshMart') RETURNING id", [])).id;
   ids.store = (await q("INSERT INTO stores (client_id, name, lat, lng) VALUES ($1, 'FreshMart Meerensee', $2, $3) RETURNING id", [ids.client, STORE.lat, STORE.lng])).id;
@@ -156,7 +157,7 @@ after(async () => {
 
 test('login: wrong password refused, right password gives a token', async () => {
   assert.equal((await call('', 'POST', '/auth/login', { email: 'tech@zsp.test', password: 'nope' })).status, 401);
-  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2', 'stock', 'mech', 'hr']) {
+  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2', 'stock', 'mech', 'hr', 'books']) {
     const r = await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW });
     assert.equal(r.status, 200);
     tokens[who] = r.body.token;
@@ -171,7 +172,7 @@ test('nothing works until the monitoring policy is acknowledged', async () => {
   assert.equal((await call('tech', 'GET', '/me')).body.policyAcknowledged, false);
   const pol = await call('tech', 'GET', '/policy/current');
   assert.equal(pol.body.version, '1.0');
-  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2', 'stock', 'mech', 'hr']) {
+  for (const who of ['creator', 'director', 'admin', 'manager', 'tech', 'tech2', 'stock', 'mech', 'hr', 'books']) {
     assert.equal((await call(who, 'POST', '/policy/acknowledge', { policyVersionId: ids.policy })).status, 200);
   }
   assert.equal((await call('tech', 'GET', '/jobs')).status, 200);
@@ -1317,7 +1318,7 @@ test('HR: puts technicians and department managers in one department each, keeps
   assert.equal((await call('hr', 'PUT', `/access/users/${ids.mech}/position`, { position: 'technician' })).status, 403, 'not the mechanic');
   assert.equal((await call('hr', 'PUT', `/access/users/${ids.hr}/position`, { position: 'admin' })).status, 403, 'not herself');
   assert.equal((await call('hr', 'PUT', `/access/users/${ids.tech2}/trade`, { trade: 'plumber' })).status, 200, 'and trades');
-  assert.equal((await call('hr', 'GET', '/people')).body.settablePositions.length, 4);
+  assert.equal((await call('hr', 'GET', '/people')).body.settablePositions.length, 5, 'technician, admin, accounts, department manager, stock controller');
   assert.equal((await call('manager', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'admin' })).status, 403, 'not a manager');
 
   const mgr2 = (await db.query("INSERT INTO users (full_name, email, login_level, password_hash) VALUES ('mgr2', 'mgr2@zsp.test', 'management', 'x') RETURNING id")).rows[0].id;
@@ -2324,4 +2325,114 @@ test('job status says where the money stands: to invoice, invoiced, paid, credit
   // Invoiced jobs show the invoice.
   const inv = (await db.query("SELECT i.job_id, i.invoice_number, i.status FROM invoices i WHERE i.status IN ('sent', 'paid') LIMIT 1")).rows[0];
   if (inv) assert.match((await listed(inv.job_id)).outcome.label, new RegExp(`^(Invoiced|Paid|Credited) · INV ${inv.invoice_number}$`));
+});
+
+/** Sends a PDF (or another file) the way the office picks a file to upload. */
+async function uploadFile(who: string, url: string, body: Buffer, mime: string, filename: string) {
+  const boundary = '----rs' + Math.random().toString(16).slice(2);
+  const payload = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`), body, Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  const res = await app.inject({ method: 'POST', url, payload, headers: { authorization: `Bearer ${tokens[who]}`, 'content-type': `multipart/form-data; boundary=${boundary}` } });
+  return { status: res.statusCode, body: res.json() };
+}
+
+test('Accounts: checks every job card, scans and approves supplier invoices, client rates and mark-up, credit notes and supplier invoices to Pastel', async () => {
+  // Every job card to check, nothing to change.
+  assert.equal((await call('books', 'GET', '/jobs')).status, 200);
+  assert.equal((await call('books', 'POST', '/jobs', { jobType: 'breakdown', storeId: ids.store, faultReported: 'x', scheduledDate: '2026-10-14', leadTechnicianId: ids.tech })).status, 403);
+  assert.equal((await call('admin', 'GET', '/office/supplier-invoices')).status, 403, 'supplier invoices are for Accounts (and the CEO)');
+  assert.equal((await call('director', 'GET', '/office/supplier-invoices')).status, 200);
+
+  // A supplier invoice that came by email: the PDF is picked, read automatically, checked and approved.
+  fakeReader = async (_img, mime) => {
+    assert.equal(mime, 'application/pdf');
+    return { supplierName: 'Voltex Richards Bay', invoiceNumber: 'INV-88812', invoiceDate: '2026-10-17', totalCents: 59800, vatCents: 7800,
+      lines: [{ description: 'Water inlet valve', supplierCode: null, qty: 2, unitPriceCents: 26000 }] };
+  };
+  assert.equal((await uploadFile('books', '/office/supplier-invoices/scan', Buffer.from('not a pdf'), 'application/pdf', 'x.pdf')).status, 400);
+  assert.equal((await uploadFile('books', '/office/supplier-invoices/scan', Buffer.from('hello'), 'text/plain', 'x.txt')).status, 400);
+  const scan = await uploadFile('books', '/office/supplier-invoices/scan', Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF'), 'application/pdf', 'voltex.pdf');
+  assert.equal(scan.status, 201, JSON.stringify(scan.body));
+  await readPendingInvoices(appDb, fakeReader);
+  const read = (await call('books', 'GET', `/office/supplier-invoices/${scan.body.id}`)).body;
+  assert.equal(read.status, 'to_confirm');
+  assert.equal(read.vat_cents, 7800);
+  assert.equal(read.content_type, 'application/pdf');
+  assert.ok(((await call('books', 'GET', '/office/supplier-invoices?view=scanned')).body.invoices as { id: string }[]).some(i => i.id === scan.body.id));
+  // The goods came into the stockroom on a delivery: it is offered to tick off.
+  const del = await call('stock', 'POST', '/stock/deliveries', { at: '2026-10-17T08:00:00+02:00', supplierName: 'Voltex Richards Bay', reference: 'DN-4410', lines: [{ stockItemId: ids.seal, qty: 2 }] });
+  assert.equal(del.status, 201);
+  const detail = (await call('books', 'GET', `/office/supplier-invoices/${scan.body.id}`)).body;
+  assert.ok(detail.deliveries.some((d: { id: string }) => d.id === del.body.id));
+  const save = { supplierName: 'Voltex Richards Bay', invoiceNumber: 'INV-88812', invoiceDate: '2026-10-17', totalCents: 59800, vatCents: 7800, deliveryId: del.body.id,
+    lines: [{ description: 'Water inlet valve', qty: 2, unitPriceCents: 26000 }], approve: true };
+  const dup = await call('books', 'PUT', `/office/supplier-invoices/${scan.body.id}`, save);
+  assert.equal(dup.status, 409, 'the technician already booked that number');
+  assert.match(dup.body.reasons[0], /already booked by tech/);
+  const ok = await call('books', 'PUT', `/office/supplier-invoices/${scan.body.id}`, { ...save, invoiceNumber: 'INV-90001' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.checkStatus, 'approved');
+  assert.equal(ok.body.changedFromRead, true, 'the number was changed from what was read');
+  assert.equal((await db.query("SELECT cost_cents FROM stock_items WHERE code = 'VALVE-01'")).rows[0].cost_cents, 26000, 'the valve now costs what the invoice says');
+  assert.equal((await call('books', 'PUT', `/office/supplier-invoices/${scan.body.id}`, save)).status, 409, 'approved: take the approval off first');
+
+  // The technicians' till slips wait to be checked: one queried (he is told), one approved.
+  const toCheck = (await call('books', 'GET', '/office/supplier-invoices?view=to_check')).body;
+  const slips = (toCheck.invoices as { id: string; source: string; invoice_number: string }[]).filter(i => i.source === 'counter');
+  assert.ok(slips.length >= 2, JSON.stringify(toCheck.counts));
+  assert.equal((await call('books', 'POST', `/office/supplier-invoices/${slips[0].id}/check`, { action: 'query' })).status, 400, 'say what is wrong');
+  assert.equal((await call('books', 'POST', `/office/supplier-invoices/${slips[0].id}/check`, { action: 'query', note: 'The slip has no VAT number on it' })).status, 200);
+  assert.ok((await call('tech', 'GET', '/me/notifications')).body.some((n: { kind: string }) => n.kind === 'supplier_invoice_queried'));
+  assert.equal((await call('books', 'POST', `/office/supplier-invoices/${slips[1].id}/check`, { action: 'approve' })).status, 200);
+  assert.equal((await call('tech', 'POST', `/office/supplier-invoices/${slips[1].id}/check`, { action: 'approve' })).status, 403);
+
+  // To Pastel: the supplier's code and the purchases account first.
+  const settings = (await call('books', 'GET', '/pastel/settings')).body.settings;
+  const ready = (await call('books', 'GET', '/pastel/ready?kind=supplier_invoice')).body;
+  assert.equal(ready.length, 2);
+  assert.ok(ready.every((d: { problems: string[] }) => d.problems.includes("the supplier's Pastel code")));
+  const voltex = ((await call('books', 'GET', '/pastel/suppliers')).body as { id: string; name: string }[]).find(x => x.name === 'Voltex Richards Bay')!;
+  assert.equal((await call('books', 'PUT', `/pastel/suppliers/${voltex.id}`, { code: 'vol001' })).status, 200);
+  assert.equal((await call('books', 'PUT', '/pastel/settings', { ...settings, codes: { ...settings.codes, purchases: { code: '2000000', lineType: 6 }, credit: { code: '1050000', lineType: 6 } } })).status, 200);
+  const sb = await call('books', 'POST', '/pastel/batches', { kind: 'supplier_invoice' });
+  assert.equal(sb.status, 201, JSON.stringify(sb.body));
+  assert.equal(sb.body.numbers.length, 2, 'the scan and the approved slip; the queried slip waits');
+  assert.ok(sb.body.numbers.includes('INV-90001'));
+  assert.match(sb.body.file, /Header,,,,VOL001,/);
+  assert.match(sb.body.file, /,2000000,Water inlet valve,6,/);
+  assert.equal(sb.body.where, 'Process → Suppliers → Invoices → Import');
+  assert.equal((await call('books', 'POST', '/pastel/batches', { kind: 'supplier_invoice' })).status, 409, 'each once');
+  assert.ok(((await call('books', 'GET', '/office/supplier-invoices?view=in_pastel')).body.invoices as { id: string }[]).some(i => i.id === scan.body.id));
+  assert.equal((await call('books', 'POST', `/office/supplier-invoices/${scan.body.id}/check`, { action: 'reopen' })).status, 409, 'in Pastel: stays approved');
+
+  // Credit notes to Pastel, each once, against their invoice.
+  const credits = (await call('books', 'GET', '/pastel/ready?kind=credit')).body;
+  assert.ok(credits.length >= 1);
+  const cb = await call('books', 'POST', '/pastel/batches', { kind: 'credit' });
+  assert.equal(cb.status, 201, JSON.stringify(cb.body));
+  assert.match(cb.body.file, /,INV \d+,/);
+  assert.match(cb.body.file, /,1050000,Credit inv \d+/);
+  assert.equal((await call('books', 'GET', '/pastel/ready?kind=credit')).body.length, 0);
+
+  // The client's own rates: set by Accounts (not Admin); the next invoice is priced with them.
+  const start = (await call('books', 'GET', `/office/clients/${ids.client}/rates`)).body;
+  assert.equal(start.own, false);
+  const mine = { ...start.rates, rates: { ...start.rates.rates, labour_per_hour: { on: true, cents: 58000 }, call_out: { on: true, cents: 40000 }, travel_per_km: { on: false, cents: 0 }, travel_per_hour: { on: false, cents: 0 } } };
+  assert.equal((await call('admin', 'PUT', `/office/clients/${ids.client}/rates`, mine)).status, 403);
+  assert.equal((await call('books', 'PUT', `/office/clients/${ids.client}/rates`, { ...mine, rates: { ...mine.rates, call_out: { on: true, cents: 0 } } })).status, 400, 'a rate that is on needs an amount');
+  assert.equal((await call('books', 'PUT', `/office/clients/${ids.client}/rates`, mine)).status, 200);
+  assert.ok(((await call('books', 'GET', '/pastel/clients')).body as { id: string; own_rates: boolean }[]).find(c => c.id === ids.client)!.own_rates);
+  const closed = (await db.query(
+    `SELECT j.id, j.job_type FROM jobs j JOIN stores s ON s.id = j.store_id WHERE s.client_id = $1 AND j.status = 'closed'
+       AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.job_id = j.id AND i.status <> 'cancelled') AND NOT EXISTS (SELECT 1 FROM job_no_charge n WHERE n.job_id = j.id) LIMIT 1`, [ids.client])).rows[0];
+  assert.ok(closed, 'a closed job to invoice');
+  const inv = await call('books', 'POST', '/invoices', { jobId: closed.id });
+  assert.equal(inv.status, 201, JSON.stringify(inv.body));
+  const lines = (await call('books', 'GET', `/invoices/${inv.body.id}`)).body.lines as { kind: string; unitPriceCents: number }[];
+  const labour = lines.find(l => l.kind === 'labour');
+  if (labour) assert.equal(labour.unitPriceCents, 58000);
+  if (closed.job_type === 'breakdown') assert.equal(lines.find(l => l.kind === 'call_out')!.unitPriceCents, 40000);
+  assert.ok(!lines.some(l => l.kind === 'travel'), 'travel is switched off for this client');
+  assert.equal((await call('books', 'DELETE', `/office/clients/${ids.client}/rates`)).status, 200, 'back to the company rates');
 });

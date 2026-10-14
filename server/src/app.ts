@@ -14,6 +14,8 @@ import { registerControlRoutes } from './routes/control.ts';
 import { registerQueryRoutes } from './routes/queries.ts';
 import { registerDocumentRoutes } from './routes/documents.ts';
 import { registerPastelRoutes } from './routes/pastel.ts';
+import { registerSupplierInvoiceRoutes } from './routes/supplierInvoices.ts';
+import { registerClientRateRoutes } from './routes/clientRates.ts';
 import { registerPeopleRoutes, registerTerminationRoutes } from './routes/people.ts';
 import { registerLoginRoutes } from './routes/logins.ts';
 import { registerStaffRoutes } from './routes/staff.ts';
@@ -53,6 +55,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerQueryRoutes(app);
   registerDocumentRoutes(app);
   registerPastelRoutes(app);
+  registerClientRateRoutes(app);
   registerTerminationRoutes(app);
   registerPeopleRoutes(app);
   registerLoginRoutes(app);
@@ -68,6 +71,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerAccessRoutes(app, db);
   registerPlatformRoutes(app, db);
   registerStockRoutes(app, db, opts.invoiceReader ?? null);
+  registerSupplierInvoiceRoutes(app, db, opts.invoiceReader ?? null);
   registerFleetRoutes(app, db);
   registerWorkshopRoutes(app);
   return app;

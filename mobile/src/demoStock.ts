@@ -46,6 +46,8 @@ export interface DemoStockState {
     id: string; code: string; description: string; unit: string; supplierCode?: string | null; needsReview?: boolean;
     minQty?: number; reorderQty?: number | null; photoId?: string | null; supplierName?: string | null;
     ordered?: { at: string; qty: number; note: string | null; by: string } | null; sellingPriceCents?: number | null; category?: 'stock' | 'tool' | 'ppe';
+    /** What it last cost (excl. VAT), from an approved supplier invoice: the clients' mark-up is on this. */
+    costCents?: number | null;
   }[];
   /** Tools and PPE on each person's name. */
   kit?: DemoKit[];
@@ -458,7 +460,7 @@ export class DemoStock {
       if (jobId) this.log(jobId, itemId, 'booked', l.qty);
       this.record('supplier_invoice', itemId, l.qty, ME, ME, jobId ?? null, `${b.supplierName} ${b.invoiceNumber}`, l.unitPriceCents ?? null);
     }
-    Object.assign(inv, { status: 'confirmed', confirmed_at: new Date().toISOString(), supplier_name: b.supplierName, invoice_number: b.invoiceNumber, total_cents: b.totalCents ?? null, job_id: jobId });
+    Object.assign(inv, { status: 'confirmed', confirmed_at: new Date().toISOString(), supplier_name: b.supplierName, invoice_number: b.invoiceNumber, total_cents: b.totalCents ?? null, job_id: jobId, lines: b.lines });
     return good({ id, status: 'confirmed', newItems });
   }
 

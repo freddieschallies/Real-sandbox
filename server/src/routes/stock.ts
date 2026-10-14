@@ -745,7 +745,7 @@ export async function readPendingInvoices(db: Db, reader: InvoiceReader, uploadR
       for (;;) {
         await client.query('BEGIN');
         const inv = (await client.query(
-          `SELECT i.id, i.technician_id, i.read_attempts, p.file_path, p.content_type
+          `SELECT i.id, coalesce(i.technician_id, i.added_by) AS technician_id, i.source, i.read_attempts, p.file_path, p.content_type
              FROM supplier_invoices i JOIN photos p ON p.id = i.photo_id
             WHERE i.status = 'reading' ORDER BY i.created_at LIMIT 1 FOR UPDATE OF i SKIP LOCKED`)).rows[0];
         if (!inv) { await client.query('COMMIT'); break; }
@@ -757,7 +757,8 @@ export async function readPendingInvoices(db: Db, reader: InvoiceReader, uploadR
                     supplier_name = $3, invoice_number = $4, invoice_date = $5, total_cents = $6 WHERE id = $1`,
             [inv.id, JSON.stringify(read), read.supplierName, read.invoiceNumber, validDate(read.invoiceDate), read.totalCents],
           );
-          await notify(client, inv.technician_id, 'invoice_read', `Supplier invoice read: ${read.lines.length} lines. Check and confirm.`, { invoiceId: inv.id });
+          await client.query('UPDATE supplier_invoices SET vat_cents = $2 WHERE id = $1', [inv.id, read.vatCents ?? null]);
+          await notify(client, inv.technician_id, 'invoice_read', `Supplier invoice read: ${read.lines.length} lines. Check and ${inv.source === 'office' ? 'approve' : 'confirm'}.`, { invoiceId: inv.id });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           const giveUp = inv.read_attempts + 1 >= 3 || /not a readable invoice/.test(msg);

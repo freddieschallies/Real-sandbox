@@ -10,6 +10,7 @@ import { rememberPhoto } from '../photo.ts';
 import { nowIso, pickImage } from '../device.ts';
 import * as D from '../../../server/src/core/documents.ts';
 import * as P from '../../../server/src/core/pastel.ts';
+import * as CR from '../../../server/src/core/clientRates.ts';
 import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, st } from '../ui.tsx';
 import { C } from '../theme.ts';
 
@@ -25,7 +26,7 @@ const K = { get stripe() { return C.accent; } };
 
 export function useBooks() {
   const s = useStore();
-  const ask = useCallback(async (method: 'GET' | 'POST' | 'PUT', path: string, json?: object): Promise<Ans> => {
+  const ask = useCallback(async (method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, json?: object): Promise<Ans> => {
     const r = await s.ask({ method, path, json });
     if (r && r.status < 300) return { ok: true, body: r.body };
     return { ok: false, reasons: (r?.body as { reasons?: string[] })?.reasons ?? ['no signal: try again'] };
@@ -451,18 +452,22 @@ export function InvoiceDetail({ b, id }: { b: Books; id: string }) {
 
 // ---- Accounts: Sage Pastel and the company's details ----------------------------------------------
 
-export function Accounts({ b, canPrices }: { b: Books; canPrices: boolean }) {
-  const [kind, setKind] = useState<'invoice' | 'quote'>('invoice');
+const PREFIX: Record<P.PastelKind, string> = { invoice: 'INV', quote: 'Q', credit: 'CN', supplier_invoice: '' };
+export function Accounts({ b, canPrices, canBooks = false }: { b: Books; canPrices: boolean; canBooks?: boolean }) {
+  const [kind, setKind] = useState<P.PastelKind>('invoice');
+  const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [ratesFor, setRatesFor] = useState<{ id: string; name: string } | null>(null);
   const [ready, setReady] = useState<any[]>([]);
   const [batches, setBatches] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
   const [settings, setSettings] = useState<P.PastelSettings | null>(null);
   const [made, setMade] = useState<any>(null);
   const [ans, setAns] = useState<Ans | null>(null);
-  const [panel, setPanel] = useState<'none' | 'codes' | 'clients' | 'company'>('none');
+  const [panel, setPanel] = useState<'none' | 'codes' | 'clients' | 'company' | 'suppliers'>('none');
   const load = async () => {
-    const [r, bt, cl, s] = await Promise.all([b.ask('GET', `/pastel/ready?kind=${kind}`), b.ask('GET', '/pastel/batches'), b.ask('GET', '/pastel/clients'), b.ask('GET', '/pastel/settings')]);
-    if (r.ok) setReady(r.body); if (bt.ok) setBatches(bt.body); if (cl.ok) setClients(cl.body); if (s.ok) setSettings(s.body.settings);
+    const [r, bt, cl, s, sp] = await Promise.all([b.ask('GET', `/pastel/ready?kind=${kind}`), b.ask('GET', '/pastel/batches'), b.ask('GET', '/pastel/clients'), b.ask('GET', '/pastel/settings'),
+      canBooks ? b.ask('GET', '/pastel/suppliers') : Promise.resolve(null)]);
+    if (r.ok) setReady(r.body); if (bt.ok) setBatches(bt.body); if (cl.ok) setClients(cl.body); if (s.ok) setSettings(s.body.settings); if (sp?.ok) setSuppliers(sp.body);
   };
   useEffect(() => { load(); }, [kind]);
   const good = ready.filter(x => !x.problems.length);
@@ -477,18 +482,18 @@ export function Accounts({ b, canPrices }: { b: Books; canPrices: boolean }) {
   return (
     <>
       <Notice tone="info" title="Sage Pastel Partner" lines={[
-        'Sent quotes and invoices go into Pastel in an import batch: make the batch here, then in Pastel open Process, Customers, Invoices (or Quotations), start a batch and choose Import.',
-        'Each quote or invoice goes into one batch only, so nothing is imported twice.',
+        `Make the batch here, then in Pastel: ${P.PASTEL_WHERE[kind]}.`,
+        'Each document goes into one batch only, so nothing is imported twice.',
       ]} />
-      <Choice options={['invoice', 'quote'] as const} value={kind} onChange={k => { setKind(k); setMade(null); }} labels={{ invoice: 'Invoices', quote: 'Quotes' }} />
+      <Choice options={(canBooks ? ['invoice', 'credit', 'quote', 'supplier_invoice'] : ['invoice', 'credit', 'quote']) as P.PastelKind[]} value={kind} onChange={k => { setKind(k); setMade(null); setAns(null); }} labels={P.PASTEL_KIND_LABEL} />
       <Heading>Waiting to go to Pastel ({ready.length})</Heading>
       {ready.map(x => (
         <Card key={x.id} style={x.problems.length ? { borderColor: C.warn } : undefined}>
           <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-            <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>{kind === 'invoice' ? 'INV' : 'Q'}{x.number} · {x.store}</Text>
+            <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>{PREFIX[kind]}{x.number}{x.store ? ` · ${x.store}` : kind === 'credit' && x.reference ? ` · on ${x.reference}` : ''}</Text>
             {x.problems.length ? <Pill text="Needs codes" tone="warn" /> : <Pill text="Ready" tone="good" />}
           </View>
-          <Text style={st.small}>{day(x.date)} · customer {x.customerCode ?? '?'} · {x.lines} line{x.lines === 1 ? '' : 's'}</Text>
+          <Text style={st.small}>{day(x.date)} · {kind === 'supplier_invoice' ? 'supplier' : 'customer'} {x.customerCode ?? '?'} · {x.lines} line{x.lines === 1 ? '' : 's'}</Text>
           {x.problems.length ? <Text style={[st.small, { color: C.warn }]}>Still needed: {x.problems.join('; ')}</Text> : null}
         </Card>
       ))}
@@ -501,7 +506,8 @@ export function Accounts({ b, canPrices }: { b: Books; canPrices: boolean }) {
       {made ? (
         <Card style={{ borderColor: C.good }}>
           <Text style={[st.body, { fontWeight: '800' }]}>{made.filename}</Text>
-          <Text style={st.small}>{made.numbers.length} {kind}{made.numbers.length === 1 ? '' : 's'}: {made.numbers.join(', ')}{made.skipped.length ? ` · ${made.skipped.length} skipped (need codes)` : ''}</Text>
+          <Text style={st.small}>{made.numbers.length} × {P.PASTEL_KIND_LABEL[kind as P.PastelKind].toLowerCase()}: {made.numbers.join(', ')}{made.skipped.length ? ` · ${made.skipped.length} skipped (need codes)` : ''}</Text>
+          {made.where ? <Text style={st.small}>In Pastel: {made.where}.</Text> : null}
           <Button label="Download the file again" kind="secondary" onPress={() => download(made.filename, made.file)} />
           <Text selectable style={{ color: C.text, fontFamily: Platform.OS === 'web' ? 'monospace' : undefined, fontSize: 11, backgroundColor: C.panel2, padding: 8, borderRadius: 6 }}>{made.file}</Text>
         </Card>
@@ -509,24 +515,126 @@ export function Accounts({ b, canPrices }: { b: Books; canPrices: boolean }) {
       {batches.length ? (
         <>
           <Heading>Batches made</Heading>
-          {batches.slice(0, 10).map(x => <Text key={x.id} style={st.small}>{new Date(x.created_at).toLocaleString('en-ZA')} · {x.kind}s {x.numbers.join(', ')} · {x.created_by}</Text>)}
+          {batches.slice(0, 10).map(x => <Text key={x.id} style={st.small}>{new Date(x.created_at).toLocaleString('en-ZA')} · {P.PASTEL_KIND_LABEL[x.kind as P.PastelKind] ?? x.kind} {(x.numbers ?? []).join(', ')} · {x.created_by}</Text>)}
         </>
       ) : null}
 
       <Heading>Pastel setup</Heading>
       <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
-        <Button label="Customer codes" kind="secondary" onPress={() => setPanel(panel === 'clients' ? 'none' : 'clients')} style={{ flexGrow: 1, flexBasis: 140 }} />
+        <Button label={canBooks ? 'Customers: codes and rates' : 'Customer codes'} kind="secondary" onPress={() => { setPanel(panel === 'clients' ? 'none' : 'clients'); setRatesFor(null); }} style={{ flexGrow: 1, flexBasis: 140 }} />
+        {canBooks ? <Button label="Supplier codes" kind="secondary" onPress={() => setPanel(panel === 'suppliers' ? 'none' : 'suppliers')} style={{ flexGrow: 1, flexBasis: 140 }} /> : null}
         <Button label="Line codes and VAT" kind="secondary" onPress={() => setPanel(panel === 'codes' ? 'none' : 'codes')} style={{ flexGrow: 1, flexBasis: 140 }} />
         {canPrices ? <Button label="Company details and rates" kind="secondary" onPress={() => setPanel(panel === 'company' ? 'none' : 'company')} style={{ flexGrow: 1, flexBasis: 140 }} /> : null}
       </View>
-      {panel === 'clients' ? <ClientCodes b={b} clients={clients} reload={load} /> : null}
+      {panel === 'clients' && ratesFor ? <ClientRatesEditor key={ratesFor.id} b={b} client={ratesFor} done={() => { setRatesFor(null); load(); }} /> : null}
+      {panel === 'clients' && !ratesFor ? <ClientCodes b={b} clients={clients} reload={load} rates={canBooks ? c => setRatesFor(c) : undefined} /> : null}
+      {panel === 'suppliers' ? <SupplierCodes b={b} suppliers={suppliers} reload={load} /> : null}
       {panel === 'codes' && settings ? <LineCodes b={b} s={settings} done={() => { setPanel('none'); load(); }} /> : null}
       {panel === 'company' ? <CompanyForm b={b} done={() => setPanel('none')} /> : null}
     </>
   );
 }
 
-function ClientCodes({ b, clients, reload }: { b: Books; clients: any[]; reload: () => void }) {
+function SupplierCodes({ b, suppliers, reload }: { b: Books; suppliers: any[]; reload: () => void }) {
+  const [codes, setCodes] = useState<Record<string, string>>(() => Object.fromEntries(suppliers.map(c => [c.id, c.pastel_code ?? ''])));
+  const [ans, setAns] = useState<Ans | null>(null);
+  return (
+    <Card>
+      <Text style={st.small}>Each supplier's account code in Pastel (up to 6 characters). Suppliers are added by themselves from the invoices.</Text>
+      {suppliers.map(c => (
+        <View key={c.id} style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+          <Text style={[st.body, { flex: 1 }]}>{c.name} <Text style={st.small}>({c.invoices} invoice{c.invoices === 1 ? '' : 's'})</Text></Text>
+          <TextInput value={codes[c.id] ?? ''} onChangeText={t => setCodes(x => ({ ...x, [c.id]: t.toUpperCase() }))} maxLength={6} autoCapitalize="characters" accessibilityLabel={`Pastel code for ${c.name}`}
+            placeholder="CODE" placeholderTextColor={C.quiet} style={[st.input, { width: 120 }]} />
+          <Button label="Save" kind="quiet" onPress={async () => { const r = await b.ask('PUT', `/pastel/suppliers/${encodeURIComponent(c.id)}`, { code: codes[c.id] || null }); setAns(r); if (r.ok) reload(); }} style={{ minHeight: 44 }} />
+        </View>
+      ))}
+      {!suppliers.length ? <Body quiet>No suppliers yet: they come from the supplier invoices.</Body> : null}
+      <Reasons a={ans} />
+    </Card>
+  );
+}
+
+/** A client's own rates (each can be switched off) and its parts mark-up in three price bands. */
+function ClientRatesEditor({ b, client, done }: { b: Books; client: { id: string; name: string }; done: () => void }) {
+  const [v, setV] = useState<any>(null);
+  const [r, setR] = useState<Record<CR.ClientRateKey, { on: boolean; amount: string }> | null>(null);
+  const [mOn, setMOn] = useState(true);
+  const [bands, setBands] = useState<{ upTo: string; pct: string }[]>([]);
+  const [ans, setAns] = useState<Ans | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const load = async () => {
+    const x = await b.ask('GET', `/office/clients/${encodeURIComponent(client.id)}/rates`);
+    if (!x.ok) { setAns(x); return; }
+    setV(x.body);
+    const rt = x.body.rates as CR.ClientRates;
+    setR(Object.fromEntries(CR.CLIENT_RATE_KEYS.map(k => [k, { on: rt.rates[k].on, amount: rt.rates[k].cents ? (rt.rates[k].cents / 100).toFixed(2) : '' }])) as never);
+    setMOn(rt.markup.on);
+    setBands(rt.markup.bands.map(x => ({ upTo: x.upToCents == null ? '' : String(x.upToCents / 100), pct: String(x.pct) })));
+  };
+  useEffect(() => { load(); }, [client.id]);
+  if (!v || !r) return ans ? <Reasons a={ans} /> : <Body quiet>Loading…</Body>;
+  const toC = (t: string) => Math.round((Number(t.replace(/[\sR]/g, '').replace(',', '.')) || 0) * 100);
+  const example = (cost: number) => { try { return D.rand(CR.markedUp(cost, { on: true, bands: bands.map((x, i) => ({ upToCents: i === 2 ? null : toC(x.upTo), pct: Number(x.pct.replace(',', '.')) || 0 })) })); } catch { return '–'; } };
+  const canEdit = !!v.canEdit;
+  return (
+    <Card>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>{client.name}: rates and mark-up</Text>
+        <Pill text={v.own ? 'Own rates' : 'Company rates'} tone={v.own ? 'good' : 'quiet'} />
+      </View>
+      {!v.own ? <Text style={st.small}>This client uses the company rates now. Set its own below (they start from the company rates).</Text> : null}
+      <Label>Rates (excl. VAT): untick what this client is not charged</Label>
+      {CR.CLIENT_RATE_KEYS.map(k => (
+        <View key={k} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Pressable disabled={!canEdit} onPress={() => setR({ ...r, [k]: { ...r[k], on: !r[k].on } })} accessibilityRole="checkbox" accessibilityState={{ checked: r[k].on }} accessibilityLabel={CR.CLIENT_RATE_LABEL[k]}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, minHeight: 44 }}>
+            <Text style={{ fontSize: 20, color: r[k].on ? C.good : C.quiet }}>{r[k].on ? '☑' : '☐'}</Text>
+            <Text style={[st.body, !r[k].on ? { color: C.quiet, textDecorationLine: 'line-through' } : null]}>{CR.CLIENT_RATE_LABEL[k]}</Text>
+          </Pressable>
+          {r[k].on ? (
+            <TextInput editable={canEdit} value={r[k].amount} onChangeText={t => setR({ ...r, [k]: { ...r[k], amount: t } })} keyboardType="decimal-pad" placeholder="R" placeholderTextColor={C.quiet}
+              accessibilityLabel={`${CR.CLIENT_RATE_LABEL[k]} amount`} style={[st.input, { width: 130 }]} />
+          ) : <Text style={[st.small, { width: 130 }]}>Not charged</Text>}
+        </View>
+      ))}
+      <Pressable disabled={!canEdit} onPress={() => setMOn(!mOn)} accessibilityRole="checkbox" accessibilityState={{ checked: mOn }} accessibilityLabel="Mark-up on parts"
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44, marginTop: 6 }}>
+        <Text style={{ fontSize: 20, color: mOn ? C.good : C.quiet }}>{mOn ? '☑' : '☐'}</Text>
+        <Text style={st.body}>Mark-up on parts, by what one part cost</Text>
+      </Pressable>
+      {mOn ? (
+        <>
+          {bands.map((x, i) => (
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <Text style={[st.body, { width: 150 }]}>{i === 0 ? 'Parts up to R' : i === 1 ? `R${bands[0].upTo || '…'} up to R` : `More than R${bands[1].upTo || '…'}`}</Text>
+              {i < 2 ? <TextInput editable={canEdit} value={x.upTo} onChangeText={t => setBands(bands.map((y, n) => (n === i ? { ...y, upTo: t } : y)))} keyboardType="decimal-pad" accessibilityLabel={`Band ${i + 1} ends at`} style={[st.input, { width: 110 }]} /> : null}
+              <TextInput editable={canEdit} value={x.pct} onChangeText={t => setBands(bands.map((y, n) => (n === i ? { ...y, pct: t } : y)))} keyboardType="decimal-pad" accessibilityLabel={`Band ${i + 1} mark-up percent`} style={[st.input, { width: 80 }]} />
+              <Text style={st.body}>%</Text>
+            </View>
+          ))}
+          <Text style={st.small}>For example: a R100 part sells at {example(10_000)}, a R1 000 part at {example(100_000)}, a R5 000 part at {example(500_000)} (excl. VAT). Parts are marked up on their latest cost, from the supplier invoices.</Text>
+        </>
+      ) : <Text style={st.small}>Off: parts at their selling price, bought-out items at the company mark-up.</Text>}
+      {saved ? <Notice tone="good" title={saved} /> : null}
+      <Reasons a={ans} />
+      {canEdit ? (
+        <Button label="Save the client's rates" onPress={async () => {
+          const body: CR.ClientRates = {
+            rates: Object.fromEntries(CR.CLIENT_RATE_KEYS.map(k => [k, { on: r[k].on, cents: r[k].on ? toC(r[k].amount) : 0 }])) as never,
+            markup: { on: mOn, bands: bands.map((x, i) => ({ upToCents: i === 2 ? null : toC(x.upTo), pct: Number(x.pct.replace(',', '.')) || 0 })) },
+          };
+          const x = await b.ask('PUT', `/office/clients/${encodeURIComponent(client.id)}/rates`, body);
+          setAns(x); if (x.ok) { setSaved('Saved: the next invoice for this client is priced with these.'); load(); }
+        }} />
+      ) : <Text style={st.small}>Only the CEO and Accounts change a client's rates.</Text>}
+      {canEdit && v.own ? <Button label="Use the company rates again" kind="quiet" onPress={async () => { const x = await b.ask('DELETE', `/office/clients/${encodeURIComponent(client.id)}/rates`); setAns(x); if (x.ok) { setSaved('This client uses the company rates again.'); load(); } }} /> : null}
+      <Button label="Back to the customers" kind="quiet" onPress={done} />
+    </Card>
+  );
+}
+
+function ClientCodes({ b, clients, reload, rates }: { b: Books; clients: any[]; reload: () => void; rates?: (c: { id: string; name: string }) => void }) {
   const [codes, setCodes] = useState<Record<string, string>>(() => Object.fromEntries(clients.map(c => [c.id, c.pastel_code ?? ''])));
   const [ans, setAns] = useState<Ans | null>(null);
   return (
@@ -538,6 +646,7 @@ function ClientCodes({ b, clients, reload }: { b: Books; clients: any[]; reload:
           <TextInput value={codes[c.id] ?? ''} onChangeText={t => setCodes(x => ({ ...x, [c.id]: t.toUpperCase() }))} maxLength={6} autoCapitalize="characters" accessibilityLabel={`Pastel code for ${c.name}`}
             placeholder="CODE" placeholderTextColor={C.quiet} style={[st.input, { width: 120 }]} />
           <Button label="Save" kind="quiet" onPress={async () => { const r = await b.ask('PUT', `/pastel/clients/${encodeURIComponent(c.id)}`, { code: codes[c.id] || null }); setAns(r); if (r.ok) reload(); }} style={{ minHeight: 44 }} />
+          {rates ? <Button label={c.own_rates ? 'Own rates' : 'Rates'} kind={c.own_rates ? 'secondary' : 'quiet'} onPress={() => rates({ id: c.id, name: c.name })} style={{ minHeight: 44 }} /> : null}
         </View>
       ))}
       <Reasons a={ans} />
@@ -550,7 +659,9 @@ function LineCodes({ b, s, done }: { b: Books; s: P.PastelSettings; done: () => 
   const [month, setMonth] = useState(String(s.yearStartMonth));
   const [tax, setTax] = useState(s.taxType);
   const [store, setStore] = useState(s.store ?? '');
-  const [codes, setCodes] = useState<Record<string, { code: string; lineType: 4 | 6 }>>(() => Object.fromEntries((['labour', 'call_out', 'travel', 'bought_out', 'other'] as const).map(k => [k, s.codes[k] ?? { code: '', lineType: k === 'labour' || k === 'call_out' ? 4 : 6 }])));
+  const KEYS = ['labour', 'call_out', 'travel', 'bought_out', 'other', 'credit', 'purchases'] as const;
+  const NAME: Record<(typeof KEYS)[number], string> = { ...D.KIND_LABEL, credit: 'Credit notes', purchases: 'Supplier invoices (purchases account)' } as never;
+  const [codes, setCodes] = useState<Record<string, { code: string; lineType: 4 | 6 }>>(() => Object.fromEntries(KEYS.map(k => [k, s.codes[k] ?? { code: '', lineType: k === 'labour' || k === 'call_out' ? 4 : 6 }])));
   const [ans, setAns] = useState<Ans | null>(null);
   return (
     <Card>
@@ -559,11 +670,11 @@ function LineCodes({ b, s, done }: { b: Books; s: P.PastelSettings; done: () => 
       <Field label="Pastel tax type for VAT (usually 01)" value={tax} onChangeText={setTax} maxLength={2} keyboardType="number-pad" />
       <Field label="Pastel store code (only if Pastel uses more than one store)" value={store} onChangeText={setStore} maxLength={3} />
       <Text style={st.small}>Stock lines use the part's own code (the stockroom code must be the Pastel item code). The other lines go to these Pastel codes:</Text>
-      {(['labour', 'call_out', 'travel', 'bought_out', 'other'] as const).map(k => (
+      {KEYS.map(k => (
         <View key={k} style={{ gap: 6 }}>
-          <Label>{D.KIND_LABEL[k]}</Label>
+          <Label>{NAME[k]}</Label>
           <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <TextInput value={codes[k].code} onChangeText={t => setCodes(c => ({ ...c, [k]: { ...c[k], code: t } }))} maxLength={15} accessibilityLabel={`Pastel code for ${D.KIND_LABEL[k]}`}
+            <TextInput value={codes[k].code} onChangeText={t => setCodes(c => ({ ...c, [k]: { ...c[k], code: t } }))} maxLength={15} accessibilityLabel={`Pastel code for ${NAME[k]}`}
               placeholder={codes[k].lineType === 4 ? 'item code' : 'GL account'} placeholderTextColor={C.quiet} style={[st.input, { width: 160 }]} />
             <Choice options={['4', '6'] as const} value={String(codes[k].lineType) as '4' | '6'} onChange={v => setCodes(c => ({ ...c, [k]: { ...c[k], lineType: Number(v) as 4 | 6 } }))} labels={{ 4: 'Item', 6: 'GL account' }} />
           </View>

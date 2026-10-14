@@ -93,6 +93,15 @@ const STEPS: [string, string[]][] = [
     'Lindiwe is not in? Zanele stands in: the Stockroom tab at the top has To issue, Tool store and People. Issue Thabo\'s stock request or book out a ladder; it is under Zanele\'s name ("Admin, standing in") and Lindiwe sees it on her Live screen and To issue when she is back. Receiving deliveries and stock counts stay with Lindiwe.',
     'Ask the CEO to give her the stockroom: a Stockroom tab appears at the top and she has the stock controller\'s full screens.',
   ]],
+  ['As Accounts (Nandi)', [
+    'Jobs: every job card, to check that all is in order (she cannot change them). Each job says where the money stands.',
+    'Supplier invoices: "Take a photo of an invoice", or "Choose a file" for a PDF that came by email. It is read by itself in a few seconds (in the test drive the reading is pretend: fan motors from Cool Parts Wholesale). Check it next to the picture; tick the stockroom delivery the goods came in on; "Save and approve".',
+    'Supplier invoices → To check: the technicians\' till slips come in here by themselves. Approve each one, or "Query it" with a note (the technician is told).',
+    'Approving keeps each part\'s latest cost price, so the clients\' mark-up works from what the parts really cost.',
+    'Accounts → Customers: codes and rates → Rates on a client: its own labour, call-out, travel per km and travel time per hour; untick what that client is not charged. Parts mark-up in three bands: the cheaper the part, the bigger the mark-up (e.g. up to R500: 60%, up to R2 000: 40%, more: 25%).',
+    'Invoices: make the invoice for a closed job; it is priced with that client\'s rates and mark-up (travel there and back is worked out from the Go and Arrived times, and the km from the workshop).',
+    'Accounts → Pastel batch: Invoices, Credit notes, Quotations and Supplier invoices, each once. Set the Pastel codes first (Line codes and VAT: also the credit notes and purchases accounts; Supplier codes).',
+  ]],
   ['As the CEO (Lilanie)', [
     'Settings → Letterhead: add a picture of the top and the bottom of your letterhead. Every report, quote, invoice and timesheet then prints and emails on it.',
     'Timesheets: open a sheet a technician did not submit (Missing) and tap "Fill in and submit for him". Only the CEO can; it shows as filled in by you and he is told.',
@@ -114,7 +123,7 @@ export function TesterWelcome() {
   const [reset, setReset] = useState(false);
   const [why, setWhy] = useState<string[] | null>(() => switchError);
   React.useEffect(() => { const f = (e: string[] | null) => setWhy(e); switchListeners.add(f); return () => { switchListeners.delete(f); }; }, []);
-  const go = async (who: 'demo' | 'stock' | 'mech' | 'office' | 'admin' | 'manager' | 'hr') => { setBusy(who); setWhy(null); const r = await s.signIn('demo', '', who, 'demo'); setBusy(null); if (!r.ok) setWhy(r.reasons); };
+  const go = async (who: 'demo' | 'stock' | 'mech' | 'office' | 'admin' | 'manager' | 'hr' | 'accounts') => { setBusy(who); setWhy(null); const r = await s.signIn('demo', '', who, 'demo'); setBusy(null); if (!r.ok) setWhy(r.reasons); };
   if (own) return <Login demo back={() => setOwn(false)} />;
   return (
     <Screen title="Real Sandbox" sub={`Test drive · ${REAL ? REAL.company.name : 'ZSP'} job cards and stock`}>
@@ -135,6 +144,7 @@ export function TesterWelcome() {
       <Button label={R('Open as department manager (Pieter)')} kind="secondary" onPress={() => go('manager')} busy={busy === 'manager'} />
       <Button label={R('Open as HR (Precious)')} kind="secondary" onPress={() => go('hr')} busy={busy === 'hr'} />
       <Button label={R('Open as office admin (Zanele)')} kind="secondary" onPress={() => go('admin')} busy={busy === 'admin'} />
+      <Button label={R('Open as Accounts (Nandi)')} kind="secondary" onPress={() => go('accounts')} busy={busy === 'accounts'} />
       <Button label={R('Open as CEO (Lilanie)')} kind="secondary" onPress={() => go('office')} busy={busy === 'office'} />
       <Button label="Sign in with your own login" kind="quiet" onPress={() => setOwn(true)} />
       <Text style={st.small}>For someone added under People who was given a setup code by Admin or the CEO: the email and the password they chose (first time: "I have a setup code").</Text>

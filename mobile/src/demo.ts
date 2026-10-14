@@ -19,6 +19,8 @@ import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
 import { normReg, registrationCandidates } from '../../server/src/core/vehicleCode.ts';
 import { DemoStock, seedStock, type DemoStockState } from './demoStock.ts';
+import { DemoSuppliers, seedSuppliers, type DemoSupplierState } from './demoSuppliers.ts';
+import * as CR from '../../server/src/core/clientRates.ts';
 import { DemoFleet, seedFleet, type DemoFleetState } from './demoFleet.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
 import type { CardView, Flag, LoanMachine, MachineMove, StockLine, Today, TodayJob, Workshop } from './types.ts';
@@ -74,6 +76,8 @@ export interface DemoState {
   /** Customer lists uploaded in the test drive, until brought in. */
   customerImports?: Record<string, { headers: string[]; rows: string[][]; applied: boolean }>;
   docs?: DemoDocsState;
+  /** Accounts: supplier invoices (the office's scans, checks of the slips, supplier Pastel codes). */
+  suppliers?: DemoSupplierState;
   queries?: { id: string; from: string; to: string; job_id: string | null; subject: string; created_at: string; read: Record<string, string>; messages: { id: string; from: string; body: string; at: string }[] }[];
 }
 
@@ -304,7 +308,7 @@ export class DemoTransport implements Transport {
   private repairRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
     const level = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
-    const office = ['admin', 'management', 'director', 'creator'].includes(level);
+    const office = ['admin', 'accounts', 'management', 'director', 'creator'].includes(level);
     const rp = this.repairs();
     if (p === '/company/workshop') {
       if (req.method === 'GET') return ok({ workshop: rp.workshop, canEdit: office });
@@ -402,6 +406,11 @@ export class DemoTransport implements Transport {
           question: 'Workshop Engine oil 15W-40 counted 2 L short (allowance 0.25 L). What happened?', explanation: null, details: {} }]),
       );
     }
+    // Older saved demos and new ones: the bookkeeper (Accounts).
+    if (!this.state.office.people.some(x => x.login_level === 'accounts')) {
+      const at = this.state.office.people.findIndex(x => x.login_level === 'admin');
+      this.state.office.people.splice(at < 0 ? 2 : at + 1, 0, { id: 'acc-1', full_name: 'Nandi Khumalo', login_level: 'accounts', department: 'Office' } as never);
+    }
     const myHandover: DemoInspection | null = this.state.vehicle?.handover_status === 'awaiting_approval' ? {
       id: 'insp-me', vehicle_id: this.state.vehicle.id, registration: this.state.vehicle.registration, driver_id: 'me', driver: 'Thabo Mkhize', previous_driver: REAL ? 'Ayanda Mthembu' : 'Sipho Ndlovu',
       inspected_at: new Date().toISOString(), odometer_km: this.van().odometerKm, fuel_level: 'half', problems: this.van().problems, new_problems: [],
@@ -414,7 +423,7 @@ export class DemoTransport implements Transport {
   }
 
   /** Whether the signed-in person does this kind of work (their position, or switched on by the CEO). */
-  private does(area: 'jobs' | 'documents' | 'stores' | 'stockroom' | 'fleet' | 'flags' | 'prices' | 'access' | 'hr' | 'vanstock') {
+  private does(area: 'jobs' | 'documents' | 'stores' | 'stockroom' | 'fleet' | 'flags' | 'prices' | 'access' | 'hr' | 'vanstock' | 'jobcards' | 'books') {
     if (area === 'fleet' && this.who.level === 'mechanic') return true;
     if (area === 'stockroom' && this.who.level === 'stockroom') return true;
     return this.office().workOf(this.who.id, this.who.level)[area];
@@ -656,7 +665,7 @@ export class DemoTransport implements Transport {
   private reportRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
     const level = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
-    const office = ['admin', 'management', 'director', 'creator', 'stockroom'].includes(level);
+    const office = ['admin', 'accounts', 'management', 'director', 'creator', 'stockroom'].includes(level);
     const ceo = ['director', 'creator'].includes(level);
     if (p === '/company/letterhead') {
       if (req.method === 'GET') return ok({ headerPhotoId: this.state.letterhead?.headerPhotoId ?? null, footerPhotoId: this.state.letterhead?.footerPhotoId ?? null, canEdit: ceo });
@@ -756,12 +765,12 @@ export class DemoTransport implements Transport {
   }
   private officeRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
-    const office = ['admin', 'management', 'hr', 'director', 'creator'].includes(this.who.level);
+    const office = ['admin', 'accounts', 'management', 'hr', 'director', 'creator'].includes(this.who.level);
     const isOffice = p.startsWith('/office') || p === '/jobs' || p.startsWith('/flags') && !p.endsWith('/explain') || p.startsWith('/vehicles/inspections') || p === '/access/positions'
       || p === '/people' || /^\/people\/[^/]+(\/profile|\/terminate|\/record(\/[^/]+)?|\/login(\/(code|stop|allow|sign-out))?)?$/.test(p) || /^\/access\/users\/[^/]+\/(position|work|trade)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
     if (!isOffice) return null;
     if (!office) return refuse(403, 'office only');
-    if (!this.does('jobs') && (p === '/office/overview' || p === '/jobs' || p === '/office/stores' || p === '/office/technicians') && req.method === 'GET') return refuse(403, 'office only');
+    if (!this.does('jobs') && !this.does('jobcards') && (p === '/office/overview' || p === '/jobs' || p === '/office/stores' || p === '/office/technicians') && req.method === 'GET') return refuse(403, 'office only');
     const o = this.office();
     const done = (r: Parameters<DemoTransport['fleetResult']>[0]) => this.fleetResult(r);
     const q = new URLSearchParams(req.path.split('?')[1] ?? '');
@@ -964,16 +973,28 @@ export class DemoTransport implements Transport {
       minutesOf: id => { const j = this.findJob(id); return j ? J.jobMinutes(j.card) : 0; },
       stockUsed: n => {
         const used = (this.stock().s.activity ?? []).filter(a => a.kind === 'use_on_job' && a.jobNumber === n);
-        const by = new Map<string, { stockItemId: string; description: string; qty: number; sellingPriceCents: number | null; code: string; unit: string }>();
+        const by = new Map<string, { stockItemId: string; description: string; qty: number; sellingPriceCents: number | null; costCents: number | null; code: string; unit: string }>();
         for (const a of used) {
           const it = items.find(i => i.code === a.code);
           if (!it) continue;
-          const x = by.get(it.id) ?? { stockItemId: it.id, description: it.description, qty: 0, sellingPriceCents: it.sellingPriceCents ?? null, code: it.code, unit: it.unit };
+          const x = by.get(it.id) ?? { stockItemId: it.id, description: it.description, qty: 0, sellingPriceCents: it.sellingPriceCents ?? null, costCents: it.costCents ?? null, code: it.code, unit: it.unit };
           x.qty += a.qty; by.set(it.id, x);
         }
         return [...by.values()];
       },
       stockCode: id => { const it = items.find(i => i.id === id); return it ? { code: it.code, unit: it.unit } : null; },
+      // Driving there and back: Go to Arrived (twice); km estimated from the workshop by road (no tracker in the test drive).
+      travelOf: jobId => {
+        const j = this.findJob(jobId);
+        if (!j) return null;
+        const visits = (j.card.visits as { place?: string; goAt?: string; arrivedAt?: string }[]).filter(v => v.place !== 'workshop' && v.goAt && v.arrivedAt);
+        if (!visits.length) return null;
+        const minutes = visits.reduce((n, v) => n + Math.max(0, (Date.parse(v.arrivedAt!) - Date.parse(v.goAt!)) / 60_000), 0) * 2;
+        const st = this.state.office!.stores.find(x => x.id === (j.meta as { store_id?: string }).store_id);
+        const w = this.state.repairs?.workshop ?? { lat: -28.7466, lng: 32.0383 };
+        const km = st?.lat != null && st?.lng != null ? CR.kmBetween(w, { lat: st.lat, lng: st.lng }) * CR.ROAD_FACTOR * 2 * visits.length : 0;
+        return { km: Math.round(km), minutes: Math.round(minutes), kmEstimated: true };
+      },
       name: this.who.name,
       openJob: (storeId, fault, leadId, date, priority, ref) => {
         const st = this.state.office!.stores.find(x => x.id === storeId)!;
@@ -987,13 +1008,47 @@ export class DemoTransport implements Transport {
 
   private docRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
-    const isDoc = /^\/jobs\/[^/]+\/no-charge$/.test(p) || p.startsWith('/quotes') || p.startsWith('/invoices') || p.startsWith('/pastel') || ['/office/company', '/office/rates', '/office/to-invoice'].includes(p);
+    const isDoc = /^\/jobs\/[^/]+\/no-charge$/.test(p) || p.startsWith('/quotes') || p.startsWith('/invoices') || p.startsWith('/pastel') || p.startsWith('/office/supplier-invoices')
+      || /^\/office\/clients\/[^/]+\/rates$/.test(p) || ['/office/company', '/office/rates', '/office/to-invoice'].includes(p);
     if (!isDoc) return null;
-    if (!['admin', 'management', 'director', 'creator', 'stockroom'].includes(this.who.level) || !this.does('documents')) return refuse(403, 'quotes and invoices are not part of your work');
+    if (!['admin', 'accounts', 'management', 'director', 'creator', 'stockroom'].includes(this.who.level) || !this.does('documents')) return refuse(403, 'quotes and invoices are not part of your work');
     const d = this.docs();
     const done = (r: Parameters<DemoTransport['fleetResult']>[0]) => this.fleetResult(r);
     const q = new URLSearchParams(req.path.split('?')[1] ?? '');
     const get = req.method === 'GET';
+    // Accounts: supplier invoices and the suppliers' Pastel codes.
+    const books = this.does('books');
+    const sup = () => new DemoSuppliers((this.state.suppliers ??= seedSuppliers()), this.stock().s, this.who.name);
+    const vatPct = Number((this.state.docs?.profile as { vat_pct?: number } | null)?.vat_pct ?? 15);
+    if (p.startsWith('/office/supplier-invoices') || p.startsWith('/pastel/suppliers') || (p === '/pastel/ready' && q.get('kind') === 'supplier_invoice') || (p === '/pastel/batches' && b?.kind === 'supplier_invoice')) {
+      if (!books) return refuse(403, 'supplier invoices are for Accounts');
+    }
+    if (p === '/office/supplier-invoices' && get) { const r = sup().list(q.get('view') ?? 'to_check'); this.persist(this.state); return ok(r); }
+    if (p === '/office/supplier-invoices/scan') {
+      const u = req.upload;
+      if (!u) return refuse(400, 'no file');
+      const photoId = id('photo');
+      const r = sup().scan(photoId, u.mime === 'image/jpg' ? 'image/jpeg' : u.mime);
+      this.persist(this.state);
+      return done(r);
+    }
+    if ((m = p.match(/^\/office\/supplier-invoices\/([^/]+)\/check$/))) { const r = sup().check(m[1], b.action, b.note); this.persist(this.state); return done(r); }
+    if ((m = p.match(/^\/office\/supplier-invoices\/([^/]+)$/))) {
+      const r = get ? sup().detail(m[1]) : req.method === 'DELETE' ? sup().remove(m[1]) : sup().save(m[1], b);
+      this.persist(this.state);
+      return done(r);
+    }
+    if (p === '/pastel/suppliers') return ok(sup().suppliers());
+    if ((m = p.match(/^\/pastel\/suppliers\/([^/]+)$/))) { const r = sup().setCode(decodeURIComponent(m[1]), b.code); this.persist(this.state); return done(r); }
+    // Each client's own rates and mark-up: the CEO and Accounts.
+    if ((m = p.match(/^\/office\/clients\/([^/]+)\/rates$/))) {
+      const cid = decodeURIComponent(m[1]);
+      if (get) return ok(d.clientRates(cid, books));
+      if (!books) return refuse(403, "only the CEO and Accounts set a client's rates and mark-up");
+      const r = req.method === 'DELETE' ? d.clearClientRates(cid) : d.setClientRates(cid, b);
+      this.persist(this.state);
+      return done(r);
+    }
     if (p === '/office/company' && get) return ok(d.company());
     if (p === '/office/company') {
       if (!this.does('prices')) return refuse(403, 'only the CEO (prices and rates) sets the company details');
@@ -1026,9 +1081,9 @@ export class DemoTransport implements Transport {
     if (p === '/pastel/settings') return get ? ok(d.pastelSettings()) : done(d.setPastel(b));
     if (p === '/pastel/clients') return ok(d.clients());
     if ((m = p.match(/^\/pastel\/clients\/([^/]+)$/))) return done(d.setClientCode(decodeURIComponent(m[1]), b.code));
-    if (p === '/pastel/ready') return ok(d.ready((q.get('kind') as 'invoice' | 'quote') ?? 'invoice'));
+    if (p === '/pastel/ready') return ok(d.ready((q.get('kind') as 'invoice' | 'quote' | 'credit' | 'supplier_invoice') ?? 'invoice', sup().pastel(vatPct)));
     if (p === '/pastel/batches' && get) return ok(d.batches());
-    if (p === '/pastel/batches') return done(d.batch(b.kind, this.who.name));
+    if (p === '/pastel/batches') { const r = d.batch(b.kind, this.who.name, sup().pastel(vatPct)); this.persist(this.state); return done(r); }
     if ((m = p.match(/^\/pastel\/batches\/([^/]+)\/file$/))) { const f = d.batchFile(m[1]); return f ? ok(f) : refuse(404, 'no such batch'); }
     return null;
   }
@@ -1235,6 +1290,7 @@ export class DemoTransport implements Transport {
         : b.email === 'admin' ? { id: 'admin-1', name: 'Zanele Khoza', level: 'admin' }
         : b.email === 'manager' ? { id: 'mgr-1', name: 'Pieter van Wyk', level: 'management' }
         : b.email === 'hr' ? { id: 'hr-1', name: 'Precious Ngcobo', level: 'hr' }
+        : b.email === 'accounts' ? { id: 'acc-1', name: 'Nandi Khumalo', level: 'accounts' }
         : { id: 'me', name: 'Thabo Mkhize', level: 'technician' };
       // Each "View as" button opens whoever holds that position now: if someone was given another
       // position or left the company, the next person in that position stands in.

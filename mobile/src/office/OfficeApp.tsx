@@ -34,13 +34,14 @@ import { Accounts, InvoiceDetail, InvoiceList, NewQuote, QuoteDetail, QuoteList,
 import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries.tsx';
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 import { MyPasswordSettings } from '../screens/MyPassword.tsx';
+import { SupplierInvoiceDetail, SupplierInvoiceList } from './SupplierInvoices.tsx';
 import { AddPerson, LOGIN_PILL, LoginCard } from './Logins.tsx';
 import { ImportCustomers, StoreDetail, StoreList, pointFrom } from './Stores.tsx';
 import { BreakdownAlert, BreakdownById, BreakdownList, BreakdownSettings, type Bd } from './Breakdowns.tsx';
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
-type Tab = 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
-type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | null;
+type Tab = 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
+type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | { kind: 'supplierinv'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
   cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
@@ -59,7 +60,7 @@ const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: '
 const PHONE_ORDER: string[] = MENU_TABS.office.map(t => t.key);
 /** Screens that use the whole width on a computer (no list and detail). */
 const FULL: Tab[] = ['today', 'accounts', 'map', 'departments', 'timesheets', 'settings'];
-const OFFICE_LEVELS = ['admin', 'management', 'hr', 'director', 'creator'];
+const OFFICE_LEVELS = ['admin', 'accounts', 'management', 'hr', 'director', 'creator'];
 export const isOffice = (level?: string) => OFFICE_LEVELS.includes(level ?? '');
 
 export function OfficeApp() {
@@ -91,6 +92,8 @@ export function OfficeApp() {
     const f = () => s.ask({ method: 'GET', path: '/breakdowns/count' }).then(r => { if (r?.status === 200) setBdCount((r.body as { breakdowns: number }).breakdowns); }).catch(() => undefined);
     f(); const t = setInterval(f, 20_000); return () => clearInterval(t);
   }, [bdTick]);
+  // Supplier invoices: the list looks again when one is saved, approved or queried.
+  const [supTick, setSupTick] = useState(0);
   const bdDone = (jobId?: string) => { setBdTick(t => t + 1); o.load(); if (jobId) go('jobs', { kind: 'job', id: jobId }); else setSel(null); };
 
   const menu = usePhoneMenu();
@@ -104,6 +107,7 @@ export function OfficeApp() {
     { key: 'queries', label: 'Queries', count: qs.unread },
     { key: 'quotes', label: 'Quotes', count: books.quotes.filter(q => q.status === 'draft').length || undefined },
     { key: 'invoices', label: 'Invoices', count: books.toInvoice.length || undefined },
+    { key: 'supplier', label: 'Supplier invoices', short: 'Suppliers' },
     { key: 'accounts', label: 'Accounts', short: 'Pastel' },
     { key: 'flags', label: 'Flags', count: ov?.flags?.unresolved },
     { key: 'handovers', label: 'Handovers', short: 'Approve', count: ov?.handoversAwaitingApproval },
@@ -140,7 +144,8 @@ export function OfficeApp() {
       {tab === 'queries' ? <QueryList q={qs} open={id => setSel({ kind: 'query', id })} ask={() => setSel({ kind: 'newquery' })} /> : null}
       {tab === 'quotes' ? <QuoteList b={books} open={id => setSel({ kind: 'quote', id })} add={() => setSel({ kind: 'newquote' })} /> : null}
       {tab === 'invoices' ? <InvoiceList b={books} open={id => setSel({ kind: 'invoice', id })} /> : null}
-      {tab === 'accounts' ? <Accounts b={books} canPrices={does('prices')} /> : null}
+      {tab === 'supplier' ? <SupplierInvoiceList open={id => setSel({ kind: 'supplierinv', id })} selected={sel?.kind === 'supplierinv' ? sel.id : null} tick={supTick} /> : null}
+      {tab === 'accounts' ? <Accounts b={books} canPrices={does('prices')} canBooks={does('books')} /> : null}
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
       {tab === 'handovers' ? <HandoverList o={o} open={id => setSel({ kind: 'handover', id })} /> : null}
       {tab === 'map' ? <TeamMap openPerson={canPeople ? id => go('people', { kind: 'person', id }) : undefined} /> : null}
@@ -179,6 +184,7 @@ export function OfficeApp() {
     if (sel.kind === 'breakdown') return wrap(<BreakdownById key={`${sel.id}-${bdTick}`} id={sel.id} b={sel.b} o={o} logIt={b => setSel({ kind: 'bdlog', b })} done={bdDone} />);
     if (sel.kind === 'store') return wrap(<StoreDetail key={sel.id} id={sel.id} o={o} canEdit={does('stores')} done={close} />);
     if (sel.kind === 'importcustomers') return wrap(<ImportCustomers o={o} done={close} />);
+    if (sel.kind === 'supplierinv') return wrap(<SupplierInvoiceDetail key={sel.id} id={sel.id} changed={() => setSupTick(t => t + 1)} />);
     if (sel.kind === 'bdlog') {
       const b = sel.b;
       return wrap(<NewJob key={b.id} o={o} title="Log the breakdown as a job" path={`/breakdowns/${b.id}/log`}
@@ -200,7 +206,7 @@ export function OfficeApp() {
         <BrandLogo />
         <View style={{ flex: 1 }}>
           <Text style={{ color: K.bandText, fontSize: 22, fontWeight: '800' }}>Office</Text>
-          <Text style={{ color: K.bandText, opacity: 0.75 }}>{s.session?.user.name} · {s.session?.user.level === 'creator' ? 'CEO' : s.session?.user.level === 'admin' ? 'Admin' : s.session?.user.level === 'director' ? 'Director' : s.session?.user.level === 'hr' ? 'HR' : 'Department manager'} · {s.session?.company.name}</Text>
+          <Text style={{ color: K.bandText, opacity: 0.75 }}>{s.session?.user.name} · {s.session?.user.level === 'creator' ? 'CEO' : s.session?.user.level === 'admin' ? 'Admin' : s.session?.user.level === 'director' ? 'Director' : s.session?.user.level === 'hr' ? 'HR' : s.session?.user.level === 'accounts' ? 'Accounts' : 'Department manager'} · {s.session?.company.name}</Text>
         </View>
         <ModeToggle color={K.bandText} />
         <Pressable onPress={o.load} accessibilityRole="button" accessibilityLabel="Refresh" hitSlop={8}

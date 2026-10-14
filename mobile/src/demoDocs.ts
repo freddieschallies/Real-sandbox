@@ -2,6 +2,7 @@
 // same rules as the server (core/documents.ts and core/pastel.ts).
 import * as D from '../../server/src/core/documents.ts';
 import * as P from '../../server/src/core/pastel.ts';
+import * as R from '../../server/src/core/clientRates.ts';
 import { REAL } from './demoReal.ts';
 
 type Line = D.DocLine & { id: string };
@@ -19,12 +20,14 @@ export interface DemoInvoice {
 export interface DemoDocsState {
   quotes: DemoQuote[]; invoices: DemoInvoice[]; nextQuote: number; nextInvoice: number;
   /** Credit notes against sent or paid invoices (kept as issued). */
-  credits?: { id: string; credit_number: number; invoice_id: string; job_id: string; amount_cents: number; vat_pct: number; reason: string; created_at: string; created_by: string }[];
+  credits?: { id: string; credit_number: number; invoice_id: string; job_id: string; amount_cents: number; vat_pct: number; reason: string; created_at: string; created_by: string; pastel_batch_id?: string | null }[];
+  /** Each client's own rates and parts mark-up (by client name in the demo). */
+  clientRates?: Record<string, R.ClientRates>;
   nextCredit?: number;
   /** Closed at no charge (warranty, callback, ...): the office's billing decision, beside the locked job card. */
   noCharge?: Record<string, { reason: string; note: string | null; by: string; at: string }>;
   profile: Record<string, unknown> | null; rates: Record<string, number>;
-  pastel: P.PastelSettings; clientCodes: Record<string, string | null>; batches: { id: string; kind: 'invoice' | 'quote'; numbers: number[]; file: string; created_at: string; created_by: string }[];
+  pastel: P.PastelSettings; clientCodes: Record<string, string | null>; batches: { id: string; kind: P.PastelKind; numbers: (number | string)[]; file: string; created_at: string; created_by: string }[];
 }
 
 /** What the documents need from the rest of the demo. */
@@ -33,7 +36,9 @@ export interface DocsSources {
     card: { status: string; visits: { startedAt?: string; endedAt?: string }[] }; closedAt?: string }[];
   stores: { id: string; client: string; name: string; address: string | null }[];
   minutesOf: (jobId: string) => number;
-  stockUsed: (jobNumber: number) => { stockItemId: string; description: string; qty: number; sellingPriceCents: number | null; code: string; unit: string }[];
+  stockUsed: (jobNumber: number) => { stockItemId: string; description: string; qty: number; sellingPriceCents: number | null; costCents?: number | null; code: string; unit: string }[];
+  /** Driving there and back for a job (km estimated from the workshop until the tracker gives trips). */
+  travelOf?: (jobId: string) => { km: number; minutes: number; kmEstimated: boolean } | null;
   stockCode: (stockItemId: string) => { code: string; unit: string } | null;
   name: string;
   /** Opens a follow-up job when a quote is accepted. */
@@ -285,8 +290,8 @@ export class DemoDocs {
     if (this.d.invoices.some(i => i.job_id === jobId && i.status !== 'cancelled')) return bad(409, 'this job already has an invoice');
     const lines = D.invoiceDraft({
       jobType: j.meta.job_type, jobNumber: j.meta.job_number, minutesOnSite: this.src.minutesOf(jobId), technicians: 1 + (j.meta.helper_ids ?? []).length,
-      visits: j.card.visits.length, stockUsed: this.src.stockUsed(j.meta.job_number), boughtOut: [],
-    }, this.d.rates);
+      visits: j.card.visits.length, stockUsed: this.src.stockUsed(j.meta.job_number), boughtOut: [], travel: this.src.travelOf?.(jobId) ?? null,
+    }, this.rulesFor(j.meta.store_id));
     const id = nid('inv');
     const number = this.d.nextInvoice++;
     this.d.invoices.unshift({ id, invoice_number: number, status: 'draft', job_id: jobId, notes: null, client_ref: j.meta.client_order_ref, created_at: new Date().toISOString(), sent_at: null,
@@ -327,7 +332,45 @@ export class DemoDocs {
     return good({ id, status: 'cancelled' });
   }
 
+  // ---- Each client's rates and mark-up -------------------------------------------------------
+  private clientOf(storeId: string) { return this.src.stores.find(s => s.id === storeId)?.client ?? null; }
+  /** How a job at this store is priced: its client's own rates, or the company's. */
+  rulesFor(storeId: string): R.PriceRules {
+    const c = this.clientOf(storeId);
+    return R.priceRules(this.d.rates, c ? this.d.clientRates?.[c] ?? null : null);
+  }
+  clientRates(id: string, canEdit: boolean) {
+    const own = this.d.clientRates?.[id] ?? null;
+    return { client: { id, name: id, pastel_code: this.d.clientCodes[id] ?? null }, own: !!own, rates: own ?? R.startingRates(this.d.rates), company: this.d.rates, canEdit,
+      labels: R.CLIENT_RATE_LABEL, updatedBy: null, updatedAt: null };
+  }
+  setClientRates(id: string, b: R.ClientRates): Res {
+    if (!b?.rates || !b?.markup) return bad(400, 'the rates and the mark-up');
+    const problems = R.ratesProblems(b);
+    if (problems.length) return bad(400, ...problems);
+    (this.d.clientRates ??= {})[id] = { rates: b.rates, markup: b.markup };
+    return good({ id, own: true, rates: b });
+  }
+  clearClientRates(id: string): Res {
+    if (!this.d.clientRates?.[id]) return bad(409, 'this client already uses the company rates');
+    delete this.d.clientRates[id];
+    return good({ id, own: false });
+  }
+
   // ---- Sage Pastel --------------------------------------------------------------------------
+  private creditDocs(): (P.PastelDoc & { id: string })[] {
+    return (this.d.credits ?? []).filter(c => !c.pastel_batch_id).map(c => {
+      const inv = this.d.invoices.find(i => i.id === c.invoice_id);
+      const j = this.job(c.job_id);
+      const s = j ? this.src.stores.find(x => x.id === j.meta.store_id) : null;
+      return {
+        id: c.id, kind: 'credit' as const, number: c.credit_number, customerCode: s ? this.d.clientCodes[s.client] ?? null : null, date: c.created_at.slice(0, 10), dueDate: null,
+        orderNumber: `INV ${inv?.invoice_number ?? ''}`, message: `Credit on invoice ${inv?.invoice_number ?? ''}, job ${j?.meta.job_number ?? ''}. ${c.reason}`,
+        deliverTo: [s?.name ?? '', ...(s?.address ?? '').split(/,\s*/)], contact: null, codeFor: 'credit' as const,
+        lines: [{ kind: 'other' as const, description: `Credit inv ${inv?.invoice_number ?? ''}: ${c.reason}`, qty: 1, unitPriceCents: c.amount_cents }],
+      };
+    });
+  }
   private pastelDocs(kind: 'invoice' | 'quote'): (P.PastelDoc & { id: string })[] {
     const list = kind === 'invoice'
       ? this.d.invoices.filter(i => (i.status === 'sent' || i.status === 'paid') && !i.pastel_batch_id).map(i => ({ id: i.id, number: i.invoice_number, date: (i.sent_at ?? i.created_at).slice(0, 10), due: i.due_date, ref: i.client_ref, notes: i.notes, job_id: i.job_id, store_id: null as string | null, lines: i.lines }))
@@ -352,7 +395,7 @@ export class DemoDocs {
   clients() {
     // Real-data demo: every real customer, with or without stores in the demo.
     const names = [...new Set([...this.src.stores.map(s => s.client), ...(REAL?.clients.map(c => c.name) ?? [])])].sort((a, b) => a.localeCompare(b));
-    return names.map(n => ({ id: n, name: n, pastel_code: this.d.clientCodes[n] ?? null, stores: this.src.stores.filter(s => s.client === n).length }));
+    return names.map(n => ({ id: n, name: n, pastel_code: this.d.clientCodes[n] ?? null, stores: this.src.stores.filter(s => s.client === n).length, own_rates: !!this.d.clientRates?.[n] }));
   }
   setClientCode(id: string, code: string | null): Res {
     const c = (code ?? '').trim().toUpperCase();
@@ -362,22 +405,28 @@ export class DemoDocs {
     this.d.clientCodes[id] = c || null;
     return good({ id, code: c || null });
   }
-  ready(kind: 'invoice' | 'quote') {
-    return this.pastelDocs(kind).map(d => ({ id: d.id, number: d.number, date: d.date, customerCode: d.customerCode, store: d.deliverTo[0], lines: d.lines.length, problems: P.missingForPastel(d, this.d.pastel) }));
+  /** Supplier invoices come from the supplier invoice module (approved, not yet in Pastel). */
+  private waiting(kind: P.PastelKind, suppliers?: { docs: () => (P.PastelDoc & { id: string })[] }) {
+    return kind === 'credit' ? this.creditDocs() : kind === 'supplier_invoice' ? suppliers?.docs() ?? [] : this.pastelDocs(kind);
   }
-  batch(kind: 'invoice' | 'quote', by: string): Res {
-    const all = this.pastelDocs(kind);
+  ready(kind: P.PastelKind, suppliers?: { docs: () => (P.PastelDoc & { id: string })[] }) {
+    return this.waiting(kind, suppliers).map(d => ({ id: d.id, number: d.number, date: d.date, customerCode: d.customerCode, store: d.deliverTo[0] ?? null, reference: d.orderNumber, lines: d.lines.length, problems: P.missingForPastel(d, this.d.pastel) }));
+  }
+  batch(kind: P.PastelKind, by: string, suppliers?: { docs: () => (P.PastelDoc & { id: string })[]; mark: (ids: string[], batchId: string) => void }): Res {
+    if (!['invoice', 'quote', 'credit', 'supplier_invoice'].includes(kind)) return bad(400, 'which kind of batch');
+    const all = this.waiting(kind, suppliers);
     const ok = all.filter(d => !P.missingForPastel(d, this.d.pastel).length);
     const skipped = all.filter(d => !ok.includes(d)).map(d => ({ number: d.number, reasons: P.missingForPastel(d, this.d.pastel) }));
-    if (!ok.length) return bad(409, ...(skipped.length ? skipped.map(x => `${kind} ${x.number}: ${x.reasons.join('; ')}`) : [`no ${kind}s waiting to go to Pastel`]));
+    if (!ok.length) return bad(409, ...(skipped.length ? skipped.map(x => `${x.number}: ${x.reasons.join('; ')}`) : [`no ${P.PASTEL_KIND_LABEL[kind].toLowerCase()} waiting to go to Pastel`]));
     const file = P.pastelFile(ok, this.d.pastel, Number(this.d.profile?.vat_pct ?? 15));
     const id = nid('pb');
     this.d.batches.unshift({ id, kind, numbers: ok.map(d => d.number), file, created_at: new Date().toISOString(), created_by: by });
+    if (kind === 'supplier_invoice') suppliers?.mark(ok.map(d => d.id), id);
     for (const d of ok) {
-      const doc = kind === 'invoice' ? this.d.invoices.find(i => i.id === d.id) : this.d.quotes.find(q => q.id === d.id);
+      const doc = kind === 'invoice' ? this.d.invoices.find(i => i.id === d.id) : kind === 'quote' ? this.d.quotes.find(q => q.id === d.id) : kind === 'credit' ? (this.d.credits ?? []).find(c => c.id === d.id) : null;
       if (doc) doc.pastel_batch_id = id;
     }
-    return good({ id, kind, numbers: ok.map(d => d.number), skipped, filename: `pastel-${kind}s-${today()}-${id.slice(-6)}.csv`, file }, 201);
+    return good({ id, kind, numbers: ok.map(d => d.number), skipped, where: P.PASTEL_WHERE[kind], filename: `pastel-${kind.replace('_', '-')}s-${today()}-${id.slice(-6)}.csv`, file }, 201);
   }
   batches() { return this.d.batches.map(({ file: _f, ...b }) => b); }
   batchFile(id: string) { return this.d.batches.find(b => b.id === id)?.file ?? null; }

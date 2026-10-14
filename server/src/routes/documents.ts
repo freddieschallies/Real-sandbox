@@ -12,6 +12,7 @@ import { NO_CHARGE_REASONS, type NoChargeReason } from '../core/jobOutcome.ts';
 import { DateOnly, Refused, Uuid, parse } from '../http.ts';
 import { loadCard } from '../jobsRepo.ts';
 import { notify } from './field.ts';
+import { priceRulesForJob, travelForJob } from './clientRates.ts';
 
 const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
@@ -125,7 +126,7 @@ export function registerDocumentRoutes(app: FastifyInstance) {
       await writeLines(c, 'quote_id', q.id, lines);
       await audit(c, req.actor.id, 'quote_submitted', 'quote', q.id, { number: q.quote_number, jobId: b.jobId ?? null, referenceJobId: b.referenceJobId ?? null });
       const who = (await c.query('SELECT full_name FROM users WHERE id = $1', [req.actor.id])).rows[0].full_name;
-      for (const o of (await c.query("SELECT id FROM users WHERE login_level IN ('admin', 'director', 'creator') AND status <> 'left'")).rows) {
+      for (const o of (await c.query("SELECT id FROM users WHERE login_level IN ('admin', 'accounts', 'director', 'creator') AND status <> 'left'")).rows) {
         await notify(c, o.id, 'quote_submitted', `${who} submitted quote ${q.quote_number}: ${b.title}. Check it, price it and send it.`, { quoteId: q.id });
       }
       return { id: q.id, quoteNumber: q.quote_number, unpriced: lines.filter(l => !l.unitPriceCents).map(l => l.description) };
@@ -471,14 +472,14 @@ export function registerDocumentRoutes(app: FastifyInstance) {
       if ((await c.query("SELECT 1 FROM invoices WHERE job_id = $1 AND status <> 'cancelled'", [b.jobId])).rowCount) throw new Refused(409, ['this job already has an invoice']);
       const helpers = (await c.query('SELECT count(*)::int AS n FROM job_helpers WHERE job_id = $1', [b.jobId])).rows[0].n;
       const stockUsed = (await c.query(
-        `SELECT m.stock_item_id AS "stockItemId", i.description, sum(m.qty)::float AS qty, i.selling_price_cents AS "sellingPriceCents"
+        `SELECT m.stock_item_id AS "stockItemId", i.description, sum(m.qty)::float AS qty, i.selling_price_cents AS "sellingPriceCents", i.cost_cents AS "costCents"
            FROM stock_movements m JOIN stock_items i ON i.id = m.stock_item_id
-          WHERE m.job_id = $1 AND m.kind = 'use_on_job' GROUP BY m.stock_item_id, i.description, i.selling_price_cents ORDER BY i.description`, [b.jobId])).rows;
+          WHERE m.job_id = $1 AND m.kind = 'use_on_job' GROUP BY m.stock_item_id, i.description, i.selling_price_cents, i.cost_cents ORDER BY i.description`, [b.jobId])).rows;
       const boughtOut = (await c.query('SELECT description, qty::float AS qty, price_cents AS "costCents" FROM bought_out_items WHERE job_id = $1 ORDER BY description', [b.jobId])).rows;
       const lines = D.invoiceDraft({
         jobType: j.job_type, jobNumber: j.job_number, minutesOnSite: Jc.jobMinutes(loaded.card), technicians: 1 + helpers,
-        visits: loaded.card.visits.length, stockUsed, boughtOut,
-      }, await rates(c));
+        visits: loaded.card.visits.length, stockUsed, boughtOut, travel: await travelForJob(c, b.jobId, loaded.card),
+      }, await priceRulesForJob(c, b.jobId));
       const p = await profile(c);
       const inv = (await c.query(
         'INSERT INTO invoices (job_id, created_by, client_ref, vat_pct, due_date) VALUES ($1, $2, $3, $4, NULL) RETURNING id, invoice_number',
