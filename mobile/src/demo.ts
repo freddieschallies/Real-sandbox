@@ -13,7 +13,8 @@ import type { LoginLevel } from '../../server/src/core/permissions.ts';
 import { DemoOffice, END_REASONS, HR_POSITIONS, POSITION_LABEL, seedOffice, terminate, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
 import { DemoLogins, type DemoLoginsState } from './demoLogins.ts';
 import { DemoBreakdowns, seedBreakdowns, type DemoBdState } from './demoBreakdowns.ts';
-import { NO_CHARGE_REASONS } from '../../server/src/core/jobOutcome.ts';
+import { NO_CHARGE_REASONS, jobOutcome } from '../../server/src/core/jobOutcome.ts';
+import * as SR from '../../server/src/core/search.ts';
 import { FIELDS as CUSTOMER_FIELDS, guessMapping, parseCsv, splitHeader, toCustomers } from '../../server/src/core/customerSheet.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
@@ -430,6 +431,62 @@ export class DemoTransport implements Transport {
     if (area === 'fleet' && this.who.level === 'mechanic') return true;
     if (area === 'stockroom' && this.who.level === 'stockroom') return true;
     return this.office().workOf(this.who.id, this.who.level)[area];
+  }
+
+  /** Search, as the server does it: only what this person may already see. */
+  private search(qRaw: string): SR.SearchResult {
+    const q = qRaw.trim().slice(0, 100);
+    const out: SR.SearchResult = { q, groups: [] };
+    if (q.length < SR.MIN_CHARS || !SR.wordsOf(q).length) return out;
+    const N = SR.PER_KIND;
+    const add = (kind: SR.SearchKind, hits: SR.SearchHit[]) => { if (hits.length) out.groups.push({ kind, label: SR.KIND_LABEL[kind], hits: hits.slice(0, N) }); };
+    const lvl = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
+    const o = this.office();
+    const d = this.docs();
+    const allJobs = this.does('jobs') || this.does('jobcards');
+    const docs = this.does('documents');
+    const R = (c: number) => `R ${(c / 100).toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const day = (x: string | null | undefined) => (x ? new Date(x.length === 10 ? `${x}T12:00:00+02:00` : x).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+    const clientOf = (storeName: string) => o.o.stores.find(x => x.name === storeName)?.client ?? '';
+    const jobs = o.jobs(null).filter(j => allJobs || j.lead_id === this.who.id || j.helper_ids.includes(this.who.id))
+      .filter(j => SR.hasAll(`${j.job_number} ${j.store} ${clientOf(j.store)} ${j.fault_reported} ${j.lead_technician} ${j.job_type}`, q));
+    add('job', jobs.map(j => { const oc = jobOutcome({ status: j.status, ...d.billingOf(j.id), cancelled_by_party: j.cancelled_by_party });
+      return { kind: 'job' as const, id: j.id, title: `Job ${j.job_number} · ${j.store}`, sub: [j.fault_reported, allJobs ? j.lead_technician : '', day(j.scheduled_date)].filter(Boolean).join(' · '), badge: { text: oc.label, tone: oc.tone } }; }));
+    if (allJobs) add('store', o.o.stores.filter(x => SR.hasAll(`${x.name} ${x.client} ${x.address ?? ''}`, q))
+      .map(x => ({ kind: 'store' as const, id: x.id, title: x.name, sub: [x.client, x.address].filter(Boolean).join(' · '), badge: d.holdOf(x.client) ? { text: 'Account on hold', tone: 'bad' as const } : null })));
+    if (docs || allJobs) add('client', d.customers().filter(c => SR.hasAll(`${c.name} ${c.pastel_code ?? ''}`, q))
+      .map(c => ({ kind: 'client' as const, id: c.id, title: c.name, sub: [c.pastel_code ? `Pastel ${c.pastel_code}` : '', `${c.stores} store${c.stores === 1 ? '' : 's'}`].filter(Boolean).join(' · '), badge: c.on_hold ? { text: 'Account on hold', tone: 'bad' as const } : null })));
+    const st = this.stock();
+    const stockAll = this.does('stockroom') || docs || lvl === 'stockroom';
+    const prices = docs || this.does('prices') || this.does('stockroom') || lvl === 'stockroom';
+    add('stock', st.s.items.filter(i => !i.needsReview && (stockAll || (i.category ?? 'stock') === 'stock') && SR.hasAll(`${i.code} ${i.description} ${i.supplierCode ?? ''} ${i.supplierName ?? ''}`, q))
+      .sort((a, c) => Number(c.code.toLowerCase() === q.toLowerCase()) - Number(a.code.toLowerCase() === q.toLowerCase()))
+      .map(i => ({ kind: 'stock' as const, id: i.id, title: `${i.code} · ${i.description}`, sub: `${st.s.stockroom[i.id] ?? 0} ${i.unit} in the stockroom`,
+        price: prices ? (i.sellingPriceCents != null ? `${R(i.sellingPriceCents)} excl. VAT` : 'No selling price set') : null })));
+    if (docs) {
+      add('quote', d.quotes(null).filter(x => SR.hasAll(`quote ${x.quote_number} ${x.title} ${x.store} ${x.client} ${x.job_number ?? ''}`, q))
+        .map(x => ({ kind: 'quote' as const, id: x.id, title: `Quote ${x.quote_number} · ${x.store}`, sub: [x.title, x.job_number ? `job ${x.job_number}` : '', day(x.created_at)].filter(Boolean).join(' · '), price: R(x.total_cents), badge: { text: x.status, tone: x.status === 'accepted' ? 'good' as const : x.status === 'declined' ? 'bad' as const : 'info' as const } })));
+      add('invoice', d.invoices(null).filter(x => SR.hasAll(`invoice ${x.invoice_number} ${x.store} ${x.client} ${x.job_number ?? ''}`, q))
+        .map(x => ({ kind: 'invoice' as const, id: x.id, title: `Invoice ${x.invoice_number} · ${x.store}`, sub: [x.client, x.job_number ? `job ${x.job_number}` : '', day(x.sent_at ?? x.created_at)].filter(Boolean).join(' · '), price: R(x.total_cents),
+          badge: { text: x.status === 'sent' ? 'unpaid' : x.status, tone: x.status === 'sent' ? 'warn' as const : x.status === 'paid' ? 'good' as const : 'quiet' as const } })));
+    }
+    const allPOs = ['stockroom', 'admin', 'management', 'director', 'creator'].includes(lvl) || this.does('books');
+    const pb = this.poBook();
+    const pos = (allPOs ? (pb.list('all') as { orders: any[] }).orders : pb.mine()) as any[];
+    add('po', pos.filter(x => SR.hasAll(`po ${x.po_number} ${x.external_number ?? ''} ${x.supplier_name} ${x.job_number ?? ''} ${x.technician ?? ''}`, q))
+      .map(x => ({ kind: 'po' as const, id: x.id, title: `PO ${x.external_number ?? x.po_number} · ${x.supplier_name}`, sub: [allPOs ? x.technician ?? '' : '', x.job_number ? `job ${x.job_number}` : 'van stock', day(x.requested_at)].filter(Boolean).join(' · '),
+        badge: { text: x.status, tone: x.status === 'approved' ? 'good' as const : x.status === 'requested' ? 'warn' as const : x.status === 'rejected' ? 'bad' as const : 'info' as const } })));
+    if (this.does('books')) {
+      const sup = new DemoSuppliers((this.state.suppliers ??= seedSuppliers()), this.stock().s, this.who.name);
+      add('supplier_invoice', ((sup.list('all') as { invoices: any[] }).invoices).filter(x => SR.hasAll(`${x.invoice_number ?? ''} ${x.supplier_name ?? ''} ${x.job_number ?? ''}`, q))
+        .map(x => ({ kind: 'supplier_invoice' as const, id: x.id, title: `${x.supplier_name ?? 'Supplier'} · ${x.invoice_number ?? 'no number yet'}`, sub: [x.job_number ? `job ${x.job_number}` : '', day(x.invoice_date)].filter(Boolean).join(' · '),
+          price: x.total_cents != null ? R(x.total_cents) : null, badge: { text: String(x.status).replace(/_/g, ' '), tone: 'quiet' as const } })));
+    }
+    if (this.does('access') || this.does('hr') || (lvl !== 'stockroom' && allJobs)) add('person', o.o.people.filter(x => SR.hasAll(`${x.full_name} ${x.trade ?? ''} ${x.login_level}`, q))
+      .map(x => ({ kind: 'person' as const, id: x.id, title: x.full_name, sub: [x.login_level === 'management' ? 'department manager' : x.login_level, x.trade].filter(Boolean).join(' · ') })));
+    if (this.does('fleet')) add('vehicle', (this.fleet().list() as any[]).filter(v => SR.hasAll(`${v.registration} ${String(v.registration).replace(/ /g, '')} ${v.make ?? ''} ${v.model ?? ''} ${v.description ?? ''}`, q))
+      .map(v => ({ kind: 'vehicle' as const, id: v.id, title: v.registration, sub: [v.make, v.model, v.description].filter(Boolean).join(' · '), badge: v.status && v.status !== 'in_service' ? { text: String(v.status).replace(/_/g, ' '), tone: 'warn' as const } : null })));
+    return out;
   }
 
   /** The Breakdowns queue (emails and the WhatsApp group). */
@@ -1375,6 +1432,7 @@ export class DemoTransport implements Transport {
     if (p === '/policy/acknowledge') { this.state.acknowledged = true; this.persist(this.state); return ok({ ok: true }); }
     if (!this.state.acknowledged) return { status: 403, body: { error: 'acknowledge the monitoring policy first', code: 'policy_required' } };
     if (!this.state.vanStock) this.vans();
+    if (p === '/search') return ok(this.search(new URLSearchParams(req.path.split('?')[1] ?? '').get('q') ?? ''));
     const dr = this.docRoute(p, req, b);
     if (dr) return dr;
     const qr = this.queryRoute(p, req, b);

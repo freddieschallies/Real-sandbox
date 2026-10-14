@@ -65,6 +65,9 @@ export interface DemoStockState {
   nextNew: number;
 }
 
+/** Selling prices (excl. VAT) for the seeded items; filled in on older test drives too. */
+const SEED_PRICES: Record<string, number> = { 'st-1': 32_000, 'st-2': 185_000, 'st-3': 42_000, 'st-4': 1_500, 'st-5': 38_500, 'st-6': 26_000, 'st-7': 89_000 };
+
 export function seedStock(): DemoStockState {
   return {
     items: [
@@ -126,6 +129,7 @@ const bad = (status: number, ...reasons: string[]): Res => ({ ok: false, status,
 
 export class DemoStock {
   constructor(public s: DemoStockState, private jobInfo: (jobId: string) => { number: number; status: string; store: string } | null) {
+    for (const i of s.items) if (i.sellingPriceCents === undefined && SEED_PRICES[i.id] !== undefined) i.sellingPriceCents = SEED_PRICES[i.id];
     // Older saved demos: add the tools and PPE.
     if (!s.items.some(i => i.category === 'ppe')) { s.items.push(...KIT_ITEMS.filter(k => !s.items.some(i => i.id === k.id))); Object.assign(s.stockroom, KIT_STOCK); }
     s.kit ??= seedKit();

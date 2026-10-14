@@ -37,6 +37,7 @@ import { MyPasswordSettings } from '../screens/MyPassword.tsx';
 import { MoneyOutList, SupplierInvoiceDetail, SupplierInvoiceList } from './SupplierInvoices.tsx';
 import { DebtorDetail, DebtorList } from './Debtors.tsx';
 import { CustomerDetail, CustomerList } from './Customers.tsx';
+import { SearchButton, SearchPanel, type Openers } from '../search/Search.tsx';
 import { ProfitView } from './Profit.tsx';
 import { PurchaseOrderList } from './PurchaseOrders.tsx';
 import { AddPerson, LOGIN_PILL, LoginCard } from './Logins.tsx';
@@ -99,6 +100,7 @@ export function OfficeApp() {
   // Supplier invoices: the list looks again when one is saved, approved or queried.
   const [supTick, setSupTick] = useState(0);
   const [debTick, setDebTick] = useState(0);
+  const [searching, setSearching] = useState(false);
   const bdDone = (jobId?: string) => { setBdTick(t => t + 1); o.load(); if (jobId) go('jobs', { kind: 'job', id: jobId }); else setSel(null); };
 
   const menu = usePhoneMenu();
@@ -224,6 +226,7 @@ export function OfficeApp() {
           <Text style={{ color: K.bandText, fontSize: 22, fontWeight: '800' }}>Office</Text>
           <Text style={{ color: K.bandText, opacity: 0.75 }}>{s.session?.user.name} · {s.session?.user.level === 'creator' ? 'CEO' : s.session?.user.level === 'admin' ? 'Admin' : s.session?.user.level === 'director' ? 'Director' : s.session?.user.level === 'hr' ? 'HR' : s.session?.user.level === 'accounts' ? 'Accounts' : 'Department manager'} · {s.session?.company.name}</Text>
         </View>
+        <SearchButton color={K.bandText} onPress={() => setSearching(true)} />
         <ModeToggle color={K.bandText} />
         <Pressable onPress={o.load} accessibilityRole="button" accessibilityLabel="Refresh" hitSlop={8}
           style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: K.bandText }}>
@@ -233,6 +236,20 @@ export function OfficeApp() {
       </View>
     </View>
   );
+
+  // Search: every tab this person has, and what their work lets them see; a result opens where it lives.
+  const has = (k: Tab) => tabs.some(t => t.key === k);
+  const openers: Openers = {
+    ...(has('jobs') ? { job: id => go('jobs', { kind: 'job', id }) } : {}),
+    ...(has('stores') ? { store: id => go('stores', { kind: 'store', id }) } : {}),
+    ...(has('customers') ? { client: id => go('customers', { kind: 'customer', id }) } : {}),
+    ...(has('quotes') ? { quote: id => go('quotes', { kind: 'quote', id }) } : {}),
+    ...(has('invoices') ? { invoice: id => go('invoices', { kind: 'invoice', id }) } : {}),
+    ...(has('pos') ? { po: () => go('pos') } : {}),
+    ...(has('supplier') ? { supplier_invoice: id => go('supplier', { kind: 'supplierinv', id }) } : {}),
+    ...(has('people') ? { person: id => go('people', { kind: 'person', id }) } : {}),
+  };
+  const search = searching ? <SearchPanel places={tabs.map(t => ({ key: t.key, label: t.label, open: () => go(t.key) }))} open={openers} close={() => setSearching(false)} /> : null;
 
   if (wide) {
     return (
@@ -253,6 +270,7 @@ export function OfficeApp() {
           <View style={{ width: FULL.includes(tab) ? undefined : 460, flex: FULL.includes(tab) ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
           {!FULL.includes(tab) ? <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}</View> : null}
         </View>
+        {search}
       </View>
     );
   }
@@ -266,6 +284,7 @@ export function OfficeApp() {
         <BottomTabs tabs={[...tabs].sort((a, b) => PHONE_ORDER.indexOf(a.key) - PHONE_ORDER.indexOf(b.key))} current={tab} onSelect={k => go(k)} accent={K.stripe} bottom={ins.bottom}
           pinned={menu.pinned} onArrange={menu.canEdit ? arrange : undefined} />
       ) : null}
+      {search}
     </View>
   );
 }

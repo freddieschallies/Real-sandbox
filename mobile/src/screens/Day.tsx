@@ -10,6 +10,7 @@ import { Body, Button, Card, Label, Notice, Pill, Toggle, st } from '../ui.tsx';
 import { SyncPill } from './SyncPill.tsx';
 import { useQueries } from '../queries/Queries.tsx';
 import { useMyTimesheets } from '../timesheets/Timesheet.tsx';
+import { SearchButton, SearchPanel, localSearch, type SearchPlace } from '../search/Search.tsx';
 import { C, S } from '../theme.ts';
 import type { TodayJob } from '../types.ts';
 
@@ -31,6 +32,7 @@ export function Day() {
   const ts = useMyTimesheets();
   const ins = useSafeAreaInsets();
   const [pulling, setPulling] = useState(false);
+  const [searching, setSearching] = useState(false);
   // Tools and ladders from the stockroom's tool store on his name.
   const [storeTools, setStoreTools] = useState<{ id: string; name: string; serial: string | null; jobNumber: number | null; due: string; overdue: boolean }[]>([]);
   useEffect(() => { s.refresh(); s.ask({ method: 'GET', path: '/me/tools' }).then(r => { if (r?.status === 200) setStoreTools(r.body); }).catch(() => {}); }, []);
@@ -51,6 +53,7 @@ export function Day() {
           <Text style={st.sub}>{dateText}</Text>
         </View>
         <SyncPill />
+        <SearchButton color={C.text} onPress={() => setSearching(true)} />
         <ModeToggle color={C.text} />
       </View>
       <ScrollView
@@ -210,6 +213,16 @@ export function Day() {
         <Button label="Sign out" kind="quiet" onPress={s.signOut} disabled={s.waiting > 0} />
         {s.waiting > 0 ? <Text style={st.small}>You can sign out once everything waiting has been sent.</Text> : null}
       </ScrollView>
+      {searching ? (
+        <SearchPanel close={() => setSearching(false)} hint="For example: a job number, a store, a part code, timesheet, fuel, purchase order."
+          places={([
+            ['timesheets', 'Timesheet'], ['pos', 'Purchase orders'], ['stock', 'My stock'], ['invoice', 'Scan a supplier slip'], ['return', 'Return stock'],
+            ['fuel', 'Fuel'], ['queries', 'Queries'], ['quotes', 'Quotes'], ['kit', 'My tools and PPE'], ['scan', 'Vehicle: scan in'], ['fault', 'Report a vehicle fault'],
+            ['flags', 'Flags and questions'], ['sync', 'Waiting to send'],
+          ] as const).map(([name, label]): SearchPlace => ({ key: name === 'timesheets' ? 'timesheet' : name === 'quotes' ? 'techquotes' : name, label, open: () => nav.push({ name } as never) }))}
+          open={{ job: id => nav.push({ name: 'job', jobId: id }), po: () => nav.push({ name: 'pos' }) }}
+          local={q => localSearch(q, (t?.jobs ?? []) as never, (s.cache.catalogue ?? []) as never)} />
+      ) : null}
     </View>
   );
 }

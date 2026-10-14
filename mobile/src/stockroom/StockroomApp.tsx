@@ -8,6 +8,7 @@ import { WorkshopAdd, WorkshopItem, WorkshopList, useWorkshop } from '../fleet/W
 import { BottomTabs } from '../BottomTabs.tsx';
 import { usePhoneMenu } from '../menu.tsx';
 import { ModeToggle } from '../appearance.tsx';
+import { SearchButton, SearchPanel } from '../search/Search.tsx';
 import { BrandLogo } from '../brand.tsx';
 import React, { useState } from 'react';
 import { Image, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
@@ -40,6 +41,7 @@ export function StockroomApp() {
   const ol = useOrderList();
   const [tab, setTab] = useState<Tab>('issue');
   const [sel, setSel] = useState<Sel>(null);
+  const [searching, setSearching] = useState(false);
   const [kitTick, setKitTick] = useState(0);
   const o = room.ctl.overview;
   // Standing in for the stock controller (an admin, when he is out): issuing stock and tools only.
@@ -130,6 +132,7 @@ export function StockroomApp() {
         <Text numberOfLines={1} style={{ color: K.bandText, opacity: 0.8 }}>{s.session?.user.name} · {s.session?.company.name}</Text>
       </View>
       <SyncPill />
+      <SearchButton color={K.bandText} onPress={() => setSearching(true)} />
       <ModeToggle color={K.bandText} />
       <Pressable onPress={room.load} accessibilityRole="button" accessibilityLabel="Refresh" hitSlop={8}
         style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: K.bandText }}>
@@ -154,6 +157,7 @@ export function StockroomApp() {
             {detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}
           </View>
         </View>
+        {searching ? <SearchPanel places={tabs.map(t => ({ key: t.key, label: t.label, open: () => { setTab(t.key); setSel(null); } }))} open={{ stock: id => { setTab('room'); setSel(room.ctl.room.some(x => x.id === id) ? { kind: 'part', id } : null); }, po: () => { setTab('pos'); setSel(null); } }} close={() => setSearching(false)} /> : null}
       </View>
     );
   }
@@ -165,6 +169,7 @@ export function StockroomApp() {
       {!sel ? (
         <BottomTabs tabs={tabs} current={tab} onSelect={k => { if (tab === 'live') room.seenActivity(); setTab(k); }} accent={K.band} bottom={ins.bottom} pinned={menu.pinned} />
       ) : null}
+      {searching ? <SearchPanel places={tabs.map(t => ({ key: t.key, label: t.label, open: () => { setTab(t.key); setSel(null); } }))} open={{ stock: id => { setTab('room'); setSel(room.ctl.room.some(x => x.id === id) ? { kind: 'part', id } : null); }, po: () => { setTab('pos'); setSel(null); } }} close={() => setSearching(false)} /> : null}
     </View>
   );
 }

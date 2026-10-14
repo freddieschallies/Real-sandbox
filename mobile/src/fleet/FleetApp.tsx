@@ -5,6 +5,7 @@ import { VehicleBarcodes } from './Barcodes.tsx';
 import { ItemPicture, Thumb } from '../ItemPicture.tsx';
 import { usePhoneMenu } from '../menu.tsx';
 import { ModeToggle } from '../appearance.tsx';
+import { SearchButton, SearchPanel } from '../search/Search.tsx';
 import { BrandLogo } from '../brand.tsx';
 import React, { useEffect, useState } from 'react';
 import { Image, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
@@ -36,6 +37,7 @@ export function FleetApp() {
   const [tab, setTab] = useState<Tab>('vehicles');
   useEffect(() => { if (tab === 'stock') ws.load(); }, [tab]);
   const [stack, setStack] = useState<Sel[]>([]);
+  const [searching, setSearching] = useState(false);
   const sel = stack.at(-1) ?? null;
   const open = (x: Sel) => setStack(st0 => (wide && (x.kind === 'vehicle' || x.kind === 'booking' || x.kind === 'wsitem' || (x.kind === 'assign' && !!x.techId && tab === 'techs')) ? [x] : [...st0, x]));
   const back = () => setStack(st0 => st0.slice(0, -1));
@@ -93,6 +95,7 @@ export function FleetApp() {
         <Text numberOfLines={1} style={{ color: K.bandText, opacity: 0.8 }}>{s.session?.user.name} · {s.session?.user.level === 'mechanic' ? 'Mechanic' : s.session?.user.level === 'creator' ? 'CEO' : 'Fleet'}</Text>
       </View>
       <SyncPill />
+      <SearchButton color={K.bandText} onPress={() => setSearching(true)} />
       <ModeToggle color={K.bandText} />
       <Pressable onPress={f.load} accessibilityRole="button" accessibilityLabel="Refresh" hitSlop={8}
         style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: K.bandText }}>
@@ -119,6 +122,7 @@ export function FleetApp() {
           <View style={{ width: 420, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
           <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose a vehicle, booking or technician.</Body></View>}</View>
         </View>
+        {searching ? <SearchPanel places={tabs.map(t => ({ key: t.key, label: t.label, open: () => { setTab(t.key); setStack([]); } }))} open={{ vehicle: id => { setTab('vehicles'); setStack([{ kind: 'vehicle', id }]); } }} close={() => setSearching(false)} /> : null}
       </View>
     );
   }
@@ -129,6 +133,7 @@ export function FleetApp() {
       {!sel ? (
         <BottomTabs tabs={tabs} current={tab} onSelect={k => setTab(k)} accent={K.band} bottom={ins.bottom} pinned={menu.pinned} />
       ) : null}
+      {searching ? <SearchPanel places={tabs.map(t => ({ key: t.key, label: t.label, open: () => { setTab(t.key); setStack([]); } }))} open={{ vehicle: id => { setTab('vehicles'); setStack([{ kind: 'vehicle', id }]); } }} close={() => setSearching(false)} /> : null}
     </View>
   );
 }

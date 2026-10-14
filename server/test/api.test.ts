@@ -2725,3 +2725,37 @@ test('timesheets: office time added by the technician, hours invoiced, unauthori
   assert.equal((await call('tech3', 'POST', `/me/timesheets/${D}/extra`, { kind: 'training', start: at('12:00'), minutes: 30 })).status, 409, 'submitted');
   assert.equal((await call('tech3', 'DELETE', `/me/timesheets/extra/${meet.body.id}`)).status, 409, 'submitted');
 });
+
+test('search: each person finds only what he may already see; stock prices only for who sees prices', async () => {
+  for (const who of ['books', 'tech', 'tech2', 'admin', 'stock', 'mech', 'director']) {
+    if ((await call(who, 'GET', '/me')).status === 401) tokens[who] = (await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW })).body.token;
+  }
+  const kinds = (b: { groups: { kind: string }[] }) => b.groups.map(g => g.kind);
+  const hits = (b: { groups: { kind: string; hits: { title: string; price?: string | null }[] }[] }, k: string) => b.groups.find(g => g.kind === k)?.hits ?? [];
+  assert.deepEqual((await call('tech', 'GET', '/search?q=a')).body.groups, [], 'two letters at least');
+  // The technician: his own job cards, stock without prices; no stores, customers, invoices or people.
+  const t = (await call('tech', 'GET', '/search?q=freshmart')).body;
+  assert.ok(hits(t, 'job').length > 0, JSON.stringify(kinds(t)));
+  for (const k of ['store', 'client', 'invoice', 'quote', 'person', 'vehicle', 'supplier_invoice']) assert.ok(!kinds(t).includes(k), `tech: no ${k}`);
+  const own = (await db.query('SELECT count(*)::int AS n FROM jobs j JOIN stores s ON s.id = j.store_id WHERE s.name ILIKE $1 AND (j.lead_technician_id = $2 OR EXISTS (SELECT 1 FROM job_helpers h WHERE h.job_id = j.id AND h.user_id = $2))', ['%freshmart%', ids.tech])).rows[0].n;
+  assert.equal(hits(t, 'job').length, Math.min(own, 6), 'only his own');
+  const ts = (await call('tech', 'GET', '/search?q=valve')).body;
+  assert.ok(hits(ts, 'stock').length && hits(ts, 'stock').every((h: { price?: string | null }) => !h.price), 'no prices for a technician');
+  // Words in any order.
+  assert.deepEqual(hits((await call('tech', 'GET', '/search?q=valve inlet')).body, 'stock').map((h: { title: string }) => h.title), hits(ts, 'stock').map((h: { title: string }) => h.title));
+  // Accounts: customers, invoices with their amounts, stock with prices.
+  const b = (await call('books', 'GET', '/search?q=freshmart')).body;
+  assert.ok(kinds(b).includes('client') && kinds(b).includes('invoice'), JSON.stringify(kinds(b)));
+  assert.ok(hits(b, 'invoice').every((h: { price?: string | null }) => h.price?.startsWith('R ')));
+  assert.ok(hits((await call('books', 'GET', '/search?q=valve')).body, 'stock').every((h: { price?: string | null }) => !!h.price), 'prices for Accounts');
+  const inv = (await db.query('SELECT invoice_number FROM invoices ORDER BY invoice_number LIMIT 1')).rows[0].invoice_number;
+  assert.ok(hits((await call('books', 'GET', `/search?q=${inv}`)).body, 'invoice').some((h: { title: string }) => h.title.startsWith(`Invoice ${inv} `)), 'by number');
+  // The mechanic: vehicles, no job cards of others.
+  const m = (await call('mech', 'GET', '/search?q=ND')).body;
+  assert.ok(kinds(m).includes('vehicle'), JSON.stringify(kinds(m)));
+  assert.ok(!kinds((await call('mech', 'GET', '/search?q=freshmart')).body).includes('client'));
+  // The stock controller: purchase orders and stock with prices, no invoices.
+  const st = (await call('stock', 'GET', '/search?q=voltex')).body;
+  assert.ok(!kinds(st).includes('invoice'));
+  assert.equal((await call('stock', 'GET', '/search?q=%25%25')).status, 200, 'odd characters are just text');
+});
