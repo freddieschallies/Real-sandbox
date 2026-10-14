@@ -36,6 +36,7 @@ import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob
 import { MyPasswordSettings } from '../screens/MyPassword.tsx';
 import { MoneyOutList, SupplierInvoiceDetail, SupplierInvoiceList } from './SupplierInvoices.tsx';
 import { DebtorDetail, DebtorList } from './Debtors.tsx';
+import { CustomerDetail, CustomerList } from './Customers.tsx';
 import { ProfitView } from './Profit.tsx';
 import { PurchaseOrderList } from './PurchaseOrders.tsx';
 import { AddPerson, LOGIN_PILL, LoginCard } from './Logins.tsx';
@@ -43,8 +44,8 @@ import { ImportCustomers, StoreDetail, StoreList, pointFrom } from './Stores.tsx
 import { BreakdownAlert, BreakdownById, BreakdownList, BreakdownSettings, type Bd } from './Breakdowns.tsx';
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
-type Tab = 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'pos' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
-type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | { kind: 'supplierinv'; id: string } | { kind: 'debtor'; id: string } | null;
+type Tab = 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'pos' | 'customers' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
+type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | { kind: 'supplierinv'; id: string } | { kind: 'debtor'; id: string } | { kind: 'customer'; id: string; show?: 'statement' } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
   cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
@@ -113,6 +114,7 @@ export function OfficeApp() {
     { key: 'invoices', label: 'Invoices', count: books.toInvoice.length || undefined },
     { key: 'supplier', label: 'Supplier invoices', short: 'Suppliers' },
     { key: 'pos', label: 'Purchase orders', short: 'POs' },
+    { key: 'customers', label: 'Customers' },
     { key: 'debtors', label: 'Debtors' },
     { key: 'profit', label: 'Profit' },
     { key: 'accounts', label: 'Accounts', short: 'Pastel' },
@@ -154,6 +156,7 @@ export function OfficeApp() {
       {tab === 'supplier' ? <SupplierInvoiceList open={id => setSel({ kind: 'supplierinv', id })} selected={sel?.kind === 'supplierinv' ? sel.id : null} tick={supTick} /> : null}
       {tab === 'debtors' ? <DebtorList open={id => setSel({ kind: 'debtor', id })} selected={sel?.kind === 'debtor' ? sel.id : null} tick={debTick} /> : null}
       {tab === 'pos' ? <PurchaseOrderList /> : null}
+      {tab === 'customers' ? <CustomerList open={id => setSel({ kind: 'customer', id })} selected={sel?.kind === 'customer' ? sel.id : null} /> : null}
       {tab === 'profit' ? <ProfitView openJob={id => go('jobs', { kind: 'job', id })} /> : null}
       {tab === 'accounts' ? <Accounts b={books} canPrices={does('prices')} canBooks={does('books')} /> : null}
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
@@ -194,7 +197,9 @@ export function OfficeApp() {
     if (sel.kind === 'breakdown') return wrap(<BreakdownById key={`${sel.id}-${bdTick}`} id={sel.id} b={sel.b} o={o} logIt={b => setSel({ kind: 'bdlog', b })} done={bdDone} />);
     if (sel.kind === 'store') return wrap(<StoreDetail key={sel.id} id={sel.id} o={o} canEdit={does('stores')} done={close} />);
     if (sel.kind === 'importcustomers') return wrap(<ImportCustomers o={o} done={close} />);
-    if (sel.kind === 'debtor') return wrap(<DebtorDetail key={sel.id} id={sel.id} changed={() => { setDebTick(t => t + 1); o.load(); }} openInvoice={id => go('invoices', { kind: 'invoice', id })} />);
+    if (sel.kind === 'debtor') return wrap(<DebtorDetail key={sel.id} id={sel.id} changed={() => { setDebTick(t => t + 1); o.load(); }} openInvoice={id => go('invoices', { kind: 'invoice', id })} openStatement={mine.includes('customers') ? () => go('customers', { kind: 'customer', id: sel.id, show: 'statement' }) : undefined} />);
+    if (sel.kind === 'customer') return wrap(<CustomerDetail key={`${sel.id}-${sel.show ?? ''}`} id={sel.id} start={sel.show ?? 'jobs'} co={books.company?.profile ?? {}} openJob={id => go('jobs', { kind: 'job', id })}
+      openInvoice={id => go('invoices', { kind: 'invoice', id })} openQuote={id => go('quotes', { kind: 'quote', id })} openDebtor={id => go('debtors', { kind: 'debtor', id })} />);
     if (sel.kind === 'supplierinv') return wrap(<SupplierInvoiceDetail key={sel.id} id={sel.id} changed={() => setSupTick(t => t + 1)} />);
     if (sel.kind === 'bdlog') {
       const b = sel.b;

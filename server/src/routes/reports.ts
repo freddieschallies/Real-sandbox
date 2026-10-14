@@ -49,6 +49,19 @@ async function picture(c: Q, photoId: string | null | undefined, cid: string): P
   try { return { cid, mime: p.content_type ?? 'image/jpeg', data: await readFile(join(uploadRoot(), p.file_path)) }; } catch { return null; }
 }
 
+/** The letterhead for an email: the CEO's top and bottom pictures (or the logo and company details), as cid pictures. */
+export async function letterheadForMail(c: Q) {
+  const prof = (await c.query('SELECT legal_name, trading_name, email, phone, address, reg_no, vat_no, logo_photo_id, bank_details, invoice_terms FROM company_profile')).rows[0] ?? {};
+  const lh = (await c.query('SELECT header_photo_id, footer_photo_id FROM company_letterhead')).rows[0];
+  const pics: MailPicture[] = [];
+  const add = async (photoId: string | null | undefined, cid: string) => { const p = await picture(c, photoId, cid); if (p) pics.push(p); return !!p; };
+  const head = (await add(lh?.header_photo_id, 'letterhead-top')) ? '<img src="cid:letterhead-top" style="width:100%;max-width:700px;display:block">'
+    : `${(await add(prof.logo_photo_id, 'logo')) ? '<img src="cid:logo" style="height:56px">' : ''}<div style="font:bold 18px Arial">${esc(prof.trading_name || prof.legal_name)}</div><div style="font:12px Arial;color:#555">${esc([prof.address, prof.phone, prof.email].filter(Boolean).join(' · '))}</div>`;
+  const foot = (await add(lh?.footer_photo_id, 'letterhead-bottom')) ? '<img src="cid:letterhead-bottom" style="width:100%;max-width:700px;display:block">'
+    : `<div style="font:11px Arial;color:#777">${esc([prof.legal_name, prof.reg_no ? `Reg ${prof.reg_no}` : '', prof.vat_no ? `VAT ${prof.vat_no}` : ''].filter(Boolean).join(' · '))}</div>`;
+  return { prof, head, foot, pics, add };
+}
+
 export function registerReportRoutes(app: FastifyInstance, mailer: Mailer | null) {
   const sees = (req: FastifyRequest, createdBy: string) => {
     if (createdBy !== req.actor.id && !can(req.actor, 'view_all_job_cards')) throw new Refused(403, ['not your report']);
@@ -119,14 +132,7 @@ export function registerReportRoutes(app: FastifyInstance, mailer: Mailer | null
     sees(req, r.created_by);
     if (!mailer) throw new Refused(503, ['email is not set up on the server yet (MAIL_URL): print or save the report as PDF instead']);
     const c = req.db;
-    const prof = (await c.query('SELECT legal_name, trading_name, email, phone, address, reg_no, vat_no, logo_photo_id FROM company_profile')).rows[0] ?? {};
-    const lh = (await c.query('SELECT header_photo_id, footer_photo_id FROM company_letterhead')).rows[0];
-    const pics: MailPicture[] = [];
-    const add = async (photoId: string | null | undefined, cid: string) => { const p = await picture(c, photoId, cid); if (p) pics.push(p); return !!p; };
-    const head = (await add(lh?.header_photo_id, 'letterhead-top')) ? '<img src="cid:letterhead-top" style="width:100%;max-width:700px;display:block">'
-      : `${(await add(prof.logo_photo_id, 'logo')) ? '<img src="cid:logo" style="height:56px">' : ''}<div style="font:bold 18px Arial">${esc(prof.trading_name || prof.legal_name)}</div><div style="font:12px Arial;color:#555">${esc([prof.address, prof.phone, prof.email].filter(Boolean).join(' · '))}</div>`;
-    const foot = (await add(lh?.footer_photo_id, 'letterhead-bottom')) ? '<img src="cid:letterhead-bottom" style="width:100%;max-width:700px;display:block">'
-      : `<div style="font:11px Arial;color:#777">${esc([prof.legal_name, prof.reg_no ? `Reg ${prof.reg_no}` : '', prof.vat_no ? `VAT ${prof.vat_no}` : ''].filter(Boolean).join(' · '))}</div>`;
+    const { prof, head, foot, pics, add } = await letterheadForMail(c);
     const photo = async (pid: string | null, cid: string, title: string, note?: string | null) => (await add(pid, cid))
       ? `<div style="margin:12px 0"><div style="font:bold 13px Arial">${esc(title)}</div>${note ? `<div style="font:13px Arial">${esc(note)}</div>` : ''}<img src="cid:${cid}" style="max-width:100%;width:520px;border:1px solid #ccc;margin-top:4px"></div>` : '';
     const body = [

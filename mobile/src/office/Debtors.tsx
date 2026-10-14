@@ -82,7 +82,7 @@ export function DebtorList({ open, selected, tick }: { open: (clientId: string) 
   );
 }
 
-export function DebtorDetail({ id, changed, openInvoice }: { id: string; changed: () => void; openInvoice: (invoiceId: string) => void }) {
+export function DebtorDetail({ id, changed, openInvoice, openStatement }: { id: string; changed: () => void; openInvoice: (invoiceId: string) => void; openStatement?: () => void }) {
   const ask = useAsk();
   const [d, setD] = useState<any>(null);
   const [reason, setReason] = useState('');
@@ -114,6 +114,7 @@ export function DebtorDetail({ id, changed, openInvoice }: { id: string; changed
           <Bands bands={d.summary.bands} />
         </Card>
       ) : <Body quiet>Nothing owed.</Body>}
+      {openStatement ? <Button label="Statement: print or email it" kind="secondary" onPress={openStatement} /> : null}
       {d.invoices.length ? <Heading>Unpaid invoices</Heading> : null}
       {d.invoices.map((i: any) => (
         <Card key={i.id} onPress={() => openInvoice(i.id)} accessibilityLabel={`Invoice ${i.number}`}>

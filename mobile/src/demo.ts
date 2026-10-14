@@ -1030,7 +1030,7 @@ export class DemoTransport implements Transport {
   private docRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
     const isDoc = /^\/jobs\/[^/]+\/no-charge$/.test(p) || p.startsWith('/quotes') || p.startsWith('/invoices') || p.startsWith('/pastel') || p.startsWith('/office/supplier-invoices')
-      || /^\/office\/clients\/[^/]+\/(rates|hold)$/.test(p) || p.startsWith('/office/debtors') || p === '/office/profit' || p === '/office/who' || ['/office/company', '/office/rates', '/office/to-invoice'].includes(p);
+      || p.startsWith('/office/clients') || p.startsWith('/office/debtors') || p === '/office/profit' || p === '/office/who' || ['/office/company', '/office/rates', '/office/to-invoice'].includes(p);
     if (!isDoc) return null;
     if (!['admin', 'accounts', 'management', 'director', 'creator', 'stockroom'].includes(this.who.level) || !this.does('documents')) return refuse(403, 'quotes and invoices are not part of your work');
     const d = this.docs();
@@ -1075,6 +1075,11 @@ export class DemoTransport implements Transport {
       return ok(r);
     }
     if ((m = p.match(/^\/office\/debtors\/([^/]+)$/))) return ok(d.debtor(decodeURIComponent(m[1]), books));
+    // Customers: every job, invoice, credit note and quote; the statement, printed or emailed.
+    if (p === '/office/clients' && get) return ok(d.customers());
+    if ((m = p.match(/^\/office\/clients\/([^/]+)\/statement$/)) && get) return done(d.statement(decodeURIComponent(m[1]), q.get('from'), q.get('to'), true));
+    if ((m = p.match(/^\/office\/clients\/([^/]+)\/statement\/email$/))) { const r = d.emailStatement(decodeURIComponent(m[1]), b, this.who.name); this.persist(this.state); return done(r); }
+    if ((m = p.match(/^\/office\/clients\/([^/]+)$/)) && get) return done(d.customer(decodeURIComponent(m[1])));
     if ((m = p.match(/^\/office\/clients\/([^/]+)\/hold$/))) {
       if (!books) return refuse(403, 'only the CEO and Accounts put an account on hold');
       const r = d.setHold(decodeURIComponent(m[1]), !!b.on, b.reason, this.who.name);

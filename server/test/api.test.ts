@@ -2583,3 +2583,54 @@ test('a PO made outside the app and posted in the purchase orders group is added
   const bd = await bridge('POST', '/internal/whatsapp/message', { companyId: ids.company, id: 'WA-BD-9', groupJid: '123@g.us', at: new Date().toISOString(), text: 'FreshMart Meerensee door seal torn' });
   assert.ok(!bd.body.purchaseOrderId);
 });
+
+test('a customer: every job, invoice, credit note and quote, with what was invoiced, paid, credited and is owed', async () => {
+  for (const who of ['books', 'tech']) {
+    if ((await call(who, 'GET', '/me')).status === 401) tokens[who] = (await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW })).body.token;
+  }
+  assert.equal((await call('tech', 'GET', '/office/clients')).status, 403);
+  const list = (await call('books', 'GET', '/office/clients')).body as { id: string; jobs: number; invoiced: number; credited: number; owing: number }[];
+  const fm = list.find(c => c.id === ids.client)!;
+  assert.ok(fm.jobs > 0 && fm.invoiced > 0 && fm.credited > 0, JSON.stringify(fm));
+  const d = (await call('books', 'GET', `/office/clients/${ids.client}`)).body;
+  assert.equal(d.client.id, ids.client);
+  assert.equal(d.jobs.length, d.summary.jobs);
+  assert.ok(d.jobs.every((j: { outcome: { label: string } }) => j.outcome.label), 'each job says where its money stands');
+  assert.ok(d.invoices.length >= 1 && d.credits.length >= 1);
+  assert.equal(d.credits[0].invoice_number > 0, true, 'each credit note says which invoice');
+  assert.equal(d.summary.invoiced, fm.invoiced, 'the list and the customer agree');
+  assert.equal(d.summary.owing, fm.owing);
+});
+
+test('a customer statement: brought forward, every invoice, credit note and payment with the balance, the age analysis; printed or emailed', async () => {
+  for (const who of ['books', 'tech']) {
+    if ((await call(who, 'GET', '/me')).status === 401) tokens[who] = (await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW })).body.token;
+  }
+  assert.equal((await call('tech', 'GET', `/office/clients/${ids.client}/statement`)).status, 403);
+  const all = (await call('books', 'GET', `/office/clients/${ids.client}/statement`)).body;
+  const s = all.statement;
+  assert.equal(s.from, null);
+  assert.ok(s.lines.some((l: { kind: string }) => l.kind === 'invoice') && s.lines.some((l: { kind: string }) => l.kind === 'credit'), JSON.stringify(s.lines.map((l: { kind: string }) => l.kind)));
+  assert.equal(s.closing, s.debits - s.credits, 'the balance is debits less credits');
+  assert.equal(s.lines.at(-1).balanceCents, s.closing);
+  const owing = (await call('books', 'GET', `/office/clients/${ids.client}`)).body.summary.owing;
+  assert.equal(Object.values(s.ages as Record<string, number>).reduce((n, v) => n + v, 0), owing, 'the ages add up to what is owed');
+  // A period starting tomorrow: everything is brought forward, nothing in it.
+  const tomorrow = new Date(Date.now() + 86_400_000 + 2 * 3_600_000).toISOString().slice(0, 10);
+  const later = (await call('books', 'GET', `/office/clients/${ids.client}/statement?from=${tomorrow}&to=${tomorrow}`)).body.statement;
+  assert.equal(later.lines.length, 0);
+  assert.equal(later.opening, s.closing);
+  assert.equal((await call('books', 'GET', `/office/clients/${ids.client}/statement?from=2026-05-01&to=2026-04-01`)).status, 400);
+  // Emailed on the letterhead; kept.
+  assert.equal((await call('books', 'POST', `/office/clients/${ids.client}/statement/email`, { to: ['not an email'] })).status, 400);
+  const before = mailBox.length;
+  const sent = await call('books', 'POST', `/office/clients/${ids.client}/statement/email`, { to: ['accounts@freshmart.test'], message: 'Please find your statement.' });
+  assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  const m = mailBox.at(-1)!;
+  assert.equal(mailBox.length, before + 1);
+  assert.deepEqual(m.to, ['accounts@freshmart.test']);
+  assert.match(m.subject, /^Statement: /);
+  assert.match(m.html, /120 days \+/);
+  assert.match(m.html, /balance due/i);
+  assert.equal((await call('books', 'GET', `/office/clients/${ids.client}/statement`)).body.emails.length, 1, 'kept');
+});

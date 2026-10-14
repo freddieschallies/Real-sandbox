@@ -5,6 +5,8 @@ import * as P from '../../server/src/core/pastel.ts';
 import * as R from '../../server/src/core/clientRates.ts';
 import * as DB from '../../server/src/core/debtors.ts';
 import * as PF from '../../server/src/core/profit.ts';
+import * as ST from '../../server/src/core/statement.ts';
+import { jobOutcome } from '../../server/src/core/jobOutcome.ts';
 import { REAL } from './demoReal.ts';
 
 type Line = D.DocLine & { id: string };
@@ -30,6 +32,10 @@ export interface DemoDocsState {
   holdLog?: { client: string; on_hold: boolean; reason: string | null; job_number: number | null; by: string; at: string }[];
   /** Two older unpaid invoices seeded for the debtors list. */
   agedSeeded?: boolean;
+  /** An older paid invoice with a credit note, so a statement shows payments and credits. */
+  paidSeeded?: boolean;
+  /** Statements emailed (the demo sends nothing). */
+  statementEmails?: { client: string; sent_to: string[]; sent_at: string; ok: boolean; error: null; period_from: string | null; period_to: string; balance_cents: number; sent_by: string }[];
   nextCredit?: number;
   /** Closed at no charge (warranty, callback, ...): the office's billing decision, beside the locked job card. */
   noCharge?: Record<string, { reason: string; note: string | null; by: string; at: string }>;
@@ -386,6 +392,18 @@ export class DemoDocs {
   }
   /** Seeds two older unpaid invoices (for jobs made for it) so the debtors list shows its ages. */
   seedAged(make: (n: number, storeId: string, daysAgo: number) => string | null) {
+    if (!this.d.paidSeeded) {
+      this.d.paidSeeded = true;
+      const jobId = make(10120, 'harbour', 80);
+      if (jobId) {
+        const at = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+        const id = nid('inv');
+        this.d.invoices.push({ id, invoice_number: 6940, status: 'paid', job_id: jobId, notes: null, client_ref: 'HD-2190', created_at: at(80), sent_at: at(80),
+          due_date: addDays(at(80).slice(0, 10), 30), paid_at: at(44).slice(0, 10), paid_ref: 'EFT HD 0412', cancel_note: null, created_by: 'Zanele Khoza', vat_pct: 15, pastel_batch_id: null,
+          lines: [{ id: nid('dl'), kind: 'labour', description: 'Labour, job 10120', qty: 3, unitPriceCents: 65000 }, { id: nid('dl'), kind: 'call_out', description: 'Call-out', qty: 1, unitPriceCents: 45000 }] });
+        (this.d.credits ??= []).push({ id: nid('cn'), credit_number: 8990, invoice_id: id, job_id: jobId, amount_cents: 45000, vat_pct: 15, reason: 'Call-out waived (second visit, same fault)', created_at: at(60), created_by: 'Zanele Khoza' });
+      }
+    }
     if (this.d.agedSeeded) return;
     this.d.agedSeeded = true;
     const add = (n: number, num: number, storeId: string, daysAgo: number, lines: D.DocLine[], ref: string) => {
@@ -398,6 +416,88 @@ export class DemoDocs {
     };
     add(10150, 6980, 'harbour', 47, [{ kind: 'labour', description: 'Labour, job 10150', qty: 2.5, unitPriceCents: 65000 }, { kind: 'call_out', description: 'Call-out', qty: 1, unitPriceCents: 45000 }], 'HD-2231');
     add(10131, 6955, 'esikhawini', 104, [{ kind: 'labour', description: 'Labour, job 10131', qty: 4, unitPriceCents: 65000 }, { kind: 'stock', description: 'Condenser fan motor 10W', qty: 1, unitPriceCents: 89000 }], 'BX-21980');
+  }
+
+  // ---- Customers and statements (the client's name is its id in the demo) ----------------------
+  private clientOfDoc(i: { job_id: string | null; store_id?: string | null }) { return this.storeOf(i)?.client ?? '?'; }
+  private incl(ex: number, vat: number) { return D.totals([{ qty: 1, unitPriceCents: ex }], vat).totalCents; }
+  private money(client: string) {
+    const live = this.d.invoices.filter(i => (i.status === 'sent' || i.status === 'paid') && this.clientOfDoc(i) === client);
+    const g = { invoiced: 0, paid: 0, credited: 0, owing: 0, invoices: live.length };
+    for (const i of live) {
+      const t = this.incl(this.exVat(i.lines), i.vat_pct), c = this.incl(this.creditedOn(i.id), i.vat_pct);
+      g.invoiced += t; g.credited += c;
+      if (i.status === 'paid') g.paid += t; else g.owing += Math.max(0, t - c);
+    }
+    return g;
+  }
+  private jobsOf(client: string) { return this.src.jobs.filter(j => this.src.stores.find(s => s.id === j.meta.store_id)?.client === client); }
+  customers() {
+    return this.clients().map(c => {
+      const jobs = this.jobsOf(c.name);
+      return { ...c, on_hold: !!this.holdOf(c.name), contact_name: null, phone: null, email: null, jobs: jobs.length, open_jobs: jobs.filter(j => !['closed', 'cancelled'].includes(j.card.status)).length, ...this.money(c.name) };
+    });
+  }
+  customer(id: string): Res {
+    const c = this.clients().find(x => x.id === id);
+    if (!c) return bad(404, 'no such client');
+    const h = this.holdOf(id);
+    const jobs = this.jobsOf(id).map(j => {
+      const b = this.billingOf(j.meta.id);
+      const m = j.meta as typeof j.meta & { scheduled_date?: string; cancelled_by_party?: string | null };
+      return { id: m.id, job_number: m.job_number, job_type: m.job_type, status: j.card.status, scheduled_date: m.scheduled_date ?? null, fault_reported: m.fault_reported, store: m.store, technician: m.lead_technician,
+        client_order_ref: m.client_order_ref, closed: j.closedAt?.slice(0, 10) ?? null, cancelled_by_party: m.cancelled_by_party ?? null, no_charge_reason: b.no_charge_reason, invoice_number: b.invoice_number, invoice_status: b.invoice_status,
+        credited_cents: b.credited_cents, outcome: jobOutcome({ status: j.card.status, ...b, cancelled_by_party: m.cancelled_by_party ?? null }) };
+    }).sort((a, b) => b.job_number - a.job_number);
+    const invoices = this.d.invoices.filter(i => this.clientOfDoc(i) === id).map(i => ({
+      id: i.id, invoice_number: i.invoice_number, status: i.status, created_at: i.created_at, sent_at: i.sent_at, paid_at: i.paid_at, paid_ref: i.paid_ref, due_date: i.due_date, vat_pct: i.vat_pct,
+      job_number: this.job(i.job_id)?.meta.job_number ?? null, store: this.storeOf(i)?.name ?? null, client_ref: i.client_ref,
+      total_cents: this.incl(this.exVat(i.lines), i.vat_pct), credited_cents: this.incl(this.creditedOn(i.id), i.vat_pct),
+    })).sort((a, b) => b.invoice_number - a.invoice_number);
+    const credits = (this.d.credits ?? []).filter(x => this.clientOfDoc({ job_id: x.job_id }) === id).map(x => {
+      const i = this.d.invoices.find(v => v.id === x.invoice_id);
+      return { id: x.id, credit_number: x.credit_number, amount_cents: x.amount_cents, vat_pct: x.vat_pct, reason: x.reason, created_at: x.created_at, created_by: x.created_by, invoice_id: x.invoice_id,
+        invoice_number: i?.invoice_number ?? null, job_number: this.job(x.job_id)?.meta.job_number ?? null, total_cents: this.incl(x.amount_cents, x.vat_pct) };
+    }).sort((a, b) => b.credit_number - a.credit_number);
+    const quotes = this.d.quotes.filter(q => this.clientOfDoc(q) === id).map(q => ({
+      id: q.id, quote_number: q.quote_number, status: q.status, title: q.title, created_at: q.created_at, sent_at: q.sent_at, store: this.storeOf(q)?.name ?? null,
+      job_number: this.job(q.job_id)?.meta.job_number ?? null, vat_pct: q.vat_pct, total_cents: this.incl(this.exVat(q.lines), q.vat_pct),
+    })).sort((a, b) => b.quote_number - a.quote_number);
+    const m = this.money(id);
+    return good({
+      client: { id, name: id, pastel_code: c.pastel_code, account_code: null, contact_name: null, phone: null, email: null, on_hold: !!h, hold_reason: h?.reason ?? null, own_rates: c.own_rates },
+      stores: this.src.stores.filter(s => s.client === id).map(s => ({ id: s.id, name: s.name, address: s.address, branch_code: null, jobs: this.src.jobs.filter(j => j.meta.store_id === s.id).length })),
+      jobs, invoices, credits, quotes,
+      summary: { jobs: jobs.length, openJobs: jobs.filter(j => !['closed', 'cancelled'].includes(j.status)).length, invoiced: m.invoiced, paid: m.paid, credited: m.credited, owing: m.owing, toInvoice: jobs.filter(j => j.outcome.key === 'to_invoice').length },
+    });
+  }
+  private statementData(id: string, from: string | null, to: string) {
+    const inv = this.d.invoices.filter(i => (i.status === 'sent' || i.status === 'paid') && this.clientOfDoc(i) === id);
+    return ST.buildStatement(
+      inv.map(i => ({ id: i.id, number: i.invoice_number, date: (i.sent_at ?? i.created_at).slice(0, 10), due: i.due_date, paid: i.status === 'paid' ? (i.paid_at ?? today()).slice(0, 10) : null, paidRef: i.paid_ref,
+        jobNumber: this.job(i.job_id)?.meta.job_number ?? null, store: this.storeOf(i)?.name ?? null, clientRef: i.client_ref, totalCents: this.incl(this.exVat(i.lines), i.vat_pct) })),
+      (this.d.credits ?? []).filter(x => inv.some(i => i.id === x.invoice_id)).map(x => ({ number: x.credit_number, date: x.created_at.slice(0, 10), invoiceId: x.invoice_id, reason: x.reason, totalCents: this.incl(x.amount_cents, x.vat_pct) })),
+      from, to);
+  }
+  statement(id: string, from: string | null, to: string | null, canEmail: boolean): Res {
+    const c = this.clients().find(x => x.id === id);
+    if (!c) return bad(404, 'no such client');
+    const upTo = to ?? today();
+    if (from && from > upTo) return bad(400, 'the start is after the end');
+    return good({ client: { id, name: id, pastel_code: c.pastel_code, contact_name: null, email: null, phone: null }, statement: this.statementData(id, from, upTo),
+      company: { bank_details: this.d.profile?.bank_details ?? null, invoice_terms: this.d.profile?.invoice_terms ?? null },
+      emails: (this.d.statementEmails ?? []).filter(e => e.client === id).slice().reverse(), storeEmails: [], canEmail, mailReady: true });
+  }
+  emailStatement(id: string, b: { to?: string[]; from?: string | null; upTo?: string; message?: string }, by: string): Res {
+    const list = (b.to ?? []).map(x => String(x).trim()).filter(Boolean);
+    if (!list.length) return bad(400, 'who to send it to');
+    const badOne = list.find(x => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+    if (badOne) return bad(400, `${badOne}: a valid email address`);
+    const r = this.statement(id, b.from ?? null, b.upTo ?? null, true);
+    if (!r.ok) return r;
+    const s = (r.body as { statement: ST.Statement }).statement;
+    (this.d.statementEmails ??= []).push({ client: id, sent_to: list, sent_at: new Date().toISOString(), ok: true, error: null, period_from: s.from, period_to: s.to, balance_cents: s.closing, sent_by: by });
+    return good({ ok: true, to: list, balance: s.closing });
   }
 
   // ---- Who did what (for reference) -----------------------------------------------------------

@@ -609,3 +609,31 @@ test('QR stickers: the right size for the code, the three corner squares, the sa
   assert.match(c, /^V-[A-HJ-NP-Z2-9]{6}$/); assert.ok(validVehicleCode(c));
   assert.ok(validVehicleCode('ZSP-V07')); assert.ok(!validVehicleCode('zsp v07'));
 });
+
+test('statement: brought forward, credit notes and payments, the running balance and the ages on the day', async () => {
+  const { buildStatement, periodDates } = await import('../src/core/statement.ts');
+  const inv = [
+    { id: 'a', number: 1001, date: '2026-05-10', due: '2026-06-09', totalCents: 115000, paid: '2026-06-20', paidRef: 'EFT 1' },
+    { id: 'b', number: 1002, date: '2026-06-15', due: '2026-07-15', totalCents: 23000, paid: null },
+    { id: 'c', number: 1003, date: '2026-09-01', due: '2026-10-01', totalCents: 57500, paid: null },
+  ];
+  const cr = [{ number: 5001, date: '2026-06-01', invoiceId: 'a', totalCents: 15000, reason: 'Callout waived' }];
+  const all = buildStatement(inv, cr, null, '2026-10-14');
+  assert.deepEqual(all.lines.map(l => l.kind), ['invoice', 'credit', 'invoice', 'payment', 'invoice']);
+  assert.equal(all.lines.find(l => l.kind === 'payment')!.creditCents, 100000, 'paid what was left after the credit note');
+  assert.equal(all.closing, 23000 + 57500);
+  assert.equal(all.ages.d120, 23000, '15 June is 121 days before 14 October');
+  assert.equal(all.ages.d30, 57500);
+  assert.equal(all.overdue, 23000 + 57500);
+  const sep = buildStatement(inv, cr, '2026-09-01', '2026-09-30');
+  assert.equal(sep.opening, 23000);
+  assert.equal(sep.lines.length, 1);
+  assert.equal(sep.closing, 80500);
+  // On 31 May: invoice 1001 was still owed (not yet paid), before its credit note.
+  const may = buildStatement(inv, cr, null, '2026-05-31');
+  assert.equal(may.closing, 115000);
+  assert.equal(may.ages.current, 115000);
+  assert.deepEqual(periodDates('last', '2026-03-14'), { from: '2026-02-01', to: '2026-02-28' });
+  assert.deepEqual(periodDates('three', '2026-01-05'), { from: '2025-11-01', to: '2026-01-05' });
+  assert.deepEqual(periodDates('all', '2026-01-05'), { from: null, to: '2026-01-05' });
+});
