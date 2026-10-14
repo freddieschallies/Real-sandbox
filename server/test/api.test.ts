@@ -2634,3 +2634,94 @@ test('a customer statement: brought forward, every invoice, credit note and paym
   assert.match(m.html, /balance due/i);
   assert.equal((await call('books', 'GET', `/office/clients/${ids.client}/statement`)).body.emails.length, 1, 'kept');
 });
+
+test('timesheets: office time added by the technician, hours invoiced, unauthorised trips, and performance and money only for who may see them', async () => {
+  // A new technician with one job yesterday: Go 08:00, arrived 08:30, finished 11:00; invoiced 2.5 h labour and 0.5 h travel time.
+  const hash = (await db.query("SELECT password_hash FROM users WHERE id = $1", [ids.tech])).rows[0].password_hash;
+  ids.tech3 = (await db.query("INSERT INTO users (full_name, email, login_level, department_id, password_hash) VALUES ('tech3', 'tech3@zsp.test', 'technician', $1, $2) RETURNING id", [ids.dept, hash])).rows[0].id;
+  await db.query('INSERT INTO logins (email, user_id, company_id) VALUES ($1, $2, $3)', ['tech3@zsp.test', ids.tech3, ids.company]);
+  await db.query("UPDATE users SET created_at = now() - interval '10 days' WHERE id = $1", [ids.tech3]);
+  tokens.tech3 = (await call('', 'POST', '/auth/login', { email: 'tech3@zsp.test', password: PW })).body.token;
+  assert.equal((await call('tech3', 'POST', '/policy/acknowledge', { policyVersionId: ids.policy })).status, 200);
+  for (const who of ['books', 'hr', 'manager', 'director']) {
+    if ((await call(who, 'GET', '/me')).status === 401) tokens[who] = (await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW })).body.token;
+  }
+  const D = new Date(Date.now() - 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+  const at = (hhmm: string) => `${D}T${hhmm}:00+02:00`;
+  const job = (await db.query("INSERT INTO jobs (job_type, store_id, fault_reported, scheduled_date, lead_technician_id, created_by) VALUES ('breakdown', $1, 'Cold room warm', $2, $3, $4) RETURNING id",
+    [ids.store, D, ids.tech3, ids.admin])).rows[0].id;
+  await db.query("INSERT INTO job_visits (job_id, technician_id, state, go_at, arrived_at, started_at, ended_at) VALUES ($1, $2, 'done', $3, $4, $5, $6)", [job, ids.tech3, at('08:00'), at('08:30'), at('08:35'), at('11:00')]);
+  const inv = (await db.query("INSERT INTO invoices (job_id, created_by) VALUES ($1, $2) RETURNING id", [job, ids.admin])).rows[0].id;
+  await db.query("INSERT INTO document_lines (invoice_id, kind, description, qty, unit_price_cents) VALUES ($1, 'labour', 'Labour', 2.5, 65000), ($1, 'travel', 'Travel time, there and back', 0.5, 30000), ($1, 'travel', 'Travel, there and back', 40, 900)", [inv]);
+  await db.query("UPDATE invoices SET status = 'sent', sent_at = now() WHERE id = $1", [inv]);
+  // Trips: one to the job, and one at 19:00 with no reason (30 km).
+  const veh = (await db.query("INSERT INTO vehicles (registration, tank_litres, barcode) VALUES ('ND 333-111', 80, 'ZSP-T3') RETURNING id", [])).rows[0].id;
+  const visit = (await db.query('SELECT id FROM job_visits WHERE job_id = $1', [job])).rows[0].id;
+  await db.query("INSERT INTO trips (vehicle_id, driver_id, started_at, ended_at, distance_km, purpose, job_visit_id) VALUES ($1, $2, $3, $4, 12, 'job', $5)", [veh, ids.tech3, at('08:00'), at('08:30'), visit]);
+  const bad = (await db.query("INSERT INTO trips (vehicle_id, driver_id, started_at, ended_at, distance_km, purpose) VALUES ($1, $2, $3, $4, 30, 'none') RETURNING id", [veh, ids.tech3, at('19:00'), at('19:40')])).rows[0].id;
+
+  // He adds office time: a meeting before the job. Not over the job; "other" needs a word.
+  const me = (await call('tech3', 'GET', '/me/timesheets')).body;
+  assert.ok(me.extraKinds.some((k: { key: string }) => k.key === 'meeting'));
+  assert.ok(me.today.date > D);
+  assert.equal((await call('tech3', 'POST', `/me/timesheets/${D}/extra`, { kind: 'meeting', start: at('08:15'), minutes: 30 })).status, 409, 'over the job');
+  assert.equal((await call('tech3', 'POST', `/me/timesheets/${D}/extra`, { kind: 'other', start: at('06:00'), minutes: 30 })).status, 400, 'say what it was');
+  const meet = await call('tech3', 'POST', `/me/timesheets/${D}/extra`, { kind: 'meeting', start: at('07:00'), minutes: 45 });
+  assert.equal(meet.status, 200, JSON.stringify(meet.body));
+  assert.equal((await call('tech3', 'POST', `/me/timesheets/${D}/extra`, { kind: 'training', start: at('07:30'), minutes: 20 })).status, 409, 'over the meeting');
+  const ready = await call('tech3', 'POST', `/me/timesheets/${D}/extra`, { kind: 'getting_ready', start: at('11:10'), minutes: 20 });
+  assert.equal(ready.status, 200);
+  const mine = (await call('tech3', 'GET', `/me/timesheets/${D}`)).body;
+  assert.equal(mine.day.officeMin, 65);
+  assert.equal(mine.day.travelMin, 30);
+  assert.equal(mine.day.workMin, 150);
+  assert.equal(mine.pay.paidMin, 30 + 150 + 65, 'office time is paid');
+  assert.equal(mine.day.start, new Date(at('07:00')).toISOString(), 'his day starts with the meeting');
+  assert.equal(mine.day.invoicedMin, 180, '2.5 h labour + 0.5 h travel time');
+  assert.equal(mine.day.trips.length, 1);
+  assert.deepEqual(mine.day.trips[0].why, ['no_reason', 'after_hours']);
+  assert.equal(mine.money, undefined, 'no money for the technician');
+
+  // His manager takes the getting-ready time off (he is told why); the trip is allowed, then not.
+  assert.equal((await call('manager', 'POST', `/timesheets/extra/${ready.body.id}/remove`, { reason: 'x' })).status, 400);
+  assert.equal((await call('manager', 'POST', `/timesheets/extra/${ready.body.id}/remove`, { reason: 'Van was loaded the day before' })).status, 200);
+  assert.ok((await call('tech3', 'GET', '/me/notifications')).body.some((n: { message: string }) => /taken off your timesheet: Van was loaded/.test(n.message)));
+  assert.equal((await call('manager', 'POST', `/timesheets/trips/${bad}/allow`, { note: 'Sent to the after-hours call' })).status, 200);
+  let hr = (await call('hr', 'GET', `/timesheets?from=${D}&to=${D}&userId=${ids.tech3}`)).body;
+  assert.equal(hr.technicians[0].totals.officeMin, 45);
+  assert.equal(hr.technicians[0].totals.unauthorisedTrips, 0, 'allowed');
+  assert.equal((await call('manager', 'DELETE', `/timesheets/trips/${bad}/allow`)).status, 200);
+  hr = (await call('hr', 'GET', `/timesheets?from=${D}&to=${D}&userId=${ids.tech3}`)).body;
+  assert.equal(hr.technicians[0].totals.unauthorisedTrips, 1);
+  assert.equal(hr.technicians[0].totals.unauthorisedKm, 30);
+  assert.equal(hr.technicians[0].totals.invoicedMin, 180);
+  assert.equal(hr.technicians[0].performance, null, 'not switched on for him');
+
+  // Only the CEO and Accounts switch performance on and set his cost.
+  assert.equal((await call('hr', 'PUT', `/timesheets/worth/${ids.tech3}`, { showPerformance: true })).status, 403);
+  assert.equal((await call('manager', 'PUT', `/timesheets/worth/${ids.tech3}`, { showPerformance: true })).status, 403);
+  assert.equal((await call('books', 'PUT', `/timesheets/worth/${ids.tech3}`, { showPerformance: true, costPerHourCents: 20000 })).status, 200);
+  assert.equal((await call('director', 'PUT', '/office/rates', { vehicle_cost_per_km: 500 })).status, 200);
+  const books = (await call('books', 'GET', `/timesheets?from=${D}&to=${D}&userId=${ids.tech3}`)).body.technicians[0];
+  assert.ok(books.performance.some((l: { label: string; value: string }) => l.label === 'Hours invoiced' && l.value.startsWith('3:00')), JSON.stringify(books.performance));
+  const money = Object.fromEntries((books.money as { label: string; value: string }[]).map(l => [l.label, l.value]));
+  // Paid 30 + 150 + 45 min = 3:45 at R200 = R750; 42 km at R5 = R210.
+  assert.equal(money['He cost the company'], 'R 960,00', JSON.stringify(money));
+  assert.equal(money['Made the company (his share of invoices, excl. VAT)'], `R ${(2.5 * 650 + 0.5 * 300 + 40 * 9).toLocaleString('en-ZA', { minimumFractionDigits: 2 })}`);
+  assert.ok(books.verdict.text);
+  assert.equal(books.settings.costPerHourCents, 20000);
+  const hrView = (await call('hr', 'GET', `/timesheets?from=${D}&to=${D}&userId=${ids.tech3}`)).body.technicians[0];
+  assert.ok(hrView.performance.length > 0, 'HR sees his performance');
+  assert.equal(hrView.money, null, 'but not the money');
+  assert.equal(hrView.verdict, null);
+  const mgr = (await call('manager', 'GET', `/timesheets?from=${D}&to=${D}&userId=${ids.tech3}`)).body.technicians[0];
+  assert.equal(mgr.performance, null, 'not his manager');
+  assert.equal(mgr.settings, null);
+
+  // He submits the day: the office time stays on it; after that he cannot add more.
+  const sent = await call('tech3', 'POST', `/me/timesheets/${D}/submit`, { at: new Date().toISOString(), note: 'Waited for the store to open' });
+  assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  assert.equal((await call('tech3', 'GET', `/me/timesheets/${D}`)).body.day.officeMin, 45);
+  assert.equal((await call('tech3', 'POST', `/me/timesheets/${D}/extra`, { kind: 'training', start: at('12:00'), minutes: 30 })).status, 409, 'submitted');
+  assert.equal((await call('tech3', 'DELETE', `/me/timesheets/extra/${meet.body.id}`)).status, 409, 'submitted');
+});

@@ -4,10 +4,15 @@
 import * as T from '../../server/src/core/timesheet.ts';
 import type { Flag } from './types.ts';
 import type { DemoOfficeState } from './demoOffice.ts';
-import { mayHaveIncidents } from './demoReal.ts';
+import { EXAMPLE_TECH, REAL, mayHaveIncidents } from './demoReal.ts';
+import * as W from '../../server/src/core/worth.ts';
 
 export interface DemoTimesState { submitted: Record<string, { at: string; note: string | null; day: T.Day; filledBy?: string | null }>; seeded?: boolean; rules?: T.PayRules;
-  /** Who looked at timesheets (the log HR and the CEO see). */ views?: { at: string; by: string; userId: string | null; departmentId: string | null; from?: string; to?: string; history?: boolean }[] }
+  /** Who looked at timesheets (the log HR and the CEO see). */ views?: { at: string; by: string; userId: string | null; departmentId: string | null; from?: string; to?: string; history?: boolean }[];
+  /** Office time the technicians added (by technician|date), and seeded or added ones the office took off. */
+  extras?: Record<string, T.ExtraIn[]>; removedExtras?: Record<string, { by: string; reason: string; at: string }>;
+  /** Trips the office allowed; per technician: performance shown, cost per hour; the working hours. */
+  allowedTrips?: Record<string, { by: string; note: string; at: string }>; worth?: Record<string, { showPerformance: boolean; costPerHourCents: number | null }>; hours?: T.WorkHours }
 export interface RealVisit { jobId: string; jobNumber: number; store: string; fault: string; techIds: string[]; visits: { goAt?: string; arrivedAt?: string; startedAt?: string; endedAt?: string; state: string; pauses: { reason: string; at: string; resumedAt?: string }[] }[] }
 
 type Res = { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] };
@@ -125,17 +130,131 @@ export class DemoTimes {
   }
 
   rules(): T.PayRules { return this.t.rules ?? T.DEFAULT_PAY; }
-  setRules(b: { weekdayNormalMin?: number; saturdayNormalMin?: number }): Res {
+  setRules(b: { weekdayNormalMin?: number; saturdayNormalMin?: number; workStartMin?: number; workEndMin?: number }): Res {
     const w = Number(b.weekdayNormalMin), sa = Number(b.saturdayNormalMin);
     if (!(w >= 60 && w <= 720) || !(sa >= 0 && sa <= 720)) return bad(400, 'hours like 8:00 (between 1 and 12 hours on a weekday)');
+    if (b.workStartMin !== undefined && b.workEndMin !== undefined) {
+      const a = Number(b.workStartMin), e = Number(b.workEndMin);
+      if (!(a >= 0 && e <= 1440 && e > a)) return bad(400, 'the working day must end after it starts');
+      this.t.hours = { startMin: a, endMin: e };
+    }
     this.t.rules = { weekdayNormalMin: w, saturdayNormalMin: sa };
     return good(this.t.rules);
   }
 
   sheet(techId: string, date: string) {
     const sub = this.submitted(techId, date);
-    const day = sub?.day ?? this.dayOf(techId, date);
+    const base = sub?.day ?? this.dayOf(techId, date);
+    const day = this.full(techId, date, base);
     return { date, label: dayLabel(date), weekday: T.isWeekday(date), submitted: sub ? { at: sub.at, note: sub.note, filledBy: (sub as { filledBy?: string | null }).filledBy ?? null } : null, day, pay: T.payOf(day, date, this.rules()), flags: this.flagsOn(techId, date) };
+  }
+
+  // ---- Office time, hours invoiced, trips, and what he made and cost ---------------------------------
+  hours(): T.WorkHours { return this.t.hours ?? T.DEFAULT_HOURS; }
+  private real_(techId: string, date: string) { return this.real.some(r => r.techIds.includes(techId) && (r.visits ?? []).some(v => v.goAt && sastDateOf(v.goAt) === date)); }
+  /** Seeded office time on past made-up days: getting ready before the first job, and the Monday toolbox talk. */
+  private seededExtras(techId: string, date: string, base: T.Day): T.ExtraIn[] {
+    if (date >= sast() || !base.jobs.length || this.real_(techId, date)) return [];
+    const r = rng(`x|${techId}|${date}`);
+    const out: T.ExtraIn[] = [];
+    const first = base.jobs[0].go;
+    if (base.start && first) {
+      const gap = Math.floor((new Date(first).getTime() - new Date(base.start).getTime()) / 60000 / 5) * 5;
+      if (gap >= 20 && r() < 0.6) out.push({ id: `sx-${techId}-${date}-r`, kind: 'getting_ready', start: base.start, minutes: gap, note: null });
+    }
+    if (new Date(`${date}T12:00:00Z`).getUTCDay() === 1 && base.start) out.push({ id: `sx-${techId}-${date}-m`, kind: 'meeting', start: new Date(Math.floor((new Date(base.start).getTime() - 35 * 60000) / 300000) * 300000).toISOString(), minutes: 30, note: 'Monday toolbox talk' });
+    return out;
+  }
+  extrasOf(techId: string, date: string, base?: T.Day): T.ExtraIn[] {
+    const gone = this.t.removedExtras ?? {};
+    return [...this.seededExtras(techId, date, base ?? this.dayOf(techId, date)), ...(this.t.extras?.[`${techId}|${date}`] ?? [])].filter(e => !gone[e.id]);
+  }
+  /** Trips with a company vehicle on a made-up day: now and then one after hours with no reason, or home and back. */
+  private trips(techId: string, date: string, base: T.Day): T.TripOut[] {
+    if (date >= sast() || !base.activity || !mayHaveIncidents(techId)) return [];
+    const r = rng(`t|${techId}|${date}`);
+    const forced = techId === (REAL ? EXAMPLE_TECH : 'tech-3') && date === [3, 4, 5, 6, 7].map(n => addDays(sast(), -n)).find(T.isWeekday);
+    if (!forced && r() > 0.07) return [];
+    const reg = base.vehicles[0] ?? 'ND 771-330';
+    const home = !forced && r() < 0.5;
+    const start = home ? 17 * 60 + 20 : 18 * 60 + 30 + Math.round(r() * 60);
+    const mins = 25 + Math.round(r() * 30);
+    const trip: T.TripIn = { id: `trip-${techId}-${date}`, startedAt: at(date, start), endedAt: at(date, start + mins), km: 15 + Math.round(r() * 30), registration: reg, purpose: home ? 'commute' : 'none',
+      allowed: this.t.allowedTrips?.[`trip-${techId}-${date}`] ?? null };
+    return [T.tripCheck(trip, { hours: this.hours(), mayTakeHome: false, home: null })].filter(t => t.why.length);
+  }
+  /** Hours invoiced: jobs from more than two days ago are invoiced (most of the work, sometimes a little less). */
+  private invoiced(techId: string, date: string, day: T.Day) {
+    let minutes = 0, revenueCents = 0, km = 0;
+    const old = date < addDays(sast(), -2);
+    for (const j of day.jobs) {
+      const r = rng(`i|${techId}|${date}|${j.jobId}`);
+      if (!j.helper) km += 2 * (6 + Math.round(r() * 20));
+      if (!old || r() < 0.08) continue;
+      const m = Math.round((j.workMin * (0.75 + r() * 0.3)) / 15) * 15 + (j.helper ? 0 : Math.round((j.travelMin * 0.5) / 15) * 15);
+      minutes += m;
+      revenueCents += Math.round((m / 60) * 65_000) + (j.helper ? 0 : Math.round(r() * 12) * 10_000);
+    }
+    return { minutes, revenueCents, km };
+  }
+  private full(techId: string, date: string, base: T.Day): T.Day {
+    const day = T.withExtras(base, this.extrasOf(techId, date, base));
+    return { ...day, invoicedMin: this.invoiced(techId, date, day).minutes, trips: this.trips(techId, date, base) };
+  }
+  private moneyOn(techId: string, date: string, day: T.Day) {
+    const i = this.invoiced(techId, date, day);
+    return { revenueCents: i.revenueCents, km: i.km + (day.trips ?? []).reduce((n, t) => n + t.km, 0) };
+  }
+
+  addExtra(techId: string, date: string, b: { id?: string; kind?: string; start?: string; minutes?: number; note?: string }): Res {
+    const today = sast();
+    if (b.id && Object.values(this.t.extras ?? {}).some(l => l.some(e => e.id === b.id))) return good({ id: b.id, again: true });
+    if (date > today) return bad(400, 'not a day in the future');
+    if (date < addDays(today, -7)) return bad(409, 'too long ago: ask your manager');
+    if (this.submitted(techId, date)) return bad(409, 'this day is already submitted: ask your manager');
+    if (!b.kind || !(T.EXTRA_KINDS as readonly string[]).includes(b.kind)) return bad(400, 'what it was');
+    if (!b.start || sast(new Date(b.start)) !== date) return bad(400, 'the time is not on that day');
+    if (b.kind === 'other' && (!b.note || b.note.trim().length < 3)) return bad(400, 'say what it was');
+    const base = this.dayOf(techId, date);
+    const clash = T.extraClash(base, b.start, Number(b.minutes), this.extrasOf(techId, date, base));
+    if (clash) return bad(409, clash);
+    const e: T.ExtraIn = { id: b.id ?? `x-${Date.now().toString(36)}`, kind: b.kind as T.ExtraKind, start: new Date(b.start).toISOString(), minutes: Number(b.minutes), note: b.note?.trim() || null };
+    ((this.t.extras ??= {})[`${techId}|${date}`] ??= []).push(e);
+    return good({ id: e.id });
+  }
+  deleteMine(techId: string, id: string): Res {
+    for (const [k, l] of Object.entries(this.t.extras ?? {})) {
+      if (!k.startsWith(`${techId}|`) || !l.some(e => e.id === id)) continue;
+      if (this.submitted(techId, k.split('|')[1])) return bad(409, 'this day is already submitted: ask your manager');
+      this.t.extras![k] = l.filter(e => e.id !== id);
+      return good({ id, deleted: true });
+    }
+    return bad(404, 'no such office time');
+  }
+  /** The office takes office time off (seeded or added); the technician is told why. */
+  removeExtra(id: string, reason: string, by: string): Res & { techId?: string; text?: string } {
+    if (!reason || reason.trim().length < 5) return bad(400, 'why it is taken off (he is told)');
+    const m = id.match(/^sx-(.+)-(\d{4}-\d{2}-\d{2})-[rm]$/);
+    let techId: string | null = null, date: string | null = null, e: T.ExtraIn | undefined;
+    if (m) { techId = m[1]; date = m[2]; e = this.extrasOf(techId, date).find(x => x.id === id); }
+    else for (const [k, l] of Object.entries(this.t.extras ?? {})) { const f = l.find(x => x.id === id); if (f) { [techId, date] = k.split('|'); e = f; } }
+    if (!e || !techId || !date || this.t.removedExtras?.[id]) return bad(404, 'no such office time');
+    (this.t.removedExtras ??= {})[id] = { by, reason: reason.trim(), at: new Date().toISOString() };
+    return { ok: true, body: { id, removed: true }, techId, text: `${T.EXTRA_LABEL[e.kind]} (${T.hm(e.minutes)}) on ${dayLabel(date)} was taken off your timesheet: ${reason.trim()}` };
+  }
+  allowTrip(id: string, note: string | null, by: string): Res {
+    if (note === null) { delete this.t.allowedTrips?.[id]; return good({ id, allowed: false }); }
+    if (note.trim().length < 3) return bad(400, 'why it was allowed');
+    (this.t.allowedTrips ??= {})[id] = { by, note: note.trim(), at: new Date().toISOString() };
+    return good({ id, allowed: true });
+  }
+  worthOf(techId: string) { return this.t.worth?.[techId] ?? { showPerformance: false, costPerHourCents: null }; }
+  setWorth(techId: string, b: { showPerformance?: boolean; costPerHourCents?: number | null }): Res {
+    const cur = this.worthOf(techId);
+    const cost = b.costPerHourCents === undefined ? cur.costPerHourCents : b.costPerHourCents;
+    if (cost !== null && !(Number(cost) >= 0)) return bad(400, 'the cost per hour');
+    (this.t.worth ??= {})[techId] = { showPerformance: !!b.showPerformance, costPerHourCents: cost };
+    return good({ userId: techId, ...this.t.worth[techId] });
   }
 
   mine(techId: string) {
@@ -155,15 +274,17 @@ export class DemoTimes {
     }
     const recent = T.daysBetween(addDays(today, -14), addDays(today, -1)).reverse().map(date => ({ date, sub: this.submitted(techId, date) })).filter(x => x.sub).slice(0, 10)
       .map(x => ({ ...this.sheet(techId, x.date) }));
-    return { due, recent, explainFromMin: T.EXPLAIN_FROM_MIN };
+    return { due, recent, today: { date: today, label: dayLabel(today), day: this.full(techId, today, this.dayOf(techId, today)) }, explainFromMin: T.EXPLAIN_FROM_MIN,
+      extraKinds: T.EXTRA_KINDS.map(k => ({ key: k, label: T.EXTRA_LABEL[k] })) };
   }
 
   submit(techId: string, date: string, b: { at?: string; note?: string }): Res {
     if (date >= sast(new Date(b.at ?? Date.now()))) return bad(400, 'only a finished day can be submitted');
     if (this.submitted(techId, date)) return bad(409, 'this day is already submitted; corrections go through your manager');
     const day = this.dayOf(techId, date);
+    const withX = T.withExtras(day, this.extrasOf(techId, date, day));
     const note = b.note?.trim() || null;
-    if (day.unaccountedMin >= T.EXPLAIN_FROM_MIN && (!note || note.length < 5)) return bad(400, `say what the ${T.hm(day.unaccountedMin)} not accounted for was`);
+    if (withX.unaccountedMin >= T.EXPLAIN_FROM_MIN && (!note || note.length < 5)) return bad(400, `say what the ${T.hm(withX.unaccountedMin)} not accounted for was (or add it as office time)`);
     this.t.submitted[`${techId}|${date}`] = { at: b.at ?? new Date().toISOString(), note, day };
     for (const f of this.flags) if (f.flag_type === 'timesheet_missing' && (f.tech ?? 'me') === techId && f.details?.workDate === date && f.status !== 'resolved') Object.assign(f, { status: 'resolved', resolution_note: 'Timesheet submitted' });
     return good({ date, day });
@@ -179,7 +300,7 @@ export class DemoTimes {
     return good({ date });
   }
 
-  exportFor(from: string, to: string, techs: { id: string; department: string | null }[], canFill = false): Res {
+  exportFor(from: string, to: string, techs: { id: string; department: string | null }[], canFill = false, who: { canMoney: boolean; canPerformance: boolean; rates?: { hour: number; km: number } } = { canMoney: false, canPerformance: false }): Res {
     if (to < from) return bad(400, 'the end date is before the start date');
     const dates = T.daysBetween(from, to);
     if (dates.length > 31) return bad(400, 'at most 31 days at a time');
@@ -190,14 +311,30 @@ export class DemoTimes {
         const days = dates.filter(d => d <= today).map(d => this.sheet(t.id, d))
           .filter(s => s.submitted || s.day.activity || s.weekday || s.flags.length)
           .map(s => ({ ...s, status: s.submitted ? 'submitted' : s.date === today ? 'today' : s.day.activity || s.weekday ? 'not_submitted' : 'none' }));
-        const sum = (k: 'travelMin' | 'workMin' | 'pausedMin' | 'unaccountedMin') => days.reduce((n, d) => n + d.day[k], 0);
+        const sum = (k: 'travelMin' | 'workMin' | 'pausedMin' | 'unaccountedMin' | 'officeMin' | 'invoicedMin') => days.reduce((n, d) => n + (d.day[k] ?? 0), 0);
         const pay = (k: 'paidMin' | 'normalMin' | 'overtimeMin' | 'doubleMin') => days.reduce((n, d) => n + d.pay[k], 0);
-        return { id: t.id, full_name: this.name(t.id), department: t.department, days,
-          totals: { travelMin: sum('travelMin'), workMin: sum('workMin'), pausedMin: sum('pausedMin'), unaccountedMin: sum('unaccountedMin'),
-            paidMin: pay('paidMin'), normalMin: pay('normalMin'), overtimeMin: pay('overtimeMin'), doubleMin: pay('doubleMin'),
-            jobs: days.reduce((n, d) => n + d.day.jobs.length, 0), flags: days.reduce((n, d) => n + d.flags.length, 0),
-            submitted: days.filter(d => d.status === 'submitted').length, notSubmitted: days.filter(d => d.status === 'not_submitted').length } };
+        const trips = days.flatMap(d => (d.day.trips ?? []).filter(x => x.unauthorised));
+        const totals = { travelMin: sum('travelMin'), workMin: sum('workMin'), pausedMin: sum('pausedMin'), unaccountedMin: sum('unaccountedMin'), officeMin: sum('officeMin'), invoicedMin: sum('invoicedMin'),
+          paidMin: pay('paidMin'), normalMin: pay('normalMin'), overtimeMin: pay('overtimeMin'), doubleMin: pay('doubleMin'),
+          jobs: days.reduce((n, d) => n + d.day.jobs.length, 0), flags: days.reduce((n, d) => n + d.flags.length, 0),
+          submitted: days.filter(d => d.status === 'submitted').length, notSubmitted: days.filter(d => d.status === 'not_submitted').length,
+          unauthorisedTrips: trips.length, unauthorisedKm: Math.round(trips.reduce((n, x) => n + x.km, 0)) };
+        const set = this.worthOf(t.id);
+        let performance: W.PerfLine[] | null = null, money: W.PerfLine[] | null = null, verdict: W.Worth['verdict'] | null = null;
+        if (who.canPerformance && set.showPerformance) {
+          const m = days.reduce((a, d) => { const x = this.moneyOn(t.id, d.date, d.day); return { revenueCents: a.revenueCents + x.revenueCents, km: a.km + x.km }; }, { revenueCents: 0, km: 0 });
+          const own = days.flatMap(d => d.day.jobs.filter(j => !j.helper));
+          const w = W.worthOf({ days: days.filter(d => d.pay.paidMin > 0).length, paidMin: totals.paidMin, workMin: totals.workMin, travelMin: totals.travelMin, officeMin: totals.officeMin,
+            unaccountedMin: totals.unaccountedMin, invoicedMin: totals.invoicedMin, jobsFinished: own.filter(j => j.result === 'Finished').length, jobsUnfinished: own.filter(j => j.result.startsWith('Continue later')).length,
+            callbacks: mayHaveIncidents(t.id) && own.length > 15 ? 1 : 0, flags: totals.flags, missingSheets: totals.notSubmitted, unauthorisedTrips: totals.unauthorisedTrips, unauthorisedKm: totals.unauthorisedKm,
+            km: m.km, kmEstimated: true, revenueCents: m.revenueCents, costPerHourCents: set.costPerHourCents ?? who.rates?.hour ?? 0, costPerKmCents: who.rates?.km ?? 0 });
+          performance = W.performanceLines(w);
+          if (who.canMoney) { money = W.moneyLines(w); verdict = w.verdict; }
+        }
+        return { id: t.id, full_name: this.name(t.id), department: t.department, days, totals, performance, money, verdict,
+          settings: who.canMoney ? set : who.canPerformance ? { showPerformance: set.showPerformance } : null };
       }),
+      canMoney: who.canMoney, canPerformance: who.canPerformance, companyCostPerHourCents: who.canMoney ? who.rates?.hour ?? 0 : null,
     });
   }
 

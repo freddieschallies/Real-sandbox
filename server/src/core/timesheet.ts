@@ -4,6 +4,7 @@
 //   Travel        Go → arrived on site, plus time out collecting parts
 //   Work          arrived → finished, less pauses
 //   Paused        breaks and other pauses, with the reason he gave
+//   Office time   what he adds himself: meetings, getting ready, office work, training (paid)
 //   Not accounted the rest of his day: from his first scan or Go to his last job finished
 
 export type PauseReason = 'waiting_for_parts' | 'store_asked_to_stop' | 'collecting_parts' | 'break';
@@ -31,7 +32,115 @@ export interface Day {
   start: string | null; end: string | null; spanMin: number;
   travelMin: number; workMin: number; pausedMin: number; unaccountedMin: number;
   jobs: DayJob[]; vehicles: string[]; activity: boolean;
+  /** Office time he added (meetings, getting ready, ...), and driving back to the workshop (counted as travel). */
+  extras?: ExtraOut[]; officeMin?: number;
+  /** The day before office time was added (what the app recorded). */
+  base?: { start: string | null; end: string | null };
+  /** Hours invoiced for his share of the jobs worked on this day (labour and travel time). */
+  invoicedMin?: number;
+  /** Trips he drove in a company vehicle that were not allowed, and why. */
+  trips?: TripOut[];
 }
+
+// ---- Office time: what the technician adds himself ----------------------------------------------
+
+export const EXTRA_KINDS = ['meeting', 'getting_ready', 'office_work', 'training', 'driving_back', 'other'] as const;
+export type ExtraKind = (typeof EXTRA_KINDS)[number];
+export const EXTRA_LABEL: Record<ExtraKind, string> = {
+  meeting: 'Meeting', getting_ready: 'Getting ready (van, tools, stock)', office_work: 'Office work', training: 'Training',
+  driving_back: 'Driving back to the workshop', other: 'Other',
+};
+export interface ExtraIn { id: string; kind: ExtraKind; start: string; minutes: number; note: string | null; addedBy?: string | null; byOffice?: boolean }
+export interface ExtraOut extends ExtraIn { label: string; end: string }
+export const EXTRA_MAX_MIN = 10 * 60;
+
+/** The day with his office time on it: the day starts or ends earlier or later, it is paid (driving back
+ *  is travel), and it comes off the time not accounted for. The same day can be given new office time again. */
+export function withExtras(day: Day, extras: ExtraIn[]): Day {
+  const base = day.base ?? { start: day.start, end: day.end };
+  const out: ExtraOut[] = [...extras].sort((a, b) => ms(a.start) - ms(b.start))
+    .map(e => ({ ...e, label: EXTRA_LABEL[e.kind] ?? e.kind, end: new Date(ms(e.start) + e.minutes * 60000).toISOString() }));
+  const starts = [base.start, ...out.map(e => e.start)].filter(Boolean).map(x => ms(x!));
+  const ends = [base.end, ...out.map(e => e.end)].filter(Boolean).map(x => ms(x!));
+  const start = starts.length ? Math.min(...starts) : null;
+  const end = ends.length ? Math.max(...ends) : null;
+  const span = start !== null && end !== null && end > start ? mins(start, end) : 0;
+  const travelMin = day.jobs.reduce((n, j) => n + j.travelMin, 0) + out.filter(e => e.kind === 'driving_back').reduce((n, e) => n + e.minutes, 0);
+  const workMin = day.jobs.reduce((n, j) => n + j.workMin, 0);
+  const pausedMin = day.jobs.reduce((n, j) => n + j.pausedMin, 0);
+  const officeMin = out.filter(e => e.kind !== 'driving_back').reduce((n, e) => n + e.minutes, 0);
+  return {
+    ...day, base, extras: out, officeMin, travelMin, workMin, pausedMin,
+    start: start !== null ? new Date(start).toISOString() : null, end: end !== null && span > 0 ? new Date(end).toISOString() : null, spanMin: span,
+    unaccountedMin: Math.max(0, span - travelMin - workMin - pausedMin - officeMin), activity: day.activity || out.length > 0,
+  };
+}
+
+/** Why a new piece of office time cannot go on the day: it overlaps a job or other office time. */
+export function extraClash(day: Day, start: string, minutes: number, others: { start: string; minutes: number; label?: string; kind?: ExtraKind }[], now: string = new Date().toISOString()): string | null {
+  const a = ms(start), b = a + minutes * 60000;
+  if (!(minutes >= 5 && minutes <= EXTRA_MAX_MIN)) return 'between 5 minutes and 10 hours';
+  if (b > ms(now) + 5 * 60000) return 'it cannot end later than now';
+  const hhmm = (x: number) => new Date(x).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Johannesburg' });
+  for (const j of day.jobs) {
+    const s = j.go ?? j.arrived; const e = j.ended ?? (j.arrived ? now : null);
+    if (!s || !e) continue;
+    if (a < ms(e) && ms(s) < b) return `it overlaps job ${j.jobNumber} (${hhmm(ms(s))} to ${hhmm(ms(e))})`;
+  }
+  for (const o of others) {
+    const s = ms(o.start), e = s + o.minutes * 60000;
+    if (a < e && s < b) return `it overlaps ${(o.label ?? (o.kind ? EXTRA_LABEL[o.kind] : 'other office time')).toLowerCase()} (${hhmm(s)} to ${hhmm(e)})`;
+  }
+  return null;
+}
+
+// ---- Trips in a company vehicle that were not allowed -----------------------------------------------
+// From the tracker: a trip with no reason (not to a job, stock run, fuel or the office), driving after
+// hours or on a weekend or public holiday with no job, home and back (unless he may take the vehicle
+// home), and a detour (far longer than the road to the job). The office can mark one allowed.
+
+export const TRIP_WHY = ['no_reason', 'after_hours', 'home', 'detour'] as const;
+export type TripWhy = (typeof TRIP_WHY)[number];
+export const TRIP_WHY_LABEL: Record<TripWhy, string> = {
+  no_reason: 'No reason (not a job, stock run, fuel or the office)', after_hours: 'After hours or weekend, no job', home: 'Home and back', detour: 'Detour off the route to the job',
+};
+export interface WorkHours { startMin: number; endMin: number }
+export const DEFAULT_HOURS: WorkHours = { startMin: 7 * 60, endMin: 17 * 60 };
+export interface TripIn {
+  id: string; startedAt: string; endedAt: string | null; km: number; registration: string;
+  purpose: 'job' | 'supply_run' | 'commute' | 'fuel' | 'office' | 'none' | string;
+  start?: { lat: number; lng: number } | null; end?: { lat: number; lng: number } | null;
+  store?: string | null; storeAt?: { lat: number; lng: number } | null;
+  allowed?: { by: string; note: string; at: string } | null;
+}
+export interface TripOut extends TripIn { why: TripWhy[]; whyText: string[]; unauthorised: boolean }
+
+const R_EARTH = 6371;
+const kmApart = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
+  const r = (x: number) => (x * Math.PI) / 180;
+  const h = Math.sin(r(b.lat - a.lat) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lng - a.lng) / 2) ** 2;
+  return 2 * R_EARTH * Math.asin(Math.sqrt(h));
+};
+/** Minutes after midnight in South Africa (UTC+2, no daylight saving). */
+const localMin = (iso: string) => { const d = new Date(ms(iso) + 2 * 3600_000); return d.getUTCHours() * 60 + d.getUTCMinutes(); };
+const localDate = (iso: string) => new Date(ms(iso) + 2 * 3600_000).toISOString().slice(0, 10);
+
+export function tripCheck(t: TripIn, ctx: { hours: WorkHours; mayTakeHome: boolean; home: { lat: number; lng: number } | null }): TripOut {
+  const why: TripWhy[] = [];
+  if (t.purpose === 'none') why.push('no_reason');
+  const date = localDate(t.startedAt);
+  const offDay = !isWeekday(date) || !!publicHoliday(date);
+  const sMin = localMin(t.startedAt), eMin = t.endedAt ? (localDate(t.endedAt) !== date ? 24 * 60 : localMin(t.endedAt)) : sMin;
+  if ((offDay || sMin < ctx.hours.startMin || eMin > ctx.hours.endMin) && !['job', 'supply_run'].includes(t.purpose)) why.push('after_hours');
+  const nearHome = !!ctx.home && ((!!t.start && kmApart(t.start, ctx.home) <= 0.5) || (!!t.end && kmApart(t.end, ctx.home) <= 0.5));
+  if (!ctx.mayTakeHome && (t.purpose === 'commute' || nearHome)) why.push('home');
+  if (t.purpose === 'job' && t.start && t.storeAt) {
+    const expected = kmApart(t.start, t.storeAt) * 1.25;
+    if (t.km > expected * 1.5 + 5) why.push('detour');
+  }
+  return { ...t, why, whyText: why.map(w => TRIP_WHY_LABEL[w]), unauthorised: why.length > 0 && !t.allowed };
+}
+
 
 /** Time not accounted for that needs a word from the technician when he submits. */
 export const EXPLAIN_FROM_MIN = 30;
@@ -89,7 +198,7 @@ export function daysBetween(from: string, to: string): string[] {
 export const isWeekday = (date: string) => { const d = new Date(`${date}T12:00:00Z`).getUTCDay(); return d >= 1 && d <= 5; };
 
 // ---- Pay: normal time, overtime and double time --------------------------------------------------
-// Paid time is travel plus work (pauses and time not accounted for are not paid). On a weekday the
+// Paid time is travel, work and office time (pauses and time not accounted for are not paid). On a weekday the
 // first hours up to the normal day are normal time and the rest overtime (1.5×); Saturday is normal
 // up to the Saturday hours (none by default) and overtime after; Sundays and public holidays are
 // double time (2×). The normal hours are the company's setting.
@@ -99,7 +208,7 @@ export const DEFAULT_PAY: PayRules = { weekdayNormalMin: 8 * 60, saturdayNormalM
 export interface Pay { paidMin: number; normalMin: number; overtimeMin: number; doubleMin: number; dayType: 'weekday' | 'saturday' | 'sunday' | 'holiday'; holiday: string | null }
 
 export function payOf(day: Day, date: string, rules: PayRules = DEFAULT_PAY): Pay {
-  const paid = day.travelMin + day.workMin;
+  const paid = day.travelMin + day.workMin + (day.officeMin ?? 0);
   const dow = new Date(`${date}T12:00:00Z`).getUTCDay();
   const holiday = publicHoliday(date);
   if (holiday || dow === 0) return { paidMin: paid, normalMin: 0, overtimeMin: 0, doubleMin: paid, dayType: holiday ? 'holiday' : 'sunday', holiday };

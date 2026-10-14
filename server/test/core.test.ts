@@ -637,3 +637,40 @@ test('statement: brought forward, credit notes and payments, the running balance
   assert.deepEqual(periodDates('three', '2026-01-05'), { from: '2025-11-01', to: '2026-01-05' });
   assert.deepEqual(periodDates('all', '2026-01-05'), { from: null, to: '2026-01-05' });
 });
+
+test('office time on a day, overlaps, unauthorised trips, and a technician\'s worth', async () => {
+  const T = await import('../src/core/timesheet.ts');
+  const W = await import('../src/core/worth.ts');
+  const day = T.buildDay([{ jobId: 'j', jobNumber: 1, store: 'S', fault: 'f', goAt: '2026-10-12T06:00:00Z', arrivedAt: '2026-10-12T06:30:00Z', startedAt: null, endedAt: '2026-10-12T09:00:00Z', pauses: [], state: 'done' }],
+    [{ at: '2026-10-12T05:30:00Z', registration: 'X', mode: 'in' }], '2026-10-12T15:00:00Z');
+  assert.equal(day.unaccountedMin, 30, 'scanned in at 05:30, went at 06:00');
+  const w = T.withExtras(day, [{ id: 'a', kind: 'getting_ready', start: '2026-10-12T05:30:00Z', minutes: 30, note: null }, { id: 'b', kind: 'driving_back', start: '2026-10-12T09:00:00Z', minutes: 25, note: null }]);
+  assert.equal(w.unaccountedMin, 0);
+  assert.equal(w.officeMin, 30);
+  assert.equal(w.travelMin, 30 + 25, 'driving back is travel');
+  assert.equal(T.payOf(w, '2026-10-12').paidMin, 30 + 150 + 30 + 25);
+  assert.deepEqual(T.withExtras(w, w.extras!), w, 'the same again');
+  assert.match(T.extraClash(day, '2026-10-12T06:15:00Z', 30, [], '2026-10-12T15:00:00Z')!, /job 1/);
+  assert.equal(T.extraClash(day, '2026-10-12T09:00:00Z', 30, [], '2026-10-12T15:00:00Z'), null);
+  assert.match(T.extraClash(day, '2026-10-12T14:50:00Z', 30, [], '2026-10-12T15:00:00Z')!, /later than now/);
+  const hours = T.DEFAULT_HOURS;
+  const trip = (o: Partial<Parameters<typeof T.tripCheck>[0]>) => T.tripCheck({ id: 't', startedAt: '2026-10-12T08:00:00Z', endedAt: '2026-10-12T08:30:00Z', km: 10, registration: 'X', purpose: 'job', ...o }, { hours, mayTakeHome: false, home: { lat: -28.75, lng: 32.05 } });
+  assert.deepEqual(trip({}).why, []);
+  assert.deepEqual(trip({ purpose: 'none' }).why, ['no_reason']);
+  assert.deepEqual(trip({ purpose: 'fuel', startedAt: '2026-10-12T17:00:00Z', endedAt: '2026-10-12T17:20:00Z' }).why, ['after_hours'], '19:00 in South Africa');
+  assert.deepEqual(trip({ purpose: 'fuel', startedAt: '2026-10-11T08:00:00Z', endedAt: '2026-10-11T08:20:00Z' }).why, ['after_hours'], 'a Sunday');
+  assert.deepEqual(trip({ purpose: 'commute' }).why, ['home']);
+  assert.deepEqual(trip({ purpose: 'office', end: { lat: -28.7501, lng: 32.0501 } }).why, ['home'], 'ended at his home');
+  assert.deepEqual(trip({ start: { lat: -28.78, lng: 32.03 }, storeAt: { lat: -28.75, lng: 32.03 }, km: 25 }).why, ['detour'], '3 km away, drove 25 km');
+  assert.equal(trip({ purpose: 'none', allowed: { by: 'M', note: 'ok', at: '' } }).unauthorised, false);
+  assert.deepEqual(T.tripCheck({ id: 't', startedAt: '2026-10-12T06:00:00Z', endedAt: null, km: 5, registration: 'X', purpose: 'commute' }, { hours, mayTakeHome: true, home: null }).why, [], 'he may take it home');
+  const worth = W.worthOf({ days: 20, paidMin: 160 * 60, workMin: 100 * 60, travelMin: 40 * 60, officeMin: 20 * 60, unaccountedMin: 0, invoicedMin: 110 * 60, jobsFinished: 40, jobsUnfinished: 3, callbacks: 1, flags: 0, missingSheets: 0,
+    unauthorisedTrips: 1, unauthorisedKm: 20, km: 2000, kmEstimated: false, revenueCents: 9_000_000, costPerHourCents: 15000, costPerKmCents: 400 });
+  assert.equal(worth.labourCostCents, 2_400_000);
+  assert.equal(worth.vehicleCostCents, 800_000);
+  assert.equal(worth.netCents, 5_800_000);
+  assert.equal(worth.perRand, 2.81);
+  assert.equal(worth.recoveryPct, 68.8);
+  assert.equal(worth.verdict.tone, 'good');
+  assert.equal(W.moneyLines(worth).find(l => l.label.startsWith('Of that'))!.value, 'R 80,00');
+});

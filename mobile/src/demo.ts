@@ -557,24 +557,35 @@ export class DemoTransport implements Transport {
   /** Daily timesheets: the technician's own, and HR's export. */
   private timesRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
-    if (!(p === '/me/timesheets' || p.startsWith('/me/timesheets/') || p === '/timesheets' || p === '/timesheets/settings' || p === '/timesheets/people' || p.startsWith('/timesheets/person/') || /^\/timesheets\/[^/]+\/\d{4}-\d{2}-\d{2}\/fill$/.test(p))) return null;
+    if (!(p === '/me/timesheets' || p.startsWith('/me/timesheets/') || p === '/timesheets' || p === '/timesheets/settings' || p === '/timesheets/people' || p.startsWith('/timesheets/person/')
+      || p.startsWith('/timesheets/extra/') || p.startsWith('/timesheets/trips/') || p.startsWith('/timesheets/worth/') || /^\/timesheets\/[^/]+\/\d{4}-\d{2}-\d{2}\/fill$/.test(p))) return null;
     const t = this.times();
     const save = (r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }) => { this.persist(this.state); return r.ok ? ok(r.body) : refuse(r.status, ...r.reasons); };
     if (p === '/me/timesheets') { if (this.who.level !== 'technician') return ok({ due: [], recent: [], explainFromMin: 30 }); const r = t.mine(this.who.id); this.persist(this.state); return ok(r); }
     if ((m = p.match(/^\/me\/timesheets\/(\d{4}-\d{2}-\d{2})\/submit$/))) return this.who.level === 'technician' ? save(t.submit(this.who.id, m[1], b)) : refuse(403, 'timesheets are for technicians');
     if ((m = p.match(/^\/me\/timesheets\/(\d{4}-\d{2}-\d{2})$/))) return ok(t.sheet(this.who.id, m[1]));
+    // Office time he adds himself, or takes off again before he submits.
+    if ((m = p.match(/^\/me\/timesheets\/(\d{4}-\d{2}-\d{2})\/extra$/))) return this.who.level === 'technician' ? save(t.addExtra(this.who.id, m[1], b)) : refuse(403, 'office time is added by the technician');
+    if ((m = p.match(/^\/me\/timesheets\/extra\/([^/]+)$/))) return save(t.deleteMine(this.who.id, m[1]));
     const ceo = ['director', 'creator'].includes(this.office().levelOf(this.who.id) ?? this.who.level);
     if ((m = p.match(/^\/timesheets\/([^/]+)\/(\d{4}-\d{2}-\d{2})\/fill$/))) return ceo ? save(t.fill(m[1], m[2], this.who.name)) : refuse(403, "only the CEO fills in a technician's timesheet");
     // HR and the CEO always see everyone (also people who have left); a department manager his own technicians.
     const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
-    const all = this.does('hr') || ['hr', 'director', 'creator'].includes(lvl);
+    const all = this.does('hr') || ['hr', 'director', 'creator', 'accounts'].includes(lvl);
     const full = ['hr', 'director', 'creator'].includes(lvl);
+    const canMoney = ['director', 'creator', 'accounts'].includes(lvl), canPerformance = canMoney || lvl === 'hr';
     if (p === '/timesheets/settings') {
       const canEdit = this.does('hr') || this.does('access');
       if (req.method === 'PUT') return canEdit ? save(t.setRules(b)) : refuse(403, 'only HR or the CEO sets the normal hours');
-      return ok({ ...t.rules(), canEdit });
+      return ok({ ...t.rules(), workStartMin: t.hours().startMin, workEndMin: t.hours().endMin, canEdit });
     }
-    if (!all && this.who.level !== 'management') return refuse(403, 'timesheets are for HR and department managers');
+    if (!all && this.who.level !== 'management') return refuse(403, 'timesheets are for HR, the CEO, Accounts and department managers');
+    // The office: office time taken off (he is told), a trip allowed, and per technician what shows (CEO and Accounts).
+    if ((m = p.match(/^\/timesheets\/extra\/([^/]+)\/remove$/))) {
+      return save(t.removeExtra(m[1], b?.reason ?? '', this.who.name));
+    }
+    if ((m = p.match(/^\/timesheets\/trips\/([^/]+)\/allow$/))) return save(t.allowTrip(m[1], req.method === 'DELETE' ? null : String(b?.note ?? ''), this.who.name));
+    if ((m = p.match(/^\/timesheets\/worth\/([^/]+)$/))) return canMoney ? save(t.setWorth(m[1], b)) : refuse(403, 'only the CEO and Accounts set this');
     const v = this.vans();
     const q = new URLSearchParams(req.path.split('?')[1] ?? '');
     const from = q.get('from') ?? '', to = q.get('to') ?? '';
@@ -604,7 +615,8 @@ export class DemoTransport implements Transport {
       .sort((a, c) => (v.deptOf(a.id)?.name ?? '~').localeCompare(v.deptOf(c.id)?.name ?? '~') || a.full_name.localeCompare(c.full_name))
       .map(x => ({ id: x.id, department: v.deptOf(x.id)?.name ?? null }));
     if (q.get('userId') && !techs.length) return refuse(403, 'not one of your technicians');
-    const res = t.exportFor(from, to, techs, ceo);
+    const dr = (this.state.docs?.rates ?? {}) as Record<string, number>;
+    const res = t.exportFor(from, to, techs, ceo, { canMoney, canPerformance, rates: { hour: dr.labour_cost_per_hour ?? 18_000, km: dr.vehicle_cost_per_km ?? 450 } });
     if (res.ok) {
       t.viewed({ by: this.who.name, userId: q.get('userId'), departmentId: q.get('departmentId'), from, to });
       const left = new Set(leavers.map(l => l.person.id));

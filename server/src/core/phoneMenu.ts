@@ -43,7 +43,7 @@ export function officeTabKeys(level: string, work: Partial<Record<WorkArea, bool
     flags: does('flags'), handovers: does('flags'), map: does('flags') || level === 'management',
     vans: does('vanstock'), departments: does('hr'),
     // HR and the CEO always have every timesheet; a department manager his own technicians'.
-    timesheets: does('hr') || ['management', 'hr', 'director', 'creator'].includes(level),
+    timesheets: does('hr') || ['management', 'hr', 'director', 'creator', 'accounts'].includes(level),
     people: opts.people, repairs: jobsSide, stores: jobsSide, barcodes: jobsSide, settings: opts.settings,
   };
   return MENU_TABS.office.map(t => t.key).filter(k => on[k]);
