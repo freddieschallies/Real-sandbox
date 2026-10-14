@@ -1,6 +1,6 @@
 // Supplier invoice: photograph it, the system reads it, the technician checks the lines and confirms.
 // Confirmed lines land on his name at once, against the job (or as van stock).
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Image, Pressable, Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { useNav } from '../nav.tsx';
@@ -83,6 +83,20 @@ function ConfirmInvoice({ inv }: { inv: SupplierInvoice }) {
   const [lines, setLines] = useState<EditLine[]>(r?.lines.length ? r.lines.map(toEdit) : [{ description: '', supplierCode: '', qty: '1', price: '' }]);
   const [forJob, setForJob] = useState<string>(inv.job_id ?? VAN);
   const [reasons, setReasons] = useState<string[] | null>(null);
+  // Scanned against one of his approved purchase orders: the PO's job, and the PO is collected.
+  const [pos, setPos] = useState<{ id: string; po_number: number; supplier_name: string; job_id: string | null; job_number: number | null }[]>([]);
+  const [po, setPo] = useState<string>('none');
+  useEffect(() => {
+    s.ask({ method: 'GET', path: '/me/purchase-orders' }).then(res => {
+      if (res?.status !== 200) return;
+      const ok = (res.body as any[]).filter(p => p.status === 'approved');
+      setPos(ok);
+      const name = (r?.supplierName ?? inv.supplier_name ?? '').trim().toLowerCase();
+      const same = ok.find(p => name && (p.supplier_name.toLowerCase().includes(name) || name.includes(p.supplier_name.toLowerCase())));
+      if (same) setPo(same.id);
+    }).catch(() => undefined);
+  }, []);
+  const chosen = pos.find(p => p.id === po);
   const setLine = (i: number, p: Partial<EditLine>) => setLines(ls => ls.map((l, j) => (j === i ? { ...l, ...p } : l)));
 
   const out = lines.map(l => ({
@@ -99,9 +113,9 @@ function ConfirmInvoice({ inv }: { inv: SupplierInvoice }) {
     const body = { supplierName: supplier.trim(), invoiceNumber: number.trim(), totalCents, lines: out };
     const problems = S.invoiceProblems(body);
     if (problems.length) { setReasons(problems); return; }
-    const job = forJob === VAN ? null : forJob;
+    const job = chosen ? chosen.job_id : forJob === VAN ? null : forJob;
     s.queue(`Invoice ${body.invoiceNumber} from ${body.supplierName} confirmed`,
-      { method: 'POST', path: `/supplier-invoices/${inv.id}/confirm`, json: { ...body, jobId: job, at: nowIso() } }, job ?? undefined);
+      { method: 'POST', path: `/supplier-invoices/${inv.id}/confirm`, json: { ...body, jobId: job, ...(chosen ? { purchaseOrderId: chosen.id } : {}), at: nowIso() } }, job ?? undefined);
     s.patchCache(c => ({ ...c, invoices: (c.invoices ?? []).map(i => (i.id === inv.id ? { ...i, status: 'confirmed', supplier_name: body.supplierName, invoice_number: body.invoiceNumber } : i)) }));
     nav.back();
   };
@@ -139,8 +153,19 @@ function ConfirmInvoice({ inv }: { inv: SupplierInvoice }) {
       <Text style={st.small}>Lines {rand(linesTotal)}{vat != null ? ` + VAT ${rand(vat)}` : ''}</Text>
       {mismatch ? <Notice tone="warn" title="The lines don't add up to the total" lines={['Check for a missed line or a wrong quantity.']} /> : null}
 
-      <Label>Bought for</Label>
-      <Choice options={jobs.options} value={forJob} onChange={setForJob} labels={jobs.labels} />
+      {pos.length ? (
+        <>
+          <Label>Purchase order</Label>
+          <Choice options={['none', ...pos.map(p => p.id)]} value={po} onChange={setPo}
+            labels={{ none: 'No PO', ...Object.fromEntries(pos.map(p => [p.id, `PO ${p.po_number} · ${p.supplier_name}`])) }} />
+        </>
+      ) : null}
+      {chosen ? <Text style={st.small}>Booked to {chosen.job_number ? `job ${chosen.job_number}` : 'your van'} (from PO {chosen.po_number}). Use the parts on the job card, or send what is left back to the stockroom.</Text> : (
+        <>
+          <Label>Bought for</Label>
+          <Choice options={jobs.options} value={forJob} onChange={setForJob} labels={jobs.labels} />
+        </>
+      )}
       <Text style={st.small}>Everything confirmed here goes on your name. Anything you change from what was read is recorded.</Text>
       <Button label="Confirm – put it on my name" onPress={confirm} />
     </Screen>

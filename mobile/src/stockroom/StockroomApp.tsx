@@ -1,5 +1,6 @@
 // The stock controller's app. Phone: tabs at the bottom, list then detail. Desktop (wide screen):
 // menu, list and the open request side by side. Nothing leaves or enters the stockroom without this.
+import { PurchaseOrderList } from '../office/PurchaseOrders.tsx';
 import { KitPeople, StockPersonView, type StockPerson } from '../staff/Staff.tsx';
 import { ToolStore } from './ToolStore.tsx';
 import { OrderList, PartDetail, Thumb, useOrderList } from './Parts.tsx';
@@ -22,7 +23,7 @@ import type { StockRequest, StockReturn } from '../types.ts';
 // The stockroom's own colour, so nobody confuses it with the technician app.
 const K = { band: '#1E6F6A', bandText: '#E8FFFB', tick: '#3FB57A' };
 
-type Tab = 'issue' | 'receive' | 'room' | 'order' | 'people' | 'workshop' | 'tools' | 'live' | 'items';
+type Tab = 'issue' | 'receive' | 'pos' | 'room' | 'order' | 'people' | 'workshop' | 'tools' | 'live' | 'items';
 type Sel = { kind: 'issue'; id: string } | { kind: 'return'; id: string } | { kind: 'item'; id: string } | { kind: 'delivery' } | { kind: 'ws'; id: string } | { kind: 'wsadd' } | { kind: 'part'; id: string } | { kind: 'kit'; id: string; p: StockPerson } | null;
 type Photo = { id: string; uri: string; mime: string };
 
@@ -49,6 +50,7 @@ export function StockroomApp() {
   const allTabs: { key: Tab; label: string; count?: number }[] = [
     { key: 'issue', label: 'To issue', count: room.ctl.issues.length },
     { key: 'receive', label: 'To receive', count: room.ctl.returns.length },
+    { key: 'pos', label: 'Purchase orders' },
     { key: 'room', label: 'Stock' },
     { key: 'order', label: 'To order', count: ol.d?.toOrder.length },
     { key: 'people', label: 'People' },
@@ -76,6 +78,7 @@ export function StockroomApp() {
           lines={[`${away.length} stockroom movement${away.length > 1 ? 's' : ''} under their name: see Live. Their issues are marked in the Issued register.`]} />
       ) : null}
       {tab === 'issue' ? <IssueTab waiting={room.ctl.issues} issued={room.ctl.issued ?? []} open={id => setSel({ kind: 'issue', id })} selected={sel?.kind === 'issue' ? sel.id : null} /> : null}
+      {tab === 'pos' ? <PurchaseOrderList /> : null}
       {tab === 'receive' ? <ReturnList items={room.ctl.returns} open={id => setSel({ kind: 'return', id })} selected={sel?.kind === 'return' ? sel.id : null} /> : null}
       {tab === 'room' ? <RoomList items={room.ctl.room} holdings={room.ctl.holdings ?? []} onDelivery={() => setSel({ kind: 'delivery' })} onPart={id => setSel({ kind: 'part', id })} /> : null}
       {tab === 'order' ? <OrderList ol={ol} open={id => setSel({ kind: 'part', id })} /> : null}

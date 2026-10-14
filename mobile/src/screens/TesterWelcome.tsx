@@ -27,6 +27,7 @@ const STEPS: [string, string[]][] = [
     'Parts report: on a job you started, tap Continue later and answer "Is another quote needed?" Yes: the app takes you step by step through photos of the machine, the serial tag (type it if unclear) and the part, then more photos. It goes to the office as a quote; open it on the job to print or email it.',
     'Workshop repairs: on a job you started on site, tap "Uplift to the workshop": photos of the machine, which machine and why, a loan machine if the store needs one, and the store manager signs. Next time, "Start at the workshop" (checked against the workshop, no store manager). When it is fixed, Done says it is ready to go back: Go, deliver it back (photo, who received it), collect the loan machine, sign off. The microwave on My day was brought in by the client: it starts in the workshop.',
     'Quotes (on My day): a new quote for a store, with an older job card linked for reference; or open a job that is not finished and tap "Submit a quote for this job". Add hours, parts and things to buy; it goes to the office to price and send.',
+    'Purchase orders: going to a supplier for parts? My day → Purchase orders → "Ask for a purchase order": the supplier, the parts and the job. Once approved (switch to Stock controller → Purchase orders → Approve) the PO number is on your phone to show at the counter. Then "Scan the supplier\'s slip for this PO": the parts go on that job, where you use them or send what is left back to the stockroom.',
   ]],
   ['As stock controller (Lindiwe)', [
     'To issue: open Thabo\'s request, tick each item as you pick it, then issue it.',
@@ -103,6 +104,9 @@ const STEPS: [string, string[]][] = [
     'Debtors: who owes what, by age (current, 30, 60, 90, 120 days +), counted until each invoice is marked paid. Open a client to see its unpaid invoices.',
     'Debtors → a client → "Put the account on hold" with the reason. Then switch to Admin and open a New job for one of its stores: it warns in red and only goes ahead with "Open it anyway" (Accounts is told, and it is on the client\'s record).',
     'Profit: what the closed jobs made: invoiced (less credit notes) against the technicians\' hours on site and driving, the km, the parts at cost and items bought. By client, by technician, by month, or job by job with the worst first. The CEO sets what an hour of a technician and a km cost (Accounts → Company details and rates).',
+    'Invoices → Money in (our invoices to customers, with their credit notes) and Money out (every supplier invoice): all in one place, searchable.',
+    'Accounts → Who did what: which technician\'s jobs brought in the most invoices, who made each invoice, and who handed in each supplier invoice (just for reference).',
+    'Purchase orders: what the technicians asked for on their stock runs, approved or not; a supplier invoice scanned against a PO shows what was ordered beside it.',
     'Accounts → Pastel batch: Invoices, Credit notes, Quotations and Supplier invoices, each once. Set the Pastel codes first (Line codes and VAT: also the credit notes and purchases accounts; Supplier codes).',
   ]],
   ['As the CEO (Lilanie)', [

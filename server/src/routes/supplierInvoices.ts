@@ -94,7 +94,11 @@ export function registerSupplierInvoiceRoutes(app: FastifyInstance, db: Db, read
           AND NOT EXISTS (SELECT 1 FROM supplier_invoices x WHERE x.delivery_id = d.id AND x.id <> $3)
           AND d.received_at > now() - interval '180 days'
         ORDER BY d.received_at DESC LIMIT 10`, [inv.supplier_name, inv.supplier_id, id])).rows;
-    return { ...inv, read, lines: await lines(req.db, id), deliveries };
+    // Scanned against a purchase order: what was ordered, to compare.
+    const po = (await req.db.query(
+      `SELECT p.po_number, p.status, d.full_name AS approved_by, (SELECT coalesce(json_agg(json_build_object('description', l.description, 'qty', l.qty::float) ORDER BY l.line_no), '[]') FROM purchase_order_lines l WHERE l.po_id = p.id) AS lines
+         FROM supplier_invoices i JOIN purchase_orders p ON p.id = i.purchase_order_id LEFT JOIN users d ON d.id = p.decided_by WHERE i.id = $1`, [id])).rows[0] ?? null;
+    return { ...inv, read, lines: await lines(req.db, id), deliveries, po };
   });
 
   // Scan: a photo from the camera, or a picture or PDF file. Read automatically when reading is set up.

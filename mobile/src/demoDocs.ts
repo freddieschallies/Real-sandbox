@@ -400,6 +400,25 @@ export class DemoDocs {
     add(10131, 6955, 'esikhawini', 104, [{ kind: 'labour', description: 'Labour, job 10131', qty: 4, unitPriceCents: 65000 }, { kind: 'stock', description: 'Condenser fan motor 10W', qty: 1, unitPriceCents: 89000 }], 'BX-21980');
   }
 
+  // ---- Who did what (for reference) -----------------------------------------------------------
+  whoDidWhat(from: string, to: string, moneyOutAll: { id: string; invoice_number: string | null; supplier_name: string | null; total_cents: number | null; source: string; technician: string | null; added_by: string | null; invoice_date: string | null; confirmed_at: string | null; job_number: number | null; status: string; check_status: string; po_number?: number | null }[]) {
+    const moneyIn = this.d.invoices.filter(i => (i.status === 'sent' || i.status === 'paid') && (i.sent_at ?? i.created_at).slice(0, 10) >= from && (i.sent_at ?? i.created_at).slice(0, 10) <= to).map(i => {
+      const j = this.job(i.job_id); const s = this.storeOf(i);
+      return { id: i.id, number: i.invoice_number, status: i.status, date: (i.sent_at ?? i.created_at).slice(0, 10), client: s?.client ?? '?', store: s?.name ?? '?', job_number: j?.meta.job_number ?? null,
+        made_by: i.created_by, technician: j?.meta.lead_technician ?? '?', ex_vat: this.exVat(i.lines) - this.creditedOn(i.id) };
+    }).sort((a, b) => b.number - a.number);
+    const moneyOut = moneyOutAll.filter(x => x.status === 'confirmed' && (x.confirmed_at ?? '').slice(0, 10) >= from && (x.confirmed_at ?? '').slice(0, 10) <= to).map(x => ({
+      id: x.id, number: x.invoice_number, supplier: x.supplier_name, total_cents: x.total_cents, source: x.source, handed_in_by: x.technician ?? x.added_by, date: x.invoice_date ?? (x.confirmed_at ?? '').slice(0, 10),
+      job_number: x.job_number, po_number: x.po_number ?? null, check_status: x.check_status,
+    }));
+    const rank = <T,>(list: T[], key: (x: T) => string, value: (x: T) => number) => {
+      const m = new Map<string, { name: string; count: number; valueCents: number }>();
+      for (const x of list) { const k = key(x); const g = m.get(k) ?? { name: k, count: 0, valueCents: 0 }; g.count++; g.valueCents += value(x); m.set(k, g); }
+      return [...m.values()].sort((a, b) => b.count - a.count || b.valueCents - a.valueCents);
+    };
+    return { from, to, moneyIn, moneyOut, byTechnician: rank(moneyIn, x => x.technician, x => x.ex_vat), byMaker: rank(moneyIn, x => x.made_by, x => x.ex_vat), byHandedIn: rank(moneyOut, x => x.handed_in_by ?? '?', x => x.total_cents ?? 0) };
+  }
+
   // ---- Profit per job -------------------------------------------------------------------------
   profit(from: string, to: string) {
     // The test drive starts with example cost figures (the CEO changes them under Company details and rates).

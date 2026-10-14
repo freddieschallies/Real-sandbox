@@ -2498,3 +2498,55 @@ test('profit per job: invoiced less credits against labour, travel, parts and bo
   assert.ok(r.body.byClient.length >= 1 && r.body.byMonth.length >= 1 && r.body.byTechnician.length >= 1);
   assert.equal(r.body.totals.profitCents, r.body.totals.revenueCents - r.body.totals.costCents);
 });
+
+test('purchase orders: the technician asks, the stock controller approves, the slip scanned against it books the parts to the job; who did what', async () => {
+  for (const who of ['tech', 'stock', 'manager', 'books']) {
+    if ((await call(who, 'GET', '/me')).status === 401) tokens[who] = (await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW })).body.token;
+  }
+  const job = (await db.query("SELECT id, job_number FROM jobs WHERE lead_technician_id = $1 AND status NOT IN ('closed', 'cancelled') LIMIT 1", [ids.tech])).rows[0];
+  const ask = await call('tech', 'POST', '/purchase-orders', { supplierName: 'Voltex Richards Bay', jobId: job.id, note: 'For the bakery fridge',
+    lines: [{ stockItemId: ids.seal, description: 'Water inlet valve', qty: 2 }, { description: 'Insulation tape', qty: 1 }] });
+  assert.equal(ask.status, 201, JSON.stringify(ask.body));
+  assert.ok(ask.body.poNumber >= 1001);
+  assert.ok((await call('stock', 'GET', '/me/notifications')).body.some((n: { kind: string }) => n.kind === 'po_requested'), 'the stock controller is told');
+  assert.equal((await call('tech', 'GET', '/purchase-orders')).status, 403);
+  const list = (await call('stock', 'GET', '/purchase-orders')).body;
+  assert.ok(list.orders.find((o: { id: string; canDecide: boolean }) => o.id === ask.body.id).canDecide);
+  // Not yet approved: the slip cannot be booked against it.
+  fakeReader = async () => ({ supplierName: 'Voltex Richards Bay', invoiceNumber: 'PO-SLIP-1', invoiceDate: '2026-10-14', totalCents: 57500, vatCents: 7500,
+    lines: [{ description: 'Water inlet valve', supplierCode: null, qty: 2, unitPriceCents: 25000 }] });
+  const photo = await upload('tech', '/photos', { kind: 'supplier_slip', takenAt: '2026-10-14T10:00:00+02:00' });
+  const slip = await call('tech', 'POST', '/supplier-invoices', { photoId: photo.body.id, at: '2026-10-14T10:00:00+02:00' });
+  await readPendingInvoices(appDb, fakeReader);
+  const confirm = { supplierName: 'Voltex Richards Bay', invoiceNumber: 'PO-SLIP-1', totalCents: 57500, at: '2026-10-14T10:05:00+02:00', purchaseOrderId: ask.body.id,
+    lines: [{ description: 'Water inlet valve', qty: 2, unitPriceCents: 25000 }] };
+  assert.equal((await call('tech', 'POST', `/supplier-invoices/${slip.body.id}/confirm`, confirm)).status, 409, 'not approved yet');
+  assert.equal((await call('tech', 'POST', `/purchase-orders/${ask.body.id}/decide`, { approve: true })).status, 403, 'not his own');
+  assert.equal((await call('stock', 'POST', `/purchase-orders/${ask.body.id}/decide`, { approve: false })).status, 400, 'a no needs a reason');
+  assert.equal((await call('stock', 'POST', `/purchase-orders/${ask.body.id}/decide`, { approve: true })).status, 200);
+  assert.ok((await call('tech', 'GET', '/me/notifications')).body.some((n: { kind: string }) => n.kind === 'po_approved'));
+  const before = Number((await db.query("SELECT coalesce(sum(qty), 0) AS q FROM stock_movements WHERE holding_job_id = $1 AND stock_item_id = $2 AND kind = 'supplier_invoice'", [job.id, ids.seal])).rows[0].q);
+  const ok = await call('tech', 'POST', `/supplier-invoices/${slip.body.id}/confirm`, { ...confirm, jobId: null });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const after = Number((await db.query("SELECT coalesce(sum(qty), 0) AS q FROM stock_movements WHERE holding_job_id = $1 AND stock_item_id = $2 AND kind = 'supplier_invoice'", [job.id, ids.seal])).rows[0].q);
+  assert.equal(after - before, 2, "booked to the PO's job (not the van)");
+  const mine = ((await call('tech', 'GET', '/me/purchase-orders')).body as { id: string; status: string; invoice: { invoiceNumber: string } | null }[]).find(p => p.id === ask.body.id)!;
+  assert.equal(mine.status, 'collected');
+  assert.equal(mine.invoice!.invoiceNumber, 'PO-SLIP-1');
+  // Accounts sees the PO beside the invoice.
+  const seen = (await call('books', 'GET', `/office/supplier-invoices/${slip.body.id}`)).body;
+  assert.equal(seen.po.po_number, ask.body.poNumber);
+  assert.equal(seen.po.lines.length, 2);
+  // A manager approves his own team only; a rejected PO says why.
+  const ask2 = await call('tech', 'POST', '/purchase-orders', { supplierName: 'Refrigeration Wholesalers', lines: [{ description: 'R404A gas', qty: 2 }] });
+  assert.equal((await call('manager', 'GET', '/purchase-orders')).body.orders.find((o: { id: string }) => o.id === ask2.body.id).canDecide, true, 'the technician is in his department');
+  assert.equal((await call('manager', 'POST', `/purchase-orders/${ask2.body.id}/decide`, { approve: false, note: 'Use the gas in the stockroom' })).status, 200);
+  assert.ok((await call('tech', 'GET', '/me/notifications')).body.some((n: { kind: string; message: string }) => n.kind === 'po_rejected' && /stockroom/.test(n.message)));
+
+  // Who did what.
+  assert.equal((await call('tech', 'GET', '/office/who')).status, 403);
+  const who = (await call('books', 'GET', '/office/who?from=2020-01-01')).body;
+  assert.ok(who.moneyOut.some((x: { number: string; handed_in_by: string; po_number: number }) => x.number === 'PO-SLIP-1' && x.handed_in_by === 'tech' && x.po_number === ask.body.poNumber));
+  assert.ok(Array.isArray(who.byTechnician) && Array.isArray(who.byMaker) && who.byHandedIn.length >= 1);
+  if (who.moneyIn.length) assert.ok(who.moneyIn[0].made_by && who.moneyIn[0].technician);
+});

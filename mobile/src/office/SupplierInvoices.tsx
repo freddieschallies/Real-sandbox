@@ -223,6 +223,13 @@ export function SupplierInvoiceDetail({ id, changed }: { id: string; changed: ()
       {x.changed_from_read ? <Text style={[st.small, { color: C.warn }]}>Changed from what was read (kept on record).</Text> : null}
       {msg ? <Notice tone="good" title={msg} /> : null}
       <Picture id={x.photo_id} mime={x.content_type} />
+      {x.po ? (
+        <Card style={{ borderColor: C.info }}>
+          <Text style={[st.body, { fontWeight: '800' }]}>Purchase order {x.po.po_number}{x.po.approved_by ? `, approved by ${x.po.approved_by}` : ''}</Text>
+          {(x.po.lines ?? []).map((l: any, i: number) => <Text key={i} style={st.small}>Ordered: {l.qty} × {l.description}</Text>)}
+          <Text style={st.small}>Compare with the lines on the invoice: anything more than was ordered should be queried.</Text>
+        </Card>
+      ) : null}
 
       {editable ? (
         <Card>
@@ -308,6 +315,37 @@ export function SupplierInvoiceDetail({ id, changed }: { id: string; changed: ()
           <Text style={st.small}>The supplier's account code in Pastel (up to 6 characters). Kept for every invoice from {x.supplier_name}.</Text>
         </Card>
       ) : null}
+    </>
+  );
+}
+
+/** Money out: every supplier invoice in one list, searchable (for the Invoices tab). */
+export function MoneyOutList({ open, selected, tick }: { open: (id: string) => void; selected: string | null; tick: number }) {
+  const ask = useAsk();
+  const [list, setList] = useState<any[] | null>(null);
+  const [q, setQ] = useState('');
+  useEffect(() => { ask('GET', '/office/supplier-invoices?view=all').then(r => { if (r.ok) setList(r.body.invoices); }); }, [tick]);
+  if (!list) return <Body quiet>Loading…</Body>;
+  const t = q.trim().toLowerCase();
+  const rows = list.filter(x => !t || `${x.supplier_name ?? ''} ${x.invoice_number ?? ''} ${x.technician ?? ''} ${x.added_by ?? ''} ${x.job_number ?? ''}`.toLowerCase().includes(t));
+  const total = rows.reduce((n, x) => n + (x.total_cents ?? 0), 0);
+  return (
+    <>
+      <TextInput value={q} onChangeText={setQ} placeholder="Search supplier, number, person, job" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Search supplier invoices" />
+      <Text style={st.small}>{rows.length} supplier invoice{rows.length === 1 ? '' : 's'} · {R(total)} incl. VAT. Scan new ones under Supplier invoices.</Text>
+      {rows.map(x => {
+        const w = where(x);
+        return (
+          <Card key={x.id} onPress={() => open(x.id)} accessibilityLabel={`Money out ${x.invoice_number ?? 'being read'}`} style={selected === x.id ? { borderColor: C.accent, borderWidth: 2 } : undefined}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={[st.body, { fontWeight: '800', flex: 1 }]} numberOfLines={1}>{x.supplier_name ?? 'Being read…'}{x.invoice_number ? ` · ${x.invoice_number}` : ''}</Text>
+              <Pill text={w.text} tone={w.tone} />
+            </View>
+            <Text style={st.small}>{R(x.total_cents)} · {day(x.invoice_date ?? x.scanned_at)} · handed in by {x.technician ?? x.added_by ?? '?'}{x.job_number ? ` · job ${x.job_number}` : ''}</Text>
+          </Card>
+        );
+      })}
+      {!rows.length ? <Body quiet>No supplier invoices here.</Body> : null}
     </>
   );
 }

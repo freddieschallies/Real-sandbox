@@ -11,6 +11,7 @@ import { nowIso, pickImage } from '../device.ts';
 import * as D from '../../../server/src/core/documents.ts';
 import * as P from '../../../server/src/core/pastel.ts';
 import * as CR from '../../../server/src/core/clientRates.ts';
+import { WhoView } from './Who.tsx';
 import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, st } from '../ui.tsx';
 import { C } from '../theme.ts';
 
@@ -318,13 +319,20 @@ export function QuoteDetail({ b, id, techs }: { b: Books; id: string; techs: { i
 
 // ---- Invoices -------------------------------------------------------------------------------------
 
-export function InvoiceList({ b, open }: { b: Books; open: (id: string) => void }) {
+/** Invoices in two kinds: money in (our invoices to customers, with their credit notes) and, for Accounts, money out (supplier invoices). */
+export function InvoiceList({ b, open, moneyOut }: { b: Books; open: (id: string) => void; moneyOut?: React.ReactNode }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [ans, setAns] = useState<Ans | null>(null);
   const [f, setF] = useState<'open' | 'all'>('open');
-  const list = b.invoices.filter(i => f === 'all' || i.status === 'draft' || i.status === 'sent');
+  const [side, setSide] = useState<'in' | 'out'>('in');
+  const [q, setQ] = useState('');
+  const list = b.invoices.filter(i => f === 'all' || i.status === 'draft' || i.status === 'sent')
+    .filter(i => !q.trim() || `${i.invoice_number} ${i.client} ${i.store} ${i.job_number}`.toLowerCase().includes(q.trim().toLowerCase()));
+  const sides = moneyOut ? <Choice options={['in', 'out'] as const} value={side} onChange={setSide} labels={{ in: 'Money in (our invoices)', out: 'Money out (supplier invoices)' }} /> : null;
+  if (moneyOut && side === 'out') return <>{sides}{moneyOut}</>;
   return (
     <>
+      {sides}
       <Heading>Closed jobs to invoice ({b.toInvoice.length})</Heading>
       {b.toInvoice.map(j => (
         <Card key={j.id} style={{ borderLeftWidth: 5, borderLeftColor: C.warn }}>
@@ -338,6 +346,7 @@ export function InvoiceList({ b, open }: { b: Books; open: (id: string) => void 
       <Reasons a={ans} />
       <Heading>Invoices</Heading>
       <Choice options={['open', 'all'] as const} value={f} onChange={setF} labels={{ open: 'Drafts and unpaid', all: 'All invoices' }} />
+      <TextInput value={q} onChangeText={setQ} placeholder="Search number, client, store, job" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Search invoices" />
       {list.map(i => (
         <Card key={i.id} onPress={() => open(i.id)} accessibilityLabel={`Invoice ${i.invoice_number}`} style={i.overdue ? { borderColor: C.bad } : undefined}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -453,7 +462,18 @@ export function InvoiceDetail({ b, id }: { b: Books; id: string }) {
 // ---- Accounts: Sage Pastel and the company's details ----------------------------------------------
 
 const PREFIX: Record<P.PastelKind, string> = { invoice: 'INV', quote: 'Q', credit: 'CN', supplier_invoice: '' };
+/** Accounts: the Pastel link and set-up, and (for reference) who did what. */
 export function Accounts({ b, canPrices, canBooks = false }: { b: Books; canPrices: boolean; canBooks?: boolean }) {
+  const [part, setPart] = useState<'pastel' | 'who'>('pastel');
+  return (
+    <>
+      <Choice options={['pastel', 'who'] as const} value={part} onChange={setPart} labels={{ pastel: 'Pastel', who: 'Who did what' }} />
+      {part === 'who' ? <WhoView /> : <PastelScreen b={b} canPrices={canPrices} canBooks={canBooks} />}
+    </>
+  );
+}
+
+function PastelScreen({ b, canPrices, canBooks = false }: { b: Books; canPrices: boolean; canBooks?: boolean }) {
   const [kind, setKind] = useState<P.PastelKind>('invoice');
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [ratesFor, setRatesFor] = useState<{ id: string; name: string } | null>(null);

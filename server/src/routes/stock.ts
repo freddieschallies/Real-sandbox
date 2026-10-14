@@ -16,6 +16,7 @@ import { DateOnly, Iso, Refused, Uuid, parse } from '../http.ts';
 import type { InvoiceReader, ReadInvoice } from '../invoiceReader.ts';
 import { managerOf, notify, tellStockroom } from './field.ts';
 import { keepIfRefused } from '../tenancy.ts';
+import { poForSlip } from './purchaseOrders.ts';
 
 const lock = (c: Q, technicianId: string) => c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`stock:${technicianId}`]);
 
@@ -152,6 +153,8 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
       invoiceDate: DateOnly.optional(),
       totalCents: z.number().int().min(0).nullish(),
       jobId: Uuid.nullish(),
+      /** Scanned against an approved purchase order: the PO's job, and the PO is then collected. */
+      purchaseOrderId: Uuid.nullish(),
       at: Iso,
       lines: z.array(ConfirmLine).min(1).max(200),
     }), req.body);
@@ -163,7 +166,8 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
       if (inv.status === 'confirmed') throw new Refused(409, ['this invoice is already confirmed']);
       const problems = S.invoiceProblems(b);
       if (problems.length) throw new Refused(409, problems);
-      const jobId = b.jobId === undefined ? inv.job_id : b.jobId;
+      const po = b.purchaseOrderId ? await poForSlip(c, b.purchaseOrderId, me) : null;
+      const jobId = po ? po.jobId : b.jobId === undefined ? inv.job_id : b.jobId;
       if (jobId && !(await isOnJob(c, jobId, me))) throw new Refused(403, ['you are not assigned to that job']);
 
       // The same invoice can't be claimed twice, by anyone.
@@ -215,9 +219,10 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
       const changed = changedFromRead(inv.read_result, b);
       await c.query(
         `UPDATE supplier_invoices SET status = 'confirmed', confirmed_at = $2, supplier_id = $3, supplier_name = $4, invoice_number = $5,
-                invoice_date = $6, total_cents = $7, job_id = $8, changed_from_read = $9 WHERE id = $1`,
-        [id, b.at, supplierId, b.supplierName, b.invoiceNumber, b.invoiceDate ?? null, b.totalCents ?? null, jobId ?? null, changed],
+                invoice_date = $6, total_cents = $7, job_id = $8, changed_from_read = $9, purchase_order_id = $10 WHERE id = $1`,
+        [id, b.at, supplierId, b.supplierName, b.invoiceNumber, b.invoiceDate ?? null, b.totalCents ?? null, jobId ?? null, changed, b.purchaseOrderId ?? null],
       );
+      if (po) await c.query("UPDATE purchase_orders SET status = 'collected', collected_at = $2 WHERE id = $1", [b.purchaseOrderId, b.at]);
       if (changed) {
         await raiseFlag(c, { type: 'supplier_invoice_changed', technicianId: me, severity: 'low', details: { invoiceId: id, read: inv.read_result, confirmed: { ...b, at: undefined } } });
       }

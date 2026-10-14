@@ -20,6 +20,7 @@ import * as H from '../../server/src/core/handover.ts';
 import { normReg, registrationCandidates } from '../../server/src/core/vehicleCode.ts';
 import { DemoStock, seedStock, type DemoStockState } from './demoStock.ts';
 import { DemoSuppliers, seedSuppliers, type DemoSupplierState } from './demoSuppliers.ts';
+import { DemoPOs, type DemoPOState } from './demoPOs.ts';
 import * as CR from '../../server/src/core/clientRates.ts';
 import { DemoFleet, seedFleet, type DemoFleetState } from './demoFleet.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
@@ -78,6 +79,8 @@ export interface DemoState {
   docs?: DemoDocsState;
   /** Accounts: supplier invoices (the office's scans, checks of the slips, supplier Pastel codes). */
   suppliers?: DemoSupplierState;
+  /** Purchase orders for stock runs. */
+  pos?: DemoPOState;
   queries?: { id: string; from: string; to: string; job_id: string | null; subject: string; created_at: string; read: Record<string, string>; messages: { id: string; from: string; body: string; at: string }[] }[];
 }
 
@@ -1027,7 +1030,7 @@ export class DemoTransport implements Transport {
   private docRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
     const isDoc = /^\/jobs\/[^/]+\/no-charge$/.test(p) || p.startsWith('/quotes') || p.startsWith('/invoices') || p.startsWith('/pastel') || p.startsWith('/office/supplier-invoices')
-      || /^\/office\/clients\/[^/]+\/(rates|hold)$/.test(p) || p.startsWith('/office/debtors') || p === '/office/profit' || ['/office/company', '/office/rates', '/office/to-invoice'].includes(p);
+      || /^\/office\/clients\/[^/]+\/(rates|hold)$/.test(p) || p.startsWith('/office/debtors') || p === '/office/profit' || p === '/office/who' || ['/office/company', '/office/rates', '/office/to-invoice'].includes(p);
     if (!isDoc) return null;
     if (!['admin', 'accounts', 'management', 'director', 'creator', 'stockroom'].includes(this.who.level) || !this.does('documents')) return refuse(403, 'quotes and invoices are not part of your work');
     const d = this.docs();
@@ -1059,6 +1062,11 @@ export class DemoTransport implements Transport {
     if (p === '/pastel/suppliers') return ok(sup().suppliers());
     // Debtors and accounts on hold.
     if (p === '/office/debtors') return ok(d.debtors(books));
+    if (p === '/office/who') {
+      const back = (n: number) => new Date(Date.now() - n * 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+      const out = books ? (sup().list('all').invoices as never[]) : [];
+      return ok(d.whoDidWhat(q.get('from') ?? back(90), q.get('to') ?? back(0), out));
+    }
     if (p === '/office/profit') {
       if (!books) return refuse(403, 'profit is for the CEO and Accounts');
       const back = (n: number) => new Date(Date.now() - n * 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
@@ -1251,6 +1259,11 @@ export class DemoTransport implements Transport {
     return this.state.van ?? (this.state.van = { lastDriverMe: false, odometerKm: 87450, problems: ['windscreen_mirrors'] });
   }
 
+  private poBook(): DemoPOs {
+    const lvl = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
+    return new DemoPOs((this.state.pos ??= { list: [], next: 1001 }), { id: this.who.id, name: this.who.name, level: lvl });
+  }
+
   private stockResult(r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }, status = 200): Response {
     if (r.ok) this.vans().checkAll(this.who.name);
     this.persist(this.state);
@@ -1437,7 +1450,40 @@ export class DemoTransport implements Transport {
     if (p === '/me/supplier-invoices' && req.method === 'GET') { this.stock(); this.persist(this.state); return ok(this.state.stockControl!.invoices); }
     if (p === '/me/returns' && req.method === 'GET') { this.stock(); this.persist(this.state); return ok(this.state.stockControl!.returns); }
     if (p === '/supplier-invoices') return this.stockResult(this.stock().scanInvoice(b), 201);
-    if ((m = p.match(/^\/supplier-invoices\/([^/]+)\/confirm$/))) return this.stockResult(this.stock().confirmInvoice(m[1], b));
+    if ((m = p.match(/^\/supplier-invoices\/([^/]+)\/confirm$/))) {
+      // Scanned against a purchase order: the PO's job, and the PO is collected.
+      const po = b.purchaseOrderId ? this.poBook().forSlip(b.purchaseOrderId) : null;
+      if (po && !po.ok) return this.stockResult(po.res as never);
+      const r = this.stock().confirmInvoice(m[1], po?.ok ? { ...b, jobId: po.po.job_id } : b);
+      if (r.ok && po?.ok) {
+        const inv = this.state.stockControl!.invoices.find(i => i.id === m![1]);
+        Object.assign(po.po, { status: 'collected', collected_at: new Date().toISOString(), invoice: { id: m[1], invoiceNumber: b.invoiceNumber, totalCents: b.totalCents ?? null, status: 'confirmed' } });
+        if (inv) Object.assign(inv, { po: { po_number: po.po.po_number, status: 'collected', approved_by: po.po.decided_by, lines: po.po.lines.map(l => ({ description: l.description, qty: l.qty })) } });
+        this.persist(this.state);
+      }
+      return this.stockResult(r);
+    }
+    // Purchase orders for stock runs.
+    if (p === '/suppliers') {
+      const names = [...new Set([...this.stock().s.items.map(i => i.supplierName).filter((n): n is string => !!n), ...(this.state.suppliers?.slips ?? []).map(x => x.supplier_name)])].sort();
+      return ok(names.map(n => ({ id: n, name: n })));
+    }
+    if (p === '/purchase-orders' && req.method === 'POST') {
+      const j = b.jobId ? this.findJob(b.jobId) : null;
+      if (b.jobId && !j) return refuse(404, 'no such job');
+      const items = this.stock().s.items;
+      const r = this.poBook().ask(b, j ? { id: j.meta.id, job_number: j.meta.job_number, store: j.meta.store } : null, id => items.find(i => i.id === id)?.code ?? null);
+      this.persist(this.state);
+      return this.stockResult(r as never, 201);
+    }
+    if (p === '/me/purchase-orders') return ok(this.poBook().mine());
+    if ((m = p.match(/^\/me\/purchase-orders\/([^/]+)\/cancel$/))) { const r = this.poBook().cancel(m[1]); this.persist(this.state); return this.stockResult(r as never); }
+    if (p === '/purchase-orders') {
+      const lvl = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
+      if (!['stockroom', 'admin', 'management', 'director', 'creator'].includes(lvl) && !this.does('books')) return refuse(403, 'purchase orders are for the stockroom and the office');
+      return ok(this.poBook().list(new URLSearchParams(req.path.split('?')[1] ?? '').get('view') ?? 'requested'));
+    }
+    if ((m = p.match(/^\/purchase-orders\/([^/]+)\/decide$/))) { const r = this.poBook().decide(m[1], !!b.approve, b.note); this.persist(this.state); return this.stockResult(r as never); }
     if (p === '/me/returns') return this.stockResult(this.stock().sendReturn(b), 201);
     if ((m = p.match(/^\/jobs\/([^/]+)\/stock$/))) return ok(this.stock().jobStock(m[1]));
     if ((m = p.match(/^\/jobs\/([^/]+)\/stock-out$/))) {

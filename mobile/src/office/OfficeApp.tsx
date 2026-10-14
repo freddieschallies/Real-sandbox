@@ -34,15 +34,16 @@ import { Accounts, InvoiceDetail, InvoiceList, NewQuote, QuoteDetail, QuoteList,
 import { NewQuery, QueryList, QueryThread, useQueries } from '../queries/Queries.tsx';
 import { useOffice, type Answer, type JobChange, type OfficeHook, type OfficeJob } from './useOffice.ts';
 import { MyPasswordSettings } from '../screens/MyPassword.tsx';
-import { SupplierInvoiceDetail, SupplierInvoiceList } from './SupplierInvoices.tsx';
+import { MoneyOutList, SupplierInvoiceDetail, SupplierInvoiceList } from './SupplierInvoices.tsx';
 import { DebtorDetail, DebtorList } from './Debtors.tsx';
 import { ProfitView } from './Profit.tsx';
+import { PurchaseOrderList } from './PurchaseOrders.tsx';
 import { AddPerson, LOGIN_PILL, LoginCard } from './Logins.tsx';
 import { ImportCustomers, StoreDetail, StoreList, pointFrom } from './Stores.tsx';
 import { BreakdownAlert, BreakdownById, BreakdownList, BreakdownSettings, type Bd } from './Breakdowns.tsx';
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
-type Tab = 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
+type Tab = 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'pos' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
 type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | { kind: 'supplierinv'; id: string } | { kind: 'debtor'; id: string } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
@@ -61,7 +62,7 @@ const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: '
 /** On the phone, unless the CEO or an admin pinned others: the first four show and the rest go under More, most used first. */
 const PHONE_ORDER: string[] = MENU_TABS.office.map(t => t.key);
 /** Screens that use the whole width on a computer (no list and detail). */
-const FULL: Tab[] = ['today', 'profit', 'accounts', 'map', 'departments', 'timesheets', 'settings'];
+const FULL: Tab[] = ['today', 'profit', 'pos', 'accounts', 'map', 'departments', 'timesheets', 'settings'];
 const OFFICE_LEVELS = ['admin', 'accounts', 'management', 'hr', 'director', 'creator'];
 export const isOffice = (level?: string) => OFFICE_LEVELS.includes(level ?? '');
 
@@ -111,6 +112,7 @@ export function OfficeApp() {
     { key: 'quotes', label: 'Quotes', count: books.quotes.filter(q => q.status === 'draft').length || undefined },
     { key: 'invoices', label: 'Invoices', count: books.toInvoice.length || undefined },
     { key: 'supplier', label: 'Supplier invoices', short: 'Suppliers' },
+    { key: 'pos', label: 'Purchase orders', short: 'POs' },
     { key: 'debtors', label: 'Debtors' },
     { key: 'profit', label: 'Profit' },
     { key: 'accounts', label: 'Accounts', short: 'Pastel' },
@@ -148,9 +150,10 @@ export function OfficeApp() {
       {tab === 'jobs' ? <JobList o={o} open={id => setSel({ kind: 'job', id })} add={does('jobs') ? () => setSel({ kind: 'newjob' }) : undefined} selected={sel?.kind === 'job' ? sel.id : null} /> : null}
       {tab === 'queries' ? <QueryList q={qs} open={id => setSel({ kind: 'query', id })} ask={() => setSel({ kind: 'newquery' })} /> : null}
       {tab === 'quotes' ? <QuoteList b={books} open={id => setSel({ kind: 'quote', id })} add={() => setSel({ kind: 'newquote' })} /> : null}
-      {tab === 'invoices' ? <InvoiceList b={books} open={id => setSel({ kind: 'invoice', id })} /> : null}
+      {tab === 'invoices' ? <InvoiceList b={books} open={id => setSel({ kind: 'invoice', id })} moneyOut={does('books') ? <MoneyOutList open={id => setSel({ kind: 'supplierinv', id })} selected={sel?.kind === 'supplierinv' ? sel.id : null} tick={supTick} /> : undefined} /> : null}
       {tab === 'supplier' ? <SupplierInvoiceList open={id => setSel({ kind: 'supplierinv', id })} selected={sel?.kind === 'supplierinv' ? sel.id : null} tick={supTick} /> : null}
       {tab === 'debtors' ? <DebtorList open={id => setSel({ kind: 'debtor', id })} selected={sel?.kind === 'debtor' ? sel.id : null} tick={debTick} /> : null}
+      {tab === 'pos' ? <PurchaseOrderList /> : null}
       {tab === 'profit' ? <ProfitView openJob={id => go('jobs', { kind: 'job', id })} /> : null}
       {tab === 'accounts' ? <Accounts b={books} canPrices={does('prices')} canBooks={does('books')} /> : null}
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}

@@ -12,11 +12,11 @@ export const MENU_TABS: Record<MenuApp, { key: string; label: string }[]> = {
     { key: 'today', label: 'Today' }, { key: 'breakdowns', label: 'Breakdowns' }, { key: 'jobs', label: 'Jobs' }, { key: 'departments', label: 'Departments' },
     { key: 'timesheets', label: 'Timesheets' }, { key: 'flags', label: 'Flags' }, { key: 'people', label: 'People' },
     { key: 'map', label: 'Team map' }, { key: 'vans', label: 'Van stock' }, { key: 'queries', label: 'Queries' },
-    { key: 'quotes', label: 'Quotes' }, { key: 'invoices', label: 'Invoices' }, { key: 'supplier', label: 'Supplier invoices' }, { key: 'debtors', label: 'Debtors' }, { key: 'profit', label: 'Profit' }, { key: 'accounts', label: 'Accounts' },
+    { key: 'quotes', label: 'Quotes' }, { key: 'invoices', label: 'Invoices' }, { key: 'supplier', label: 'Supplier invoices' }, { key: 'pos', label: 'Purchase orders' }, { key: 'debtors', label: 'Debtors' }, { key: 'profit', label: 'Profit' }, { key: 'accounts', label: 'Accounts' },
     { key: 'handovers', label: 'Handovers' }, { key: 'repairs', label: 'Workshop' }, { key: 'stores', label: 'Stores' }, { key: 'barcodes', label: 'QR codes' }, { key: 'settings', label: 'Settings' },
   ],
   stockroom: [
-    { key: 'issue', label: 'To issue' }, { key: 'receive', label: 'To receive' }, { key: 'room', label: 'Stock' },
+    { key: 'issue', label: 'To issue' }, { key: 'receive', label: 'To receive' }, { key: 'pos', label: 'Purchase orders' }, { key: 'room', label: 'Stock' },
     { key: 'order', label: 'To order' }, { key: 'people', label: 'People' }, { key: 'workshop', label: 'Workshop' },
     { key: 'tools', label: 'Tool store' }, { key: 'live', label: 'Live' }, { key: 'items', label: 'New items' },
   ],
@@ -39,7 +39,7 @@ export function officeTabKeys(level: string, work: Partial<Record<WorkArea, bool
   const jobsSide = level === 'creator' || !!work.jobs;
   const on: Record<string, boolean> = {
     today: jobsSide, jobs: jobsSide || does('jobcards'), queries: does('jobs'), breakdowns: does('jobs'),
-    quotes: does('documents'), invoices: does('documents'), supplier: does('books'), debtors: does('documents'), profit: does('books'), accounts: does('documents'),
+    quotes: does('documents'), invoices: does('documents'), supplier: does('books'), pos: does('jobs') || does('books'), debtors: does('documents'), profit: does('books'), accounts: does('documents'),
     flags: does('flags'), handovers: does('flags'), map: does('flags') || level === 'management',
     vans: does('vanstock'), departments: does('hr'),
     // HR and the CEO always have every timesheet; a department manager his own technicians'.

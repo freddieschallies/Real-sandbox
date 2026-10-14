@@ -11,6 +11,7 @@ import { StoreProvider, useStore } from './src/state.tsx';
 import { Button } from './src/ui.tsx';
 import { NavProvider, useNav } from './src/nav.tsx';
 import { OfficeApp, isOffice } from './src/office/OfficeApp.tsx';
+import { PurchaseOrdersScreen } from './src/screens/PurchaseOrders.tsx';
 import { QueriesScreen } from './src/screens/QueriesScreen.tsx';
 import { MyKitScreen } from './src/screens/MyKitScreen.tsx';
 import { MyTimesheetsScreen } from './src/timesheets/Timesheet.tsx';
@@ -50,6 +51,7 @@ function Current() {
     case 'flags': return <Flags />;
     case 'sync': return <Sync />;
     case 'stock': return <MyStock />;
+    case 'pos': return <PurchaseOrdersScreen />;
     case 'invoice': return <Invoice key={route.invoiceId ?? 'new'} invoiceId={route.invoiceId} jobId={route.jobId} />;
     case 'bookout': return <BookOut jobId={route.jobId} />;
     case 'return': return <Return />;

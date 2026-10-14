@@ -75,7 +75,7 @@ export class DemoSuppliers {
   private stockSlips(): Slip[] {
     return this.stock.invoices.filter(i => i.status === 'confirmed').map(i => {
       const x = i as typeof i & { lines?: Line[] };
-      return { ...(this.s.checks[i.id] ??= fresh()), id: i.id, technician: 'Thabo Mkhize', supplier_name: i.supplier_name ?? '', invoice_number: i.invoice_number ?? '', invoice_date: i.invoice_date,
+      return { ...(this.s.checks[i.id] ??= fresh()), po: (i as { po?: unknown }).po ?? null, id: i.id, technician: 'Thabo Mkhize', supplier_name: i.supplier_name ?? '', invoice_number: i.invoice_number ?? '', invoice_date: i.invoice_date,
         total_cents: i.total_cents, vat_cents: (i.read_result as { vatCents?: number | null } | null)?.vatCents ?? null, confirmed_at: i.confirmed_at ?? i.scanned_at, job_number: null, lines: x.lines ?? [] };
     });
   }
@@ -99,6 +99,7 @@ export class DemoSuppliers {
       changed_from_read: office ? (x as OfficeScan).changed_from_read : false, read_error: null,
       technician: office ? null : (x as Slip).technician, added_by: office ? (x as OfficeScan).added_by : null, job_number: office ? null : (x as Slip).job_number,
       delivery_id: del?.id ?? null, delivery_ref: del?.reference ?? null, delivery_date: del?.date ?? null, pastel_batch_id: x.pastel_batch_id,
+      po_number: (x as { po?: { po_number: number } | null }).po?.po_number ?? null,
     };
   }
 
@@ -125,7 +126,7 @@ export class DemoSuppliers {
     const used = new Set(this.s.scans.filter(o => o.id !== id && o.delivery_id).map(o => o.delivery_id));
     const name = (x.supplier_name ?? '').toLowerCase();
     const deliveries = name ? this.s.deliveries.filter(d => d.supplier.toLowerCase() === name && !used.has(d.id)).map(d => ({ id: d.id, reference: d.reference, date: d.date, received_by: d.received_by, lines: d.lines })) : [];
-    return good({ ...this.row(x), read: scan?.read ?? null, lines: x.lines.map((l, i) => ({ line_no: i + 1, description: l.description, supplier_code: l.supplierCode ?? null, qty: l.qty, unit_price_cents: l.unitPriceCents, stock_code: this.itemFor(l)?.code ?? null })), deliveries });
+    return good({ ...this.row(x), po: (x as { po?: unknown }).po ?? null, read: scan?.read ?? null, lines: x.lines.map((l, i) => ({ line_no: i + 1, description: l.description, supplier_code: l.supplierCode ?? null, qty: l.qty, unit_price_cents: l.unitPriceCents, stock_code: this.itemFor(l)?.code ?? null })), deliveries });
   }
 
   private itemFor(l: Line) { return S.matchItem({ description: l.description, supplierCode: l.supplierCode ?? null, qty: l.qty }, this.stock.items as S.CatalogueItem[]); }
