@@ -411,7 +411,7 @@ export function registerDocumentRoutes(app: FastifyInstance) {
               (SELECT coalesce(sum(round(l.qty * l.unit_price_cents)), 0)::bigint FROM document_lines l WHERE l.invoice_id = i.id) AS ex_vat_cents,
               (SELECT coalesce(sum(cn.amount_cents), 0)::bigint FROM credit_notes cn WHERE cn.invoice_id = i.id) AS credited_cents
          FROM invoices i JOIN jobs j ON j.id = i.job_id JOIN stores s ON s.id = j.store_id JOIN clients c ON c.id = s.client_id JOIN users u ON u.id = i.created_by
-        WHERE ($1::text IS NULL OR i.status::text = $1) ORDER BY (i.status = 'draft') DESC, i.invoice_number DESC LIMIT 500`, [req.query.status ?? null]);
+        WHERE ($1::text IS NULL OR i.status::text = $1) ORDER BY (i.status = 'draft') DESC, i.invoice_number DESC LIMIT 5000`, [req.query.status ?? null]);
     return rows.map(r => {
       const ex = Number(r.ex_vat_cents);
       return { ...r, ex_vat_cents: ex, credited_cents: Number(r.credited_cents), total_cents: D.totals([{ qty: 1, unitPriceCents: ex }], r.vat_pct).totalCents, overdue: r.status === 'sent' && r.due_date && r.due_date < today() };

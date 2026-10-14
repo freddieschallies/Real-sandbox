@@ -5,7 +5,8 @@ import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import * as D from '../../../server/src/core/documents.ts';
-import { Body, Button, Card, Choice, Field, Notice, Pill, st } from '../ui.tsx';
+import { Body, Button, Card, Choice, Field, Notice, Pill, Select, st } from '../ui.tsx';
+import { Picture } from './SupplierInvoices.tsx';
 import { C } from '../theme.ts';
 
 type View_ = 'requested' | 'approved' | 'collected' | 'all';
@@ -22,6 +23,20 @@ export function PurchaseOrderList() {
   const [noFor, setNoFor] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [jobs, setJobs] = useState<{ id: string; label: string }[]>([]);
+  const [showDoc, setShowDoc] = useState<string | null>(null);
+  const [sim, setSim] = useState<string | null>(null);
+  const demo = s.session?.mode === 'demo';
+  useEffect(() => {
+    s.ask({ method: 'GET', path: '/jobs' }).then(r => {
+      if (r?.status === 200) setJobs((r.body as any[]).filter(j => j.status !== 'closed' && j.status !== 'cancelled').map(j => ({ id: j.id, label: `#${j.job_number} ${j.store} (${j.lead_technician})` })));
+    }).catch(() => undefined);
+  }, []);
+  const link = async (id: string, jobId: string) => {
+    const r = await s.ask({ method: 'PUT', path: `/purchase-orders/${id}`, json: { jobId } });
+    if (r?.status === 200) { setMsg({ ok: true, text: 'Linked: the technician has the PO on his phone.' }); load(); }
+    else setMsg({ ok: false, text: (r?.body as { reasons?: string[] })?.reasons?.join('; ') ?? 'No signal: try again.' });
+  };
   const load = () => s.ask({ method: 'GET', path: `/purchase-orders?view=${view}` }).then(r => { if (r?.status === 200) setD(r.body); });
   useEffect(() => { load(); }, [view]);
   const decide = async (id: string, approve: boolean) => {
@@ -34,7 +49,14 @@ export function PurchaseOrderList() {
     <>
       <Choice options={['requested', 'approved', 'collected', 'all'] as const} value={view} onChange={v => { setView(v); setMsg(null); }}
         labels={{ requested: `To approve${c.requested ? ` (${c.requested})` : ''}`, approved: `Approved${c.approved ? ` (${c.approved})` : ''}`, collected: 'Collected', all: 'All' }} />
-      <Text style={st.small}>Pastel: approved POs go into Pastel through the direct link once the office server is set up.</Text>
+      <Text style={st.small}>Pastel: approved POs go into Pastel through the direct link once the office server is set up. A PO made in Pastel and posted in the purchase orders WhatsApp group comes in here by itself.</Text>
+      {demo ? (
+        <Card>
+          <Text style={st.small}>Test drive: pretend admin posted a PO from Pastel in the purchase orders group.</Text>
+          <Button label="Post a PO in the group" kind="secondary" onPress={async () => { const r = await s.ask({ method: 'POST', path: '/demo/pos/simulate', json: {} }); setSim(r?.status === 201 ? 'Posted: it was read and added (see Approved).' : 'Could not.'); load(); }} />
+          {sim ? <Text style={st.small}>{sim}</Text> : null}
+        </Card>
+      ) : null}
       {msg ? <Notice tone={msg.ok ? 'good' : 'bad'} title={msg.text} /> : null}
       {!d ? <Body quiet>Loading…</Body> : null}
       {(d?.orders ?? []).map((p: any) => {
@@ -42,10 +64,18 @@ export function PurchaseOrderList() {
         return (
           <Card key={p.id} accessibilityLabel={`PO ${p.po_number}`}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Text style={[st.body, { fontWeight: '800', flex: 1 }]} numberOfLines={1}>PO {p.po_number} · {p.supplier_name}</Text>
+              <Text style={[st.body, { fontWeight: '800', flex: 1 }]} numberOfLines={1}>PO {p.external_number ?? p.po_number} · {p.supplier_name}</Text>
+              {p.source === 'group' ? <Pill text="From the group" tone="info" /> : null}
               <Pill text={stt.t} tone={stt.tone} />
             </View>
-            <Text style={st.small}>{p.technician} · {when(p.requested_at)} · {p.job_number ? `job ${p.job_number}${p.store ? `, ${p.store}` : ''}` : 'for his van'}</Text>
+            <Text style={st.small}>{p.source === 'group' ? `Posted by ${p.posted_by ?? 'someone'} · ${p.technician ?? 'no technician yet'}` : p.technician} · {when(p.requested_at)} · {p.job_number ? `job ${p.job_number}${p.store ? `, ${p.store}` : ''}` : p.source === 'group' ? 'no job yet' : 'for his van'}</Text>
+            {p.source === 'group' && (!p.job_id || !p.technician_id) && ['requested', 'approved'].includes(p.status) ? (
+              <View style={{ gap: 6 }}>
+                <Notice tone="warn" title="Which job is it for?" lines={['The PO did not say. Link it: the job\'s technician gets it on his phone.']} />
+                <Select label="Job" value={null} placeholder="Choose the job" options={jobs.map(j => ({ value: j.id, label: j.label }))} onChange={v => link(p.id, v)} />
+              </View>
+            ) : null}
+            {p.photo_id ? (showDoc === p.id ? <Picture id={p.photo_id} mime={p.photo_mime ?? null} /> : <Button label="See the PO as posted" kind="quiet" onPress={() => setShowDoc(p.id)} />) : null}
             {(p.lines ?? []).map((l: any) => <Text key={l.lineNo} style={st.body}>{l.qty} × {l.description}{l.code ? ` (${l.code})` : ''}</Text>)}
             {p.note ? <Text style={st.small}>Note: {p.note}</Text> : null}
             {p.decided_by ? <Text style={st.small}>{p.status === 'rejected' ? 'Not approved' : 'Approved'} by {p.decided_by}{p.decision_note ? `: ${p.decision_note}` : ''}</Text> : null}

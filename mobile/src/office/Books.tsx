@@ -326,6 +326,8 @@ export function InvoiceList({ b, open, moneyOut }: { b: Books; open: (id: string
   const [f, setF] = useState<'open' | 'all'>('open');
   const [side, setSide] = useState<'in' | 'out'>('in');
   const [q, setQ] = useState('');
+  const [by, setBy] = useState<'list' | 'customer'>('list');
+  const [openClient, setOpenClient] = useState<string | null>(null);
   const list = b.invoices.filter(i => f === 'all' || i.status === 'draft' || i.status === 'sent')
     .filter(i => !q.trim() || `${i.invoice_number} ${i.client} ${i.store} ${i.job_number}`.toLowerCase().includes(q.trim().toLowerCase()));
   const sides = moneyOut ? <Choice options={['in', 'out'] as const} value={side} onChange={setSide} labels={{ in: 'Money in (our invoices)', out: 'Money out (supplier invoices)' }} /> : null;
@@ -345,9 +347,11 @@ export function InvoiceList({ b, open, moneyOut }: { b: Books; open: (id: string
       {!b.toInvoice.length ? <Body quiet>Every closed job has an invoice.</Body> : null}
       <Reasons a={ans} />
       <Heading>Invoices</Heading>
-      <Choice options={['open', 'all'] as const} value={f} onChange={setF} labels={{ open: 'Drafts and unpaid', all: 'All invoices' }} />
-      <TextInput value={q} onChangeText={setQ} placeholder="Search number, client, store, job" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Search invoices" />
-      {list.map(i => (
+      <Choice options={['list', 'customer'] as const} value={by} onChange={v => { setBy(v); setOpenClient(null); }} labels={{ list: 'Invoice list', customer: 'Per customer' }} />
+      {by === 'customer' ? <PerCustomer b={b} open={open} openClient={openClient} setOpenClient={setOpenClient} /> : null}
+      {by === 'list' ? <Choice options={['open', 'all'] as const} value={f} onChange={setF} labels={{ open: 'Drafts and unpaid', all: 'All invoices' }} /> : null}
+      {by === 'list' ? <TextInput value={q} onChangeText={setQ} placeholder="Search number, client, store, job" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Search invoices" /> : null}
+      {by === 'list' && list.map(i => (
         <Card key={i.id} onPress={() => open(i.id)} accessibilityLabel={`Invoice ${i.invoice_number}`} style={i.overdue ? { borderColor: C.bad } : undefined}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <Text style={[st.body, { fontWeight: '800' }]}>INV{i.invoice_number}</Text>
@@ -358,7 +362,60 @@ export function InvoiceList({ b, open, moneyOut }: { b: Books; open: (id: string
           <Text style={st.small}>{i.client} · job {i.job_number} · {R(i.total_cents)} incl. VAT{i.status === 'sent' ? ` · due ${day(i.due_date)}` : ''}</Text>
         </Card>
       ))}
-      {!list.length ? <Body quiet>No invoices here.</Body> : null}
+      {by === 'list' && !list.length ? <Body quiet>No invoices here.</Body> : null}
+    </>
+  );
+}
+
+/** Every customer with what was invoiced, paid, credited and is still owed; open one for its invoices. */
+function PerCustomer({ b, open, openClient, setOpenClient }: { b: Books; open: (id: string) => void; openClient: string | null; setOpenClient: (c: string | null) => void }) {
+  const [q, setQ] = useState('');
+  const live = b.invoices.filter(i => i.status !== 'cancelled' && i.status !== 'draft');
+  const credit = (i: any) => Math.round(Number(i.credited_cents ?? 0) * (1 + Number(i.vat_pct ?? 15) / 100));
+  const groups = [...live.reduce((m, i) => {
+    const g = m.get(i.client) ?? { client: i.client, count: 0, invoiced: 0, paid: 0, owing: 0, credited: 0, last: '' };
+    g.count++; g.invoiced += i.total_cents; g.credited += credit(i);
+    if (i.status === 'paid') g.paid += i.total_cents; else g.owing += Math.max(0, i.total_cents - credit(i));
+    const d = (i.sent_at ?? i.created_at ?? '').slice(0, 10); if (d > g.last) g.last = d;
+    m.set(i.client, g); return m;
+  }, new Map<string, { client: string; count: number; invoiced: number; paid: number; owing: number; credited: number; last: string }>()).values()]
+    .filter(g => !q.trim() || g.client.toLowerCase().includes(q.trim().toLowerCase())).sort((a, z) => z.invoiced - a.invoiced);
+  if (openClient) {
+    const g = groups.find(x => x.client === openClient);
+    const mine = b.invoices.filter(i => i.client === openClient).sort((a, z) => z.invoice_number - a.invoice_number);
+    return (
+      <>
+        <Button label="← All customers" kind="quiet" onPress={() => setOpenClient(null)} />
+        <Card>
+          <Text style={[st.body, { fontWeight: '800', fontSize: 20 }]}>{openClient}</Text>
+          {g ? <Text style={st.small}>{g.count} invoice{g.count === 1 ? '' : 's'} sent · invoiced {R(g.invoiced)} · paid {R(g.paid)}{g.credited ? ` · credited ${R(g.credited)}` : ''} · still owed {R(g.owing)} (incl. VAT)</Text> : null}
+        </Card>
+        {mine.map(i => (
+          <Card key={i.id} onPress={() => open(i.id)} accessibilityLabel={`Invoice ${i.invoice_number}`} style={i.overdue ? { borderColor: C.bad } : undefined}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={[st.body, { fontWeight: '800' }]}>INV{i.invoice_number}</Text>
+              <Text style={[st.body, { flex: 1 }]} numberOfLines={1}>{i.store}</Text>
+              {i.overdue ? <Pill text="Overdue" tone="bad" /> : <Pill text={STATUS[i.status]?.t ?? i.status} tone={STATUS[i.status]?.tone ?? 'quiet'} />}
+            </View>
+            <Text style={st.small}>{day(i.sent_at ?? i.created_at)} · job {i.job_number} · {R(i.total_cents)} incl. VAT{(i as { credited_cents?: number }).credited_cents ? ` · ${R(credit(i))} credited` : ''}</Text>
+          </Card>
+        ))}
+      </>
+    );
+  }
+  return (
+    <>
+      <TextInput value={q} onChangeText={setQ} placeholder="Find a customer" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Find a customer" />
+      {groups.map(g => (
+        <Card key={g.client} onPress={() => setOpenClient(g.client)} accessibilityLabel={`Customer ${g.client}`}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={[st.body, { fontWeight: '800', flex: 1 }]} numberOfLines={1}>{g.client}</Text>
+            <Text style={[st.body, { fontWeight: '800' }]}>{R(g.invoiced)}</Text>
+          </View>
+          <Text style={st.small}>{g.count} invoice{g.count === 1 ? '' : 's'} · paid {R(g.paid)} · owed {R(g.owing)}{g.credited ? ` · credited ${R(g.credited)}` : ''} · last {day(g.last)}</Text>
+        </Card>
+      ))}
+      {!groups.length ? <Body quiet>No invoices sent yet.</Body> : null}
     </>
   );
 }

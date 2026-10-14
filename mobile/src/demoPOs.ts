@@ -7,8 +7,10 @@ const bad = (status: number, ...reasons: string[]): Res => ({ ok: false, status,
 
 export interface DemoPO {
   id: string; po_number: number; status: 'requested' | 'approved' | 'rejected' | 'collected' | 'cancelled';
+  /** app: asked for in the app; group: made in Pastel and posted in the purchase orders group. */
+  source?: 'app' | 'group'; external_number?: string | null; posted_by?: string | null; photo_id?: null; photo_mime?: null;
   supplier_id: string | null; supplier_name: string; job_id: string | null; job_number: number | null; store: string | null; note: string | null;
-  technician_id: string; technician: string; requested_at: string; decided_at: string | null; decided_by: string | null; decision_note: string | null;
+  technician_id: string | null; technician: string | null; requested_at: string; decided_at: string | null; decided_by: string | null; decision_note: string | null;
   collected_at: string | null; pastel_sent_at: null; pastel_ref: null;
   lines: { lineNo: number; description: string; qty: number; code: string | null; stockItemId: string | null }[];
   invoice: { id: string; invoiceNumber: string; totalCents: number | null; status: string } | null;
@@ -58,6 +60,30 @@ export class DemoPOs {
     if (!approve && (!note || note.trim().length < 3)) return bad(400, 'say why not (the technician is told)');
     Object.assign(p, { status: approve ? 'approved' : 'rejected', decided_at: new Date().toISOString(), decided_by: this.who.name, decision_note: note?.trim() || null });
     return good({ id, status: p.status });
+  }
+  /** Test drive: admin posts a PO made in Pastel in the purchase orders group; it is read and added. */
+  posted(job: { id: string; job_number: number; store: string; lead_id: string; lead: string } | null, code: (desc: string) => { id: string; code: string } | null): Res {
+    const ext = `PO${String(Math.floor(200 + Math.random() * 700)).padStart(6, '0')}`;
+    const lines = [{ description: 'Water inlet valve 24V', qty: 2 }, { description: 'Cable ties 300mm (pack of 100)', qty: 1 }];
+    const po: DemoPO = {
+      id: `po-${Date.now()}`, po_number: this.s.next++, status: 'approved', source: 'group', external_number: ext, posted_by: 'Zanele Khoza (Admin)', photo_id: null,
+      supplier_id: null, supplier_name: 'Voltex Richards Bay', job_id: job?.id ?? null, job_number: job?.job_number ?? null, store: job?.store ?? null,
+      note: `${ext} Voltex Richards Bay${job ? ` for job ${job.job_number}` : ''}`, technician_id: job?.lead_id ?? null, technician: job?.lead ?? null,
+      requested_at: new Date().toISOString(), decided_at: new Date().toISOString(), decided_by: null, decision_note: 'Issued outside the app and posted in the group',
+      collected_at: null, pastel_sent_at: null, pastel_ref: null, invoice: null,
+      lines: lines.map((l, i) => { const it = code(l.description); return { lineNo: i + 1, description: l.description, qty: l.qty, stockItemId: it?.id ?? null, code: it?.code ?? null }; }),
+    };
+    this.s.list.unshift(po);
+    return good({ id: po.id, poNumber: po.po_number, external: ext }, 201);
+  }
+  /** A PO from the group without its job: the office links it (the job's technician gets it). */
+  link(id: string, job: { id: string; job_number: number; store: string; lead_id: string; lead: string } | null): Res {
+    if (!APPROVERS.includes(this.who.level)) return bad(403, 'the stock controller, admin, a manager or the CEO links a PO');
+    const p = this.s.list.find(x => x.id === id);
+    if (!p) return bad(404, 'no such PO');
+    if (!job) return bad(404, 'no such job');
+    Object.assign(p, { job_id: job.id, job_number: job.job_number, store: job.store, technician_id: job.lead_id, technician: job.lead });
+    return good({ id, jobId: job.id, technicianId: job.lead_id });
   }
   /** The slip scanned against the PO: it gives the job; the PO is collected once the slip is booked. */
   forSlip(id: string): { ok: true; po: DemoPO } | { ok: false; res: Res } {

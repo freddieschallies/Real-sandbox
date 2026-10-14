@@ -123,7 +123,7 @@ export function SupplierInvoiceList({ open, selected, tick }: { open: (id: strin
 }
 
 /** The invoice's picture, or the PDF itself on a computer. */
-function Picture({ id, mime }: { id: string | null; mime: string | null }) {
+export function Picture({ id, mime }: { id: string | null; mime: string | null }) {
   const uri = usePhotoUri(id);
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {
@@ -324,13 +324,40 @@ export function MoneyOutList({ open, selected, tick }: { open: (id: string) => v
   const ask = useAsk();
   const [list, setList] = useState<any[] | null>(null);
   const [q, setQ] = useState('');
+  const [by, setBy] = useState<'list' | 'supplier'>('list');
+  const [supplier, setSupplier] = useState<string | null>(null);
   useEffect(() => { ask('GET', '/office/supplier-invoices?view=all').then(r => { if (r.ok) setList(r.body.invoices); }); }, [tick]);
   if (!list) return <Body quiet>Loading…</Body>;
   const t = q.trim().toLowerCase();
-  const rows = list.filter(x => !t || `${x.supplier_name ?? ''} ${x.invoice_number ?? ''} ${x.technician ?? ''} ${x.added_by ?? ''} ${x.job_number ?? ''}`.toLowerCase().includes(t));
+  const rows = list.filter(x => !t || `${x.supplier_name ?? ''} ${x.invoice_number ?? ''} ${x.technician ?? ''} ${x.added_by ?? ''} ${x.job_number ?? ''}`.toLowerCase().includes(t))
+    .filter(x => !supplier || x.supplier_name === supplier);
   const total = rows.reduce((n, x) => n + (x.total_cents ?? 0), 0);
+  const groups = [...list.filter(x => x.status === 'confirmed' && x.supplier_name).reduce((m, x) => {
+    const g = m.get(x.supplier_name) ?? { name: x.supplier_name, count: 0, total: 0, toPastel: 0 };
+    g.count++; g.total += x.total_cents ?? 0; if (!x.pastel_batch_id) g.toPastel++;
+    m.set(x.supplier_name, g); return m;
+  }, new Map<string, { name: string; count: number; total: number; toPastel: number }>()).values()].filter(g => !t || g.name.toLowerCase().includes(t)).sort((a, z) => z.total - a.total);
   return (
     <>
+      <Choice options={['list', 'supplier'] as const} value={by} onChange={v => { setBy(v); setSupplier(null); }} labels={{ list: 'Invoice list', supplier: 'Per supplier' }} />
+      {by === 'supplier' && !supplier ? (
+        <>
+          <TextInput value={q} onChangeText={setQ} placeholder="Find a supplier" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Find a supplier" />
+          {groups.map(g => (
+            <Card key={g.name} onPress={() => { setSupplier(g.name); setQ(''); }} accessibilityLabel={`Supplier ${g.name}`}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Text style={[st.body, { fontWeight: '800', flex: 1 }]} numberOfLines={1}>{g.name}</Text>
+                <Text style={[st.body, { fontWeight: '800' }]}>{R(g.total)}</Text>
+              </View>
+              <Text style={st.small}>{g.count} invoice{g.count === 1 ? '' : 's'}{g.toPastel ? ` · ${g.toPastel} not in Pastel yet` : ''}</Text>
+            </Card>
+          ))}
+          {!groups.length ? <Body quiet>No supplier invoices yet.</Body> : null}
+        </>
+      ) : null}
+      {by === 'supplier' && !supplier ? null : <>
+      {supplier ? <Button label="← All suppliers" kind="quiet" onPress={() => setSupplier(null)} /> : null}
+      {supplier ? <Text style={[st.body, { fontWeight: '800', fontSize: 20 }]}>{supplier}</Text> : null}
       <TextInput value={q} onChangeText={setQ} placeholder="Search supplier, number, person, job" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Search supplier invoices" />
       <Text style={st.small}>{rows.length} supplier invoice{rows.length === 1 ? '' : 's'} · {R(total)} incl. VAT. Scan new ones under Supplier invoices.</Text>
       {rows.map(x => {
@@ -346,6 +373,7 @@ export function MoneyOutList({ open, selected, tick }: { open: (id: string) => v
         );
       })}
       {!rows.length ? <Body quiet>No supplier invoices here.</Body> : null}
+      </>}
     </>
   );
 }

@@ -16,9 +16,11 @@ import { gmailOptions, type ImapOptions } from '../imap.ts';
 import { companyActive } from '../auth.ts';
 import { openCompanyConnection } from '../tenancy.ts';
 import { createJob, NewJob } from './jobs.ts';
+import { ingestPO } from './purchaseOrders.ts';
+import { poReaderFromEnv, type POReader } from '../poReader.ts';
 import { Iso, Refused, Uuid, parse } from '../http.ts';
 
-export interface IntakeOptions { reader: BreakdownReader; connect?: (user: string, pass: string) => ImapOptions; bridgeKey?: string }
+export interface IntakeOptions { reader: BreakdownReader; connect?: (user: string, pass: string) => ImapOptions; bridgeKey?: string; poReader?: POReader }
 
 const LIST = `SELECT b.id, b.channel, b.received_at, b.sender_name, b.sender, b.subject, b.body, b.photo_ids, b.attachments, b.kind, b.read_by,
        b.store_id, s.name AS store, cl.name AS client, b.store_text, b.fault, b.call_ref, b.urgent, b.status, b.job_id, j.job_number,
@@ -138,7 +140,7 @@ export function registerBreakdownRoutes(app: FastifyInstance, db: Db, o: IntakeO
     ceo(req);
     const st = await settingsOf(req.db);
     const inboxes = (await req.db.query('SELECT id, address, active, last_checked_at, last_error, created_at FROM intake_sources ORDER BY address')).rows;
-    const link = (await req.db.query('SELECT state, qr_svg, number, groups, group_jid, group_name, seen_at FROM whatsapp_link')).rows[0] ?? { state: 'not_linked', groups: [] };
+    const link = (await req.db.query('SELECT state, qr_svg, number, groups, group_jid, group_name, po_group_jid, po_group_name, seen_at FROM whatsapp_link')).rows[0] ?? { state: 'not_linked', groups: [] };
     const posts = (await req.db.query('SELECT text, reason, created_at, sent_at, error FROM group_posts ORDER BY created_at DESC LIMIT 20')).rows;
     // The link reports in every few seconds; quiet for two minutes means it is not running.
     const running = !!link.seen_at && Date.now() - new Date(link.seen_at).getTime() < 120_000;
@@ -186,10 +188,21 @@ export function registerBreakdownRoutes(app: FastifyInstance, db: Db, o: IntakeO
 
   app.put('/breakdowns/whatsapp/group', async req => {
     ceo(req);
-    const b = parse(z.object({ jid: z.string().min(5).max(100) }), req.body);
-    const link = (await req.db.query('SELECT groups FROM whatsapp_link')).rows[0];
+    const b = parse(z.object({ jid: z.string().min(5).max(100).nullable(), kind: z.enum(['breakdowns', 'pos']).default('breakdowns') }), req.body);
+    const link = (await req.db.query('SELECT groups, group_jid, po_group_jid FROM whatsapp_link')).rows[0];
+    if (b.kind === 'pos' && b.jid === null) {
+      await req.db.query('UPDATE whatsapp_link SET po_group_jid = NULL, po_group_name = NULL, updated_at = now()');
+      return { poGroupJid: null };
+    }
     const g = ((link?.groups ?? []) as { jid: string; name: string }[]).find(x => x.jid === b.jid);
     if (!g) throw new Refused(400, ['the app\'s number is not in that group: add it to the group on a phone first']);
+    if (b.kind === 'pos') {
+      if (link?.group_jid === g.jid) throw new Refused(409, ['that is the breakdowns group: choose a group for purchase orders only']);
+      await req.db.query('UPDATE whatsapp_link SET po_group_jid = $1, po_group_name = $2, updated_at = now()', [g.jid, g.name]);
+      await audit(req.db, req.actor.id, 'whatsapp_po_group_chosen', 'company', req.companyId, { group: g.name });
+      return { poGroupJid: g.jid, poGroupName: g.name };
+    }
+    if (link?.po_group_jid === g.jid) throw new Refused(409, ['that is the purchase orders group']);
     await req.db.query('UPDATE whatsapp_link SET group_jid = $1, group_name = $2, updated_at = now()', [g.jid, g.name]);
     await audit(req.db, req.actor.id, 'whatsapp_group_chosen', 'company', req.companyId, { group: g.name });
     return { groupJid: g.jid, groupName: g.name };
@@ -218,8 +231,8 @@ export function registerBreakdownRoutes(app: FastifyInstance, db: Db, o: IntakeO
        ON CONFLICT (company_id) DO UPDATE SET state = $1, qr_svg = $2, number = COALESCE($3, whatsapp_link.number),
          groups = COALESCE($4::jsonb, whatsapp_link.groups), seen_at = now(), updated_at = now()`,
       [b.state, b.state === 'waiting_for_scan' ? b.qrSvg ?? null : null, b.number ?? null, b.groups ? JSON.stringify(b.groups) : null]);
-    const link = (await req.db.query('SELECT group_jid FROM whatsapp_link')).rows[0];
-    return { groupJid: link?.group_jid ?? null };
+    const link = (await req.db.query('SELECT group_jid, po_group_jid FROM whatsapp_link')).rows[0];
+    return { groupJid: link?.group_jid ?? null, poGroupJid: link?.po_group_jid ?? null };
   });
 
   app.post('/internal/whatsapp/message', { bodyLimit: 40_000_000 }, async req => {
@@ -227,8 +240,15 @@ export function registerBreakdownRoutes(app: FastifyInstance, db: Db, o: IntakeO
     const b = parse(z.object({
       companyId: Uuid, id: z.string().min(3).max(200), groupJid: z.string(), at: Iso, senderName: z.string().max(200).nullish(), sender: z.string().max(60).nullish(),
       text: z.string().max(20_000).default(''), images: z.array(z.object({ mime: z.string(), base64: z.string().max(6_000_000) })).max(6).default([]),
+      documents: z.array(z.object({ mime: z.string(), base64: z.string().max(14_000_000), name: z.string().max(300).nullish() })).max(3).default([]),
     }), req.body);
-    const link = (await req.db.query('SELECT group_jid FROM whatsapp_link')).rows[0];
+    const link = (await req.db.query('SELECT group_jid, po_group_jid FROM whatsapp_link')).rows[0];
+    // The purchase orders group: a PO made outside the app is added like the app's own.
+    if (link?.po_group_jid && link.po_group_jid === b.groupJid) {
+      const files = [...b.documents.filter(d => d.mime === 'application/pdf'), ...b.images].map(f => ({ mime: f.mime, data: Buffer.from(f.base64, 'base64') }));
+      const poId = await tx(req.db, c => ingestPO(c, companyId, { messageId: b.id, at: new Date(b.at), senderName: b.senderName ?? null, text: b.text, files }, o.poReader ?? poReaderFromEnv()));
+      return { ok: true, purchaseOrderId: poId, skipped: poId ? undefined : 'not a purchase order' };
+    }
     if (!link?.group_jid || link.group_jid !== b.groupJid) return { ok: true, skipped: 'not the breakdowns group' };
     if (!b.text.trim() && !b.images.length) return { ok: true, skipped: 'empty' };
     const id = await ingest(req.db, companyId, {
@@ -240,10 +260,10 @@ export function registerBreakdownRoutes(app: FastifyInstance, db: Db, o: IntakeO
 
   app.get('/internal/whatsapp/outbox', async req => {
     await bridge(req);
-    const link = (await req.db.query('SELECT group_jid FROM whatsapp_link')).rows[0];
-    if (!link?.group_jid) return { groupJid: null, posts: [] };
+    const link = (await req.db.query('SELECT group_jid, po_group_jid FROM whatsapp_link')).rows[0];
+    if (!link?.group_jid) return { groupJid: null, poGroupJid: link?.po_group_jid ?? null, posts: [] };
     const posts = (await req.db.query('SELECT id, text FROM group_posts WHERE sent_at IS NULL AND tries < 5 ORDER BY created_at LIMIT 10')).rows;
-    return { groupJid: link.group_jid, posts };
+    return { groupJid: link.group_jid, poGroupJid: link.po_group_jid ?? null, posts };
   });
 
   app.post('/internal/whatsapp/sent', async req => {

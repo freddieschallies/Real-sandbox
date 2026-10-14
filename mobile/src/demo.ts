@@ -516,7 +516,7 @@ export class DemoTransport implements Transport {
       if (p === '/breakdowns/settings') return res(bd.saveSettings(b));
       if (p === '/breakdowns/inboxes') return res(bd.addInbox(b.address, b.appPassword));
       if ((m = p.match(/^\/breakdowns\/inboxes\/([^/]+)$/))) return res(bd.removeInbox(m[1]));
-      if (p === '/breakdowns/whatsapp/group') return res(bd.chooseGroup(b.jid));
+      if (p === '/breakdowns/whatsapp/group') return res(b.kind === 'pos' ? bd.choosePOGroup(b.jid ?? null) : bd.chooseGroup(b.jid));
       return refuse(404, 'demo: not available');
     }
     if (!this.does('jobs')) return refuse(403, 'the breakdowns queue is for whoever opens jobs');
@@ -1482,6 +1482,20 @@ export class DemoTransport implements Transport {
       const lvl = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
       if (!['stockroom', 'admin', 'management', 'director', 'creator'].includes(lvl) && !this.does('books')) return refuse(403, 'purchase orders are for the stockroom and the office');
       return ok(this.poBook().list(new URLSearchParams(req.path.split('?')[1] ?? '').get('view') ?? 'requested'));
+    }
+    if (p === '/demo/pos/simulate') {
+      const j = this.state.jobs.find(x => x.card.status !== 'closed' && (x.card.status as string) !== 'cancelled' && (x.meta.lead_id ?? 'me') === 'me');
+      const items = this.stock().s.items;
+      const r = this.poBook().posted(j ? { id: j.meta.id, job_number: j.meta.job_number, store: j.meta.store, lead_id: j.meta.lead_id ?? 'me', lead: j.meta.lead_technician } : null,
+        d => { const it = items.find(i => i.description.toLowerCase() === d.toLowerCase()); return it ? { id: it.id, code: it.code } : null; });
+      this.persist(this.state);
+      return this.stockResult(r as never, 201);
+    }
+    if ((m = p.match(/^\/purchase-orders\/([^/]+)$/)) && req.method === 'PUT') {
+      const j = b.jobId ? this.findJob(b.jobId) : null;
+      const r = this.poBook().link(m[1], j ? { id: j.meta.id, job_number: j.meta.job_number, store: j.meta.store, lead_id: j.meta.lead_id ?? 'me', lead: j.meta.lead_technician } : null);
+      this.persist(this.state);
+      return this.stockResult(r as never);
     }
     if ((m = p.match(/^\/purchase-orders\/([^/]+)\/decide$/))) { const r = this.poBook().decide(m[1], !!b.approve, b.note); this.persist(this.state); return this.stockResult(r as never); }
     if (p === '/me/returns') return this.stockResult(this.stock().sendReturn(b), 201);

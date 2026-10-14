@@ -11,6 +11,10 @@ import { can, type Actor } from '../core/permissions.ts';
 import { Refused, Uuid, parse } from '../http.ts';
 import { isOnJob } from '../jobsRepo.ts';
 import { managerOf, notify } from './field.ts';
+import { randomUUID } from 'node:crypto';
+import * as S from '../core/stock.ts';
+import type { POReader } from '../poReader.ts';
+import { saveDocument } from '../uploads.ts';
 
 const APPROVERS = ['stockroom', 'admin', 'management', 'director', 'creator'];
 /** Who sees the purchase orders in the office: the approvers and Accounts. */
@@ -24,13 +28,13 @@ async function mayApprove(c: Q, a: Actor, technicianId: string): Promise<boolean
 }
 
 const PO_SQL = `
-  SELECT p.id, p.po_number, p.status, p.supplier_id, p.supplier_name, p.job_id, j.job_number, s.name AS store, p.note,
+  SELECT p.id, p.po_number, p.status, p.source, p.external_number, p.posted_by, p.photo_id, (SELECT ph.content_type FROM photos ph WHERE ph.id = p.photo_id) AS photo_mime, p.supplier_id, p.supplier_name, p.job_id, j.job_number, s.name AS store, p.note,
          p.technician_id, t.full_name AS technician, p.requested_at, p.decided_at, d.full_name AS decided_by, p.decision_note, p.collected_at,
          p.pastel_sent_at, p.pastel_ref,
          (SELECT coalesce(json_agg(json_build_object('lineNo', l.line_no, 'description', l.description, 'qty', l.qty::float, 'code', si.code, 'stockItemId', l.stock_item_id) ORDER BY l.line_no), '[]')
             FROM purchase_order_lines l LEFT JOIN stock_items si ON si.id = l.stock_item_id WHERE l.po_id = p.id) AS lines,
          (SELECT json_build_object('id', i.id, 'invoiceNumber', i.invoice_number, 'totalCents', i.total_cents, 'status', i.status) FROM supplier_invoices i WHERE i.purchase_order_id = p.id ORDER BY i.created_at DESC LIMIT 1) AS invoice
-    FROM purchase_orders p JOIN users t ON t.id = p.technician_id LEFT JOIN users d ON d.id = p.decided_by
+    FROM purchase_orders p LEFT JOIN users t ON t.id = p.technician_id LEFT JOIN users d ON d.id = p.decided_by
     LEFT JOIN jobs j ON j.id = p.job_id LEFT JOIN stores s ON s.id = j.store_id`;
 
 export function registerPurchaseOrderRoutes(app: FastifyInstance) {
@@ -102,6 +106,26 @@ export function registerPurchaseOrderRoutes(app: FastifyInstance) {
     return { view, counts: Object.fromEntries(counts.map(r => [r.status, r.n])), orders: mine };
   });
 
+  // A PO from the group without its job or technician: the office links it (the technician is told).
+  app.put('/purchase-orders/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    if (!APPROVERS.includes(req.actor.level)) throw new Refused(403, ['the stock controller, admin, a manager or the CEO links a PO']);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ jobId: Uuid.nullish(), technicianId: Uuid.nullish() }), req.body);
+    return tx(req.db, async c => {
+      const p = (await c.query('SELECT status, po_number, external_number, supplier_name FROM purchase_orders WHERE id = $1 FOR UPDATE', [id])).rows[0];
+      if (!p) throw new Refused(404, ['no such PO']);
+      if (!['requested', 'approved'].includes(p.status)) throw new Refused(409, [`this PO is ${p.status}`]);
+      const job = b.jobId ? (await c.query('SELECT id, job_number, lead_technician_id FROM jobs WHERE id = $1', [b.jobId])).rows[0] : null;
+      if (b.jobId && !job) throw new Refused(404, ['no such job']);
+      const tech = b.technicianId ?? job?.lead_technician_id ?? null;
+      if (tech && !(await c.query("SELECT 1 FROM users WHERE id = $1 AND login_level = 'technician' AND status = 'active'", [tech])).rowCount) throw new Refused(400, ['an active technician']);
+      await c.query('UPDATE purchase_orders SET job_id = COALESCE($2, job_id), technician_id = COALESCE($3, technician_id) WHERE id = $1', [id, job?.id ?? null, tech]);
+      if (tech && p.status === 'approved') await notify(c, tech, 'po_approved', `PO ${p.external_number ?? p.po_number}${job ? ` for job ${job.job_number}` : ''} is on your phone: show it at ${p.supplier_name}, then scan their slip against it.`, { poId: id });
+      await audit(c, req.actor.id, 'po_linked', 'purchase_order', id, { jobId: job?.id ?? null, technicianId: tech });
+      return { id, jobId: job?.id ?? null, technicianId: tech };
+    });
+  });
+
   app.post('/purchase-orders/:id/decide', async (req: FastifyRequest<{ Params: { id: string } }>) => {
     const id = parse(Uuid, req.params.id);
     const b = parse(z.object({ approve: z.boolean(), note: z.string().trim().max(500).optional() }), req.body);
@@ -129,4 +153,61 @@ export async function poForSlip(c: Q, poId: string, technicianId: string): Promi
   if (p.status === 'requested') throw new Refused(409, [`PO ${p.po_number} is not approved yet`]);
   if (p.status !== 'approved') throw new Refused(409, [`PO ${p.po_number} is ${p.status}`]);
   return { jobId: p.job_id, number: p.po_number };
+}
+
+// ---- Purchase orders posted in the WhatsApp group ------------------------------------------------
+
+export interface PostedPO { messageId: string; at: Date; senderName: string | null; text: string; files: { mime: string; data: Buffer }[] }
+
+/**
+ * A purchase order made outside the app (admin, in Pastel) and posted in the purchase orders group:
+ * read, and added like the app's own: the job (by its number), the job's technician, the stock items,
+ * already issued. The technician has it on his phone at once and scans the slip against it. Returns
+ * the PO's id, or null when the message is not a purchase order.
+ */
+export async function ingestPO(c: Q, companyId: string, m: PostedPO, reader: POReader): Promise<string | null> {
+  const seen = (await c.query('SELECT id FROM purchase_orders WHERE message_id = $1', [m.messageId])).rows[0];
+  if (seen) return seen.id;
+  const r = await reader({ text: m.text, files: m.files });
+  if (!r.poNumber && !r.lines.length) return null;
+  const supplierName = (r.supplierName ?? '').trim() || 'Supplier (see the PO)';
+  // The same PO posted twice: kept once.
+  if (r.poNumber) {
+    const same = (await c.query("SELECT id FROM purchase_orders WHERE lower(external_number) = lower($1) AND lower(supplier_name) = lower($2) AND status <> 'cancelled'", [r.poNumber, supplierName])).rows[0];
+    if (same) return same.id;
+  }
+  const job = r.jobNumber ? (await c.query('SELECT id, job_number, lead_technician_id FROM jobs WHERE job_number = $1', [r.jobNumber])).rows[0] : null;
+  let techId: string | null = job?.lead_technician_id ?? null;
+  if (!techId && r.technicianName) {
+    const t = (await c.query("SELECT id FROM users WHERE login_level = 'technician' AND status = 'active' AND (lower(full_name) = lower($1) OR lower(split_part(full_name, ' ', 1)) = lower($1)) LIMIT 2", [r.technicianName.trim()])).rows;
+    if (t.length === 1) techId = t[0].id;
+  }
+  let supplierId = (await c.query("SELECT id FROM suppliers WHERE lower(name) = lower($1) AND status <> 'rejected'", [supplierName])).rows[0]?.id ?? null;
+  if (!supplierId && r.supplierName) supplierId = (await c.query('INSERT INTO suppliers (name) VALUES ($1) RETURNING id', [supplierName])).rows[0].id;
+  let photoId: string | null = null;
+  const f = m.files[0];
+  if (f) {
+    photoId = randomUUID();
+    const rel = await saveDocument(companyId, photoId, f.data, f.mime, m.at.toISOString());
+    await c.query("INSERT INTO photos (id, kind, file_path, taken_at, taken_by, content_type, bytes) VALUES ($1, 'supplier_doc', $2, $3, NULL, $4, $5)", [photoId, rel, m.at.toISOString(), f.mime, f.data.length]);
+  }
+  const po = (await c.query(
+    `INSERT INTO purchase_orders (technician_id, supplier_id, supplier_name, job_id, note, status, decided_at, decision_note, source, external_number, posted_by, message_id, photo_id, read_by, requested_at)
+     VALUES ($1, $2, $3, $4, $5, 'approved', now(), 'Issued outside the app and posted in the group', 'group', $6, $7, $8, $9, $10, $11) RETURNING id, po_number`,
+    [techId, supplierId, supplierName, job?.id ?? null, m.text.trim().slice(0, 500) || null, r.poNumber, m.senderName, m.messageId, photoId, r.readBy, m.at.toISOString()])).rows[0];
+  const catalogue = (await c.query('SELECT id, code, description, supplier_code AS "supplierCode" FROM stock_items WHERE active')).rows as S.CatalogueItem[];
+  let n = 0;
+  for (const l of r.lines) {
+    const item = S.matchItem({ description: l.description, supplierCode: l.code, qty: l.qty }, catalogue);
+    await c.query('INSERT INTO purchase_order_lines (po_id, line_no, stock_item_id, description, qty) VALUES ($1, $2, $3, $4, $5)', [po.id, ++n, item?.id ?? null, l.description, l.qty]);
+  }
+  const label = r.poNumber ? `PO ${r.poNumber}` : `PO ${po.po_number}`;
+  if (techId) await notify(c, techId, 'po_approved', `${label} for ${job ? `job ${job.job_number}` : 'you'} is on your phone: show it at ${supplierName}, then scan their slip against it.`, { poId: po.id });
+  const office = (await c.query("SELECT id FROM users WHERE status = 'active' AND login_level IN ('stockroom', 'accounts', 'admin')")).rows;
+  for (const u of office) {
+    await notify(c, u.id, 'po_posted', techId ? `${label} (${supplierName}) from the group is in the app${job ? `, on job ${job.job_number}` : ''}.`
+      : `${label} (${supplierName}) from the group has no job or technician yet: link it under Purchase orders.`, { poId: po.id });
+  }
+  await audit(c, null, 'po_from_group', 'purchase_order', po.id, { external: r.poNumber, job: job?.job_number ?? null, readBy: r.readBy });
+  return po.id;
 }

@@ -31,6 +31,7 @@ const logger = pino({ level: process.env.LOG_LEVEL ?? 'warn' });
 
 let sock = null;
 let groupJid = null;
+let poGroupJid = null;   // the purchase orders group (POs made outside the app)
 let connected = false;
 let lastQr = null;
 
@@ -48,6 +49,7 @@ async function report(state, extra = {}) {
   try {
     const r = await api('POST', '/internal/whatsapp/status', { state, ...extra });
     groupJid = r?.groupJid ?? null;
+    poGroupJid = r?.poGroupJid ?? null;
   } catch (e) { logger.warn({ err: String(e) }, 'could not reach the server'); }
 }
 
@@ -92,24 +94,31 @@ async function start() {
     }
   });
 
-  // New messages in the breakdowns group (only that group; the app's own posts are skipped).
+  // New messages in the breakdowns group and the purchase orders group (only those; the app's own posts are skipped).
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     for (const m of messages) {
       try {
-        if (!m.message || m.key.fromMe || !groupJid || m.key.remoteJid !== groupJid) continue;
+        if (!m.message || m.key.fromMe || ![groupJid, poGroupJid].filter(Boolean).includes(m.key.remoteJid)) continue;
         const images = [];
         const img = m.message.imageMessage ?? m.message.ephemeralMessage?.message?.imageMessage;
         if (img) {
           const buf = await downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage });
           if (buf?.length && buf.length < 4 * 1024 * 1024) images.push({ mime: img.mimetype?.split(';')[0] ?? 'image/jpeg', base64: buf.toString('base64') });
         }
-        const text = textOf(m);
-        if (!text.trim() && !images.length) continue;
+        // A PDF (a purchase order or invoice printed from Pastel).
+        const documents = [];
+        const doc = m.message.documentMessage ?? m.message.documentWithCaptionMessage?.message?.documentMessage ?? m.message.ephemeralMessage?.message?.documentMessage;
+        if (doc && (doc.mimetype ?? '').startsWith('application/pdf')) {
+          const buf = await downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage });
+          if (buf?.length && buf.length < 10 * 1024 * 1024) documents.push({ mime: 'application/pdf', base64: buf.toString('base64'), name: doc.fileName ?? null });
+        }
+        const text = textOf(m) || (m.message.documentWithCaptionMessage?.message?.documentMessage?.caption ?? '');
+        if (!text.trim() && !images.length && !documents.length) continue;
         const sender = (m.key.participant ?? m.participant ?? '').split('@')[0].split(':')[0] || null;
         await api('POST', '/internal/whatsapp/message', {
           id: m.key.id, groupJid: m.key.remoteJid, at: new Date(Number(m.messageTimestamp ?? Date.now() / 1000) * 1000).toISOString(),
-          senderName: m.pushName ?? null, sender, text, images,
+          senderName: m.pushName ?? null, sender, text, images, documents,
         });
       } catch (e) { logger.warn({ err: String(e) }, 'could not pass a message on'); }
     }
@@ -126,6 +135,7 @@ async function postWaiting() {
   let out;
   try { out = await api('GET', `/internal/whatsapp/outbox?companyId=${COMPANY}`); } catch (e) { logger.warn({ err: String(e) }, 'outbox'); return; }
   groupJid = out?.groupJid ?? groupJid;
+  poGroupJid = out ? out.poGroupJid ?? null : poGroupJid;
   for (const p of out?.posts ?? []) {
     try {
       const sent = await sock.sendMessage(out.groupJid, { text: p.text });

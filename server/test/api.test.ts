@@ -2550,3 +2550,36 @@ test('purchase orders: the technician asks, the stock controller approves, the s
   assert.ok(Array.isArray(who.byTechnician) && Array.isArray(who.byMaker) && who.byHandedIn.length >= 1);
   if (who.moneyIn.length) assert.ok(who.moneyIn[0].made_by && who.moneyIn[0].technician);
 });
+
+test('a PO made outside the app and posted in the purchase orders group is added like the app\'s own: job, technician, stock items', async () => {
+  const bridge = (method: 'GET' | 'POST', url: string, body?: object) => app.inject({ method, url, payload: body, headers: { 'x-bridge-key': BRIDGE } }).then(r => ({ status: r.statusCode, body: r.json() }));
+  for (const who of ['tech', 'stock', 'creator']) {
+    if ((await call(who, 'GET', '/me')).status === 401) tokens[who] = (await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW })).body.token;
+  }
+  await bridge('POST', '/internal/whatsapp/status', { companyId: ids.company, state: 'connected', groups: [{ jid: '123@g.us', name: 'ZSP Breakdowns' }, { jid: '777@g.us', name: 'ZSP Purchase orders' }] });
+  assert.equal((await call('creator', 'PUT', '/breakdowns/whatsapp/group', { kind: 'pos', jid: '123@g.us' })).status, 409, 'not the breakdowns group');
+  assert.equal((await call('creator', 'PUT', '/breakdowns/whatsapp/group', { kind: 'pos', jid: '777@g.us' })).status, 200);
+  assert.equal((await bridge('GET', `/internal/whatsapp/outbox?companyId=${ids.company}`)).body.poGroupJid, '777@g.us', 'the link listens to it');
+  const job = (await db.query("SELECT id, job_number FROM jobs WHERE lead_technician_id = $1 AND status NOT IN ('closed', 'cancelled') ORDER BY job_number LIMIT 1", [ids.tech])).rows[0];
+  const text = `PO 88231 Voltex Richards Bay for job ${job.job_number}\n3 x Water inlet valve\n1 x Cable ties 300mm`;
+  const posted = await bridge('POST', '/internal/whatsapp/message', { companyId: ids.company, id: 'WA-PO-1', groupJid: '777@g.us', at: new Date().toISOString(), senderName: 'Admin', text });
+  assert.equal(posted.status, 200, JSON.stringify(posted.body));
+  assert.ok(posted.body.purchaseOrderId);
+  const mine = ((await call('tech', 'GET', '/me/purchase-orders')).body as { id: string; status: string; source: string; external_number: string; job_number: number; lines: { code: string | null; qty: number }[] }[]).find(p => p.id === posted.body.purchaseOrderId)!;
+  assert.deepEqual([mine.status, mine.source, mine.external_number, mine.job_number], ['approved', 'group', '88231', job.job_number], 'issued, on the job, with the job\'s technician');
+  assert.equal(mine.lines[0].code, 'VALVE-01', 'matched to the stock item');
+  assert.equal(mine.lines[0].qty, 3);
+  assert.ok((await call('tech', 'GET', '/me/notifications')).body.some((n: { kind: string; message: string }) => n.kind === 'po_approved' && /88231/.test(n.message)));
+  // Posted again (or forwarded): kept once. Chatter is not a PO.
+  assert.equal((await bridge('POST', '/internal/whatsapp/message', { companyId: ids.company, id: 'WA-PO-1b', groupJid: '777@g.us', at: new Date().toISOString(), text })).body.purchaseOrderId, posted.body.purchaseOrderId);
+  assert.equal((await bridge('POST', '/internal/whatsapp/message', { companyId: ids.company, id: 'WA-PO-2', groupJid: '777@g.us', at: new Date().toISOString(), text: 'Morning all' })).body.skipped, 'not a purchase order');
+  // No job in it: the office is told and links it; then the technician has it.
+  const loose = await bridge('POST', '/internal/whatsapp/message', { companyId: ids.company, id: 'WA-PO-3', groupJid: '777@g.us', at: new Date().toISOString(), text: 'PO 88240 Voltex Richards Bay\n10 x Fuse 10A' });
+  assert.ok((await call('stock', 'GET', '/me/notifications')).body.some((n: { kind: string; message: string }) => n.kind === 'po_posted' && /no job or technician/.test(n.message)));
+  assert.equal((await call('tech', 'PUT', `/purchase-orders/${loose.body.purchaseOrderId}`, { jobId: job.id })).status, 403);
+  assert.equal((await call('stock', 'PUT', `/purchase-orders/${loose.body.purchaseOrderId}`, { jobId: job.id })).status, 200);
+  assert.ok(((await call('tech', 'GET', '/me/purchase-orders')).body as { id: string }[]).some(p => p.id === loose.body.purchaseOrderId));
+  // The breakdowns group still makes breakdowns, not POs.
+  const bd = await bridge('POST', '/internal/whatsapp/message', { companyId: ids.company, id: 'WA-BD-9', groupJid: '123@g.us', at: new Date().toISOString(), text: 'FreshMart Meerensee door seal torn' });
+  assert.ok(!bd.body.purchaseOrderId);
+});

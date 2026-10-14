@@ -32,7 +32,7 @@ export function PurchaseOrdersScreen() {
         return (
           <Card key={p.id} style={ok ? { borderColor: C.good, borderWidth: 2 } : undefined} accessibilityLabel={`My PO ${p.po_number}`}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Text style={{ color: C.text, fontSize: ok ? 30 : 18, fontWeight: '800', flex: 1 }}>PO {p.po_number}</Text>
+              <Text style={{ color: C.text, fontSize: ok ? 30 : 18, fontWeight: '800', flex: 1 }}>PO {p.external_number ?? p.po_number}</Text>
               <Pill text={stt.t} tone={stt.tone} />
             </View>
             <Text style={[st.body, { fontWeight: '700' }]}>{p.supplier_name}</Text>
@@ -41,7 +41,7 @@ export function PurchaseOrdersScreen() {
             {p.status === 'rejected' ? <Text style={[st.small, { color: C.bad }]}>Not approved{p.decided_by ? ` by ${p.decided_by}` : ''}: {p.decision_note}</Text> : null}
             {ok ? (
               <>
-                <Text style={st.small}>Approved by {p.decided_by}. Show this at {p.supplier_name}.</Text>
+                <Text style={st.small}>{p.source === 'group' ? `Issued by the office${p.posted_by ? ` (${p.posted_by})` : ''}` : `Approved by ${p.decided_by}`}. Show this at {p.supplier_name}.</Text>
                 <Button label="Scan the supplier's slip for this PO" onPress={() => nav.push({ name: 'invoice', jobId: p.job_id ?? undefined })} />
                 <Button label="Cancel this PO" kind="quiet" onPress={async () => { await s.ask({ method: 'POST', path: `/me/purchase-orders/${p.id}/cancel`, json: {} }); load(); }} />
               </>

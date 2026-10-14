@@ -84,7 +84,7 @@ function ConfirmInvoice({ inv }: { inv: SupplierInvoice }) {
   const [forJob, setForJob] = useState<string>(inv.job_id ?? VAN);
   const [reasons, setReasons] = useState<string[] | null>(null);
   // Scanned against one of his approved purchase orders: the PO's job, and the PO is collected.
-  const [pos, setPos] = useState<{ id: string; po_number: number; supplier_name: string; job_id: string | null; job_number: number | null }[]>([]);
+  const [pos, setPos] = useState<{ id: string; po_number: number; external_number?: string | null; supplier_name: string; job_id: string | null; job_number: number | null }[]>([]);
   const [po, setPo] = useState<string>('none');
   useEffect(() => {
     s.ask({ method: 'GET', path: '/me/purchase-orders' }).then(res => {
@@ -157,10 +157,10 @@ function ConfirmInvoice({ inv }: { inv: SupplierInvoice }) {
         <>
           <Label>Purchase order</Label>
           <Choice options={['none', ...pos.map(p => p.id)]} value={po} onChange={setPo}
-            labels={{ none: 'No PO', ...Object.fromEntries(pos.map(p => [p.id, `PO ${p.po_number} · ${p.supplier_name}`])) }} />
+            labels={{ none: 'No PO', ...Object.fromEntries(pos.map(p => [p.id, `PO ${p.external_number ?? p.po_number} · ${p.supplier_name}`])) }} />
         </>
       ) : null}
-      {chosen ? <Text style={st.small}>Booked to {chosen.job_number ? `job ${chosen.job_number}` : 'your van'} (from PO {chosen.po_number}). Use the parts on the job card, or send what is left back to the stockroom.</Text> : (
+      {chosen ? <Text style={st.small}>Booked to {chosen.job_number ? `job ${chosen.job_number}` : 'your van'} (from PO {chosen.external_number ?? chosen.po_number}). Use the parts on the job card, or send what is left back to the stockroom.</Text> : (
         <>
           <Label>Bought for</Label>
           <Choice options={jobs.options} value={forJob} onChange={setForJob} labels={jobs.labels} />

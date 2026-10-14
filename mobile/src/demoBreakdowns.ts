@@ -12,7 +12,7 @@ export interface DemoBdState {
   items: DemoBd[]; posts: { text: string; reason: string; created_at: string; sent_at: string | null; error: string | null }[];
   settings: { post_new: boolean; post_logged: boolean; post_on_site: boolean; post_done: boolean; escalate_after_min: number; ignore_senders: string[] };
   inboxes: { id: string; address: string; active: boolean; last_checked_at: string | null; last_error: string | null }[];
-  whatsapp: { state: string; number: string; groups: { jid: string; name: string }[]; group_jid: string | null; group_name: string | null };
+  whatsapp: { state: string; number: string; groups: { jid: string; name: string }[]; group_jid: string | null; group_name: string | null; po_group_jid?: string | null; po_group_name?: string | null };
   fromQueue: { jobId: string; storeId: string; at: string }[];
   seq: number;
 }
@@ -52,7 +52,7 @@ export function seedBreakdowns(stores: (StoreRef & { address?: string | null })[
       { text: groupLine({ kind: 'new', via: 'email', store: a.name, fault: items[2].fault, callRef: null }), reason: 'new', created_at: ago(9), sent_at: ago(9), error: null }],
     settings: { post_new: true, post_logged: true, post_on_site: false, post_done: false, escalate_after_min: 15, ignore_senders: [] },
     inboxes: [{ id: 'inbox-1', address: 'breakdowns@yourcompany.demo', active: true, last_checked_at: ago(0.5), last_error: null }],
-    whatsapp: { state: 'connected', number: '27720000000', groups: [{ jid: 'g-breakdowns', name: `${company} Breakdowns` }, { jid: 'g-staff', name: `${company} Staff` }], group_jid: 'g-breakdowns', group_name: `${company} Breakdowns` },
+    whatsapp: { state: 'connected', number: '27720000000', groups: [{ jid: 'g-breakdowns', name: `${company} Breakdowns` }, { jid: 'g-staff', name: `${company} Staff` }, { jid: 'g-pos', name: `${company} Purchase orders` }], group_jid: 'g-breakdowns', group_name: `${company} Breakdowns` },
     fromQueue: [], seq: 6,
   };
 }
@@ -206,6 +206,15 @@ export class DemoBreakdowns {
     if (!g) return bad(400, 'the app\'s number is not in that group');
     this.s.whatsapp.group_jid = g.jid; this.s.whatsapp.group_name = g.name;
     return good({ groupJid: g.jid, groupName: g.name });
+  }
+  /** The purchase orders group (POs made in Pastel, read and added by themselves); null: none. */
+  choosePOGroup(jid: string | null): Res {
+    if (!jid) { this.s.whatsapp.po_group_jid = null; this.s.whatsapp.po_group_name = null; return good({ poGroupJid: null }); }
+    const g = this.s.whatsapp.groups.find(x => x.jid === jid);
+    if (!g) return bad(400, 'the app\'s number is not in that group');
+    if (g.jid === this.s.whatsapp.group_jid) return bad(409, 'that is the breakdowns group: choose a group for purchase orders only');
+    this.s.whatsapp.po_group_jid = g.jid; this.s.whatsapp.po_group_name = g.name;
+    return good({ poGroupJid: g.jid, poGroupName: g.name });
   }
   /** A job from the queue: the technician on site or the job done, posted when switched on. */
   jobUpdate(jobId: string, kind: 'on_site' | 'done') {
