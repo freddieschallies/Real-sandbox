@@ -6,6 +6,7 @@
 export const SETUP_STEPS = [
   { key: 'policy', title: 'Monitoring policy', why: 'Everyone reads and accepts it once before they can use the app.', optional: false },
   { key: 'company', title: 'Company details', why: 'Name, registration and VAT numbers, address, banking details: on every quote, invoice and statement.', optional: false },
+  { key: 'numbers', title: 'Carry on your numbering', why: 'The next job card, invoice, quote, credit note and purchase order numbers carry on where your previous system stopped.', optional: false },
   { key: 'branding', title: 'Logo and letterhead', why: 'Your logo in the app, and your letterhead on everything printed or emailed.', optional: true },
   { key: 'departments', title: 'Departments', why: 'The teams your technicians work in, each with its manager.', optional: false },
   { key: 'people', title: 'Employees and their roles', why: 'Everyone who uses the app, and what they do: technician, admin, accounts, stock controller, manager, HR, mechanic.', optional: false },
@@ -50,7 +51,25 @@ Never monitored: the content of your phone, your location outside those taps, an
 6. Your rights: you may see the information held about you and ask for corrections (Protection of Personal Information Act). Records are kept for at least 5 years.`;
 }
 
+/** The numbers a company carries on from its previous system, and where they start when it doesn't. */
+export const NUMBER_KINDS = [
+  { kind: 'job', label: 'Job cards', start: 10001, table: 'jobs', column: 'job_number' },
+  { kind: 'invoice', label: 'Invoices', start: 7001, table: 'invoices', column: 'invoice_number' },
+  { kind: 'quote', label: 'Quotes', start: 5001, table: 'quotes', column: 'quote_number' },
+  { kind: 'credit', label: 'Credit notes', start: 9001, table: 'credit_notes', column: 'credit_number' },
+  { kind: 'purchase_order', label: 'Purchase orders', start: 1001, table: 'purchase_orders', column: 'po_number' },
+] as const;
+export type NumberKind = (typeof NUMBER_KINDS)[number]['kind'];
+export const MAX_NUMBER = 99_999_999;
+/** Why a next number cannot be used: not a whole number, or not above the highest already used. */
+export function numberProblem(next: number, highestUsed: number | null): string | null {
+  if (!Number.isInteger(next) || next < 1 || next > MAX_NUMBER) return 'a whole number from 1 to 99 999 999';
+  if (highestUsed !== null && next <= highestUsed) return `must be more than ${highestUsed}, the highest already used`;
+  return null;
+}
+
 export interface SetupCounts {
+  numbersChecked?: boolean;
   policy: boolean; company: { legal_name?: string | null; address?: string | null; phone?: string | null; email?: string | null; vat_no?: string | null } | null;
   logo: boolean; letterhead: boolean; departments: number; departmentsChecked: boolean;
   people: number; byRole: Record<string, number>; withEmail: number; withLogin: number; noEmail: number;
@@ -63,6 +82,7 @@ export function setupSteps(n: SetupCounts): SetupStep[] {
   const has = (k: string) => (n.rates[k] ?? 0) > 0;
   const state: Record<SetupKey, { done: boolean; detail: string }> = {
     policy: { done: n.policy, detail: n.policy ? 'Published' : 'Not published yet: nobody can use the app until it is' },
+    numbers: { done: !!n.numbersChecked, detail: n.numbersChecked ? 'Checked' : 'Set them to carry on from your previous system, or tick them as right' },
     company: { done: !!(n.company?.legal_name && n.company.address && (n.company.phone || n.company.email)), detail: n.company?.legal_name ? `${n.company.legal_name}${n.company.vat_no ? ` · VAT ${n.company.vat_no}` : ''}` : 'Not filled in yet' },
     branding: { done: n.logo || n.letterhead, detail: n.logo && n.letterhead ? 'Logo and letterhead' : n.logo ? 'Logo (no letterhead pictures yet)' : n.letterhead ? 'Letterhead (no logo yet)' : 'No logo or letterhead yet' },
     departments: { done: n.departments > 0 && n.departmentsChecked, detail: `${n.departments} department${n.departments === 1 ? '' : 's'}${n.departmentsChecked ? '' : ': check they are right'}` },

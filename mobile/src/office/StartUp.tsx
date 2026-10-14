@@ -9,6 +9,7 @@ import { C } from '../theme.ts';
 import { CompanyForm, LogoPicker, useBooks } from './Books.tsx';
 import { LetterheadSettings } from '../letterhead.tsx';
 import { waNumber } from './Logins.tsx';
+import { NumbersForm } from './Numbers.tsx';
 
 type Go = 'departments' | 'accounts' | 'stores' | 'importcustomers' | 'newstore' | 'people';
 interface Step { key: string; title: string; why: string; optional: boolean; done: boolean; detail: string }
@@ -64,6 +65,7 @@ export function StartUp({ go, setup }: { go: (where: Go) => void; setup: ReturnT
             <View style={{ gap: 10 }}>
               <Text style={st.small}>{x.why}</Text>
               {x.key === 'policy' ? <Text style={st.body}>Published. A new version can be published by the CEO later; everyone accepts it again at their next sign-in.</Text> : null}
+              {x.key === 'numbers' ? <NumbersForm changed={load} /> : null}
               {x.key === 'company' || x.key === 'rates' ? <CompanyStep done={() => { load(); setOpen(null); }} /> : null}
               {x.key === 'branding' ? <><LogoPicker /><LetterheadSettings /><Button label="Done: check again" kind="secondary" onPress={load} /></> : null}
               {x.key === 'departments' ? (

@@ -11,15 +11,27 @@ import { LOGIN_STATE_SQL, NewPerson, addPerson, issueCode } from './logins.ts';
 import { companyRates } from './clientRates.ts';
 
 async function stateOf(c: Q) {
-  return (await c.query('SELECT departments_checked, skipped, dismissed_at FROM company_setup')).rows[0] ?? { departments_checked: false, skipped: [], dismissed_at: null };
+  return (await c.query('SELECT departments_checked, skipped, dismissed_at, numbers_checked FROM company_setup')).rows[0] ?? { departments_checked: false, skipped: [], dismissed_at: null, numbers_checked: false };
 }
-async function saveState(c: Q, by: string, change: { departmentsChecked?: boolean; skipped?: string[]; dismissed?: boolean }) {
+async function saveState(c: Q, by: string, change: { departmentsChecked?: boolean; skipped?: string[]; dismissed?: boolean; numbersChecked?: boolean }) {
   const cur = await stateOf(c);
   await c.query(
-    `INSERT INTO company_setup (departments_checked, skipped, dismissed_at, updated_by) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (company_id) DO UPDATE SET departments_checked = EXCLUDED.departments_checked, skipped = EXCLUDED.skipped, dismissed_at = EXCLUDED.dismissed_at, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+    `INSERT INTO company_setup (departments_checked, skipped, dismissed_at, numbers_checked, updated_by) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (company_id) DO UPDATE SET departments_checked = EXCLUDED.departments_checked, skipped = EXCLUDED.skipped, dismissed_at = EXCLUDED.dismissed_at,
+       numbers_checked = EXCLUDED.numbers_checked, updated_by = EXCLUDED.updated_by, updated_at = now()`,
     [change.departmentsChecked ?? cur.departments_checked, change.skipped ?? cur.skipped,
-      change.dismissed === undefined ? cur.dismissed_at : change.dismissed ? new Date() : null, by]);
+      change.dismissed === undefined ? cur.dismissed_at : change.dismissed ? new Date() : null, change.numbersChecked ?? cur.numbers_checked, by]);
+}
+
+/** Each number: the next one the app will give, and the highest already used. */
+export async function numbersOf(c: Q) {
+  const counters = new Map((await c.query('SELECT kind, next_value FROM company_counters')).rows.map(r => [r.kind as string, Number(r.next_value)]));
+  const out = [];
+  for (const k of SU.NUMBER_KINDS) {
+    const hi = (await c.query(`SELECT max(${k.column})::int AS n FROM ${k.table}`)).rows[0].n as number | null;
+    out.push({ kind: k.kind, label: k.label, next: counters.get(k.kind) ?? k.start, highestUsed: hi });
+  }
+  return out;
 }
 
 /** The checklist, with what there is so far. */
@@ -34,6 +46,7 @@ export async function setupOf(c: Q, companyId: string) {
   const prof = (await c.query('SELECT legal_name, address, phone, email, vat_no, logo_photo_id FROM company_profile')).rows[0] ?? null;
   const lh = (await c.query('SELECT header_photo_id FROM company_letterhead')).rows[0];
   const steps = SU.setupSteps({
+    numbersChecked: !!st.numbers_checked,
     policy: (await one('SELECT count(*)::int AS n FROM policy_versions')) > 0,
     company: prof, logo: !!prof?.logo_photo_id, letterhead: !!lh?.header_photo_id,
     departments: await one('SELECT count(*)::int AS n FROM departments WHERE active'), departmentsChecked: st.departments_checked,
@@ -69,6 +82,32 @@ export function registerSetupRoutes(app: FastifyInstance) {
       await saveState(c, req.actor.id, { departmentsChecked: b.departmentsChecked, skipped: [...skipped], dismissed: b.dismissed });
       await audit(c, req.actor.id, 'setup_changed', 'company', null, b);
       return setupOf(c, req.companyId);
+    });
+  });
+
+  // Carry on the numbering from the previous system: the CEO or Accounts. Never at or below one already used.
+  const numbersWho = (req: FastifyRequest) => { if (!can(req.actor, 'manage_access') && req.actor.level !== 'accounts') throw new Refused(403, ['the CEO or Accounts sets the numbering']); };
+  app.get('/setup/numbers', async req => { numbersWho(req); return { numbers: await numbersOf(req.db), checked: !!(await stateOf(req.db)).numbers_checked }; });
+  app.put('/setup/numbers', async req => {
+    numbersWho(req);
+    const b = parse(z.object({ next: z.record(z.string(), z.number()).optional(), checked: z.boolean().optional() }), req.body);
+    return tx(req.db, async c => {
+      const cur = await numbersOf(c);
+      const problems: string[] = [];
+      for (const [kind, next] of Object.entries(b.next ?? {})) {
+        const k = cur.find(x => x.kind === kind);
+        if (!k) { problems.push(`unknown number: ${kind}`); continue; }
+        const why = SU.numberProblem(next, k.highestUsed);
+        if (why) problems.push(`${k.label}: ${why}`);
+      }
+      if (problems.length) throw new Refused(400, problems);
+      for (const [kind, next] of Object.entries(b.next ?? {})) {
+        await c.query(`INSERT INTO company_counters (company_id, kind, next_value) VALUES (current_company(), $1, $2)
+                       ON CONFLICT (company_id, kind) DO UPDATE SET next_value = EXCLUDED.next_value`, [kind, next]);
+      }
+      if (b.next && Object.keys(b.next).length) await audit(c, req.actor.id, 'numbers_set', 'company', null, { next: b.next });
+      await saveState(c, req.actor.id, { numbersChecked: b.checked ?? (b.next && Object.keys(b.next).length ? true : undefined) });
+      return { numbers: await numbersOf(c), checked: !!(await stateOf(c)).numbers_checked };
     });
   });
 

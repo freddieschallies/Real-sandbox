@@ -9,13 +9,15 @@ import { BottomTabs } from '../BottomTabs.tsx';
 import { usePhoneMenu } from '../menu.tsx';
 import { ModeToggle } from '../appearance.tsx';
 import { SearchButton, SearchPanel } from '../search/Search.tsx';
+import { StockTakeTab } from './StockTake.tsx';
+import { SupplierList, useStockOrders } from './Ordering.tsx';
 import { HelpLink, HelpPanel } from '../help/Help.tsx';
 import { BrandLogo } from '../brand.tsx';
 import React, { useState } from 'react';
 import { Image, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useStore } from '../state.tsx';
-import { Body, Button, Card, Field, Heading, Label, Notice, Pill, Stepper, rand, st } from '../ui.tsx';
+import { Body, Button, Card, Field, Heading, Label, Notice, Pill, Select, Stepper, rand, st } from '../ui.tsx';
 import { SyncPill } from '../screens/SyncPill.tsx';
 import { C, S } from '../theme.ts';
 import { CATEGORY_LABEL, useStockroom, type Activity, type Category, type Holding, type RoomItem } from './useStockroom.ts';
@@ -25,7 +27,7 @@ import type { StockRequest, StockReturn } from '../types.ts';
 // The stockroom's own colour, so nobody confuses it with the technician app.
 const K = { band: '#1E6F6A', bandText: '#E8FFFB', tick: '#3FB57A' };
 
-type Tab = 'issue' | 'receive' | 'pos' | 'room' | 'order' | 'people' | 'workshop' | 'tools' | 'live' | 'items';
+type Tab = 'issue' | 'receive' | 'pos' | 'room' | 'order' | 'count' | 'suppliers' | 'people' | 'workshop' | 'tools' | 'live' | 'items';
 type Sel = { kind: 'issue'; id: string } | { kind: 'return'; id: string } | { kind: 'item'; id: string } | { kind: 'delivery' } | { kind: 'ws'; id: string } | { kind: 'wsadd' } | { kind: 'part'; id: string } | { kind: 'kit'; id: string; p: StockPerson } | null;
 type Photo = { id: string; uri: string; mime: string };
 
@@ -57,6 +59,8 @@ export function StockroomApp() {
     { key: 'pos', label: 'Purchase orders' },
     { key: 'room', label: 'Stock' },
     { key: 'order', label: 'To order', count: ol.d?.toOrder.length },
+    { key: 'count', label: 'Stock take' },
+    { key: 'suppliers', label: 'Suppliers' },
     { key: 'people', label: 'People' },
     { key: 'workshop', label: 'Workshop', count: ws.data?.belowMin },
     { key: 'tools', label: 'Tool store' },
@@ -85,6 +89,8 @@ export function StockroomApp() {
       {tab === 'pos' ? <PurchaseOrderList /> : null}
       {tab === 'receive' ? <ReturnList items={room.ctl.returns} open={id => setSel({ kind: 'return', id })} selected={sel?.kind === 'return' ? sel.id : null} /> : null}
       {tab === 'room' ? <RoomList items={room.ctl.room} holdings={room.ctl.holdings ?? []} onDelivery={() => setSel({ kind: 'delivery' })} onPart={id => setSel({ kind: 'part', id })} /> : null}
+      {tab === 'count' ? <StockTakeTab /> : null}
+      {tab === 'suppliers' ? <SupplierList /> : null}
       {tab === 'order' ? <OrderList ol={ol} open={id => setSel({ kind: 'part', id })} /> : null}
       {tab === 'people' ? <KitPeople open={p => setSel({ kind: 'kit', id: p.id, p })} selected={sel?.kind === 'kit' ? sel.id : null} tick={kitTick} /> : null}
       {tab === 'workshop' ? <WorkshopList ws={ws} role="controller" open={id => setSel({ kind: 'ws', id })} onAdd={() => setSel({ kind: 'wsadd' })} /> : null}
@@ -514,17 +520,29 @@ function NameItem({ it, room, done }: { it: RoomItem; room: ReturnType<typeof us
 }
 
 function Delivery({ room, done }: { room: ReturnType<typeof useStockroom>; done: () => void }) {
+  const so = useStockOrders();
+  const [po, setPo] = useState<string | null>(null);
   const [supplier, setSupplier] = useState('');
   const [ref, setRef] = useState('');
   const [note, setNote] = useState<Photo | null>(null);
   const [q, setQ] = useState('');
   const [qty, setQty] = useState<Record<string, number>>({});
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = room.ctl.room.filter(i => !i.needsReview && words.every(w => `${i.code} ${i.description}`.toLowerCase().includes(w))).slice(0, 30);
+  const shown = room.ctl.room.filter(i => !i.needsReview && ((qty[i.id] ?? 0) > 0 || words.every(w => `${i.code} ${i.description}`.toLowerCase().includes(w))))
+    .sort((a, b) => Number((qty[b.id] ?? 0) > 0) - Number((qty[a.id] ?? 0) > 0)).slice(0, 30);
   const lines = Object.entries(qty).filter(([, n]) => n > 0).map(([stockItemId, n]) => ({ stockItemId, qty: n }));
   return (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}>
       <Heading>Receive a delivery</Heading>
+      {(so.d?.orders ?? []).some(o => o.status === 'approved') ? (
+        <Select label="Against a purchase order (optional)" value={po} placeholder="Not against a PO"
+          options={(so.d?.orders ?? []).filter(o => o.status === 'approved').map(o => ({ value: o.id, label: `PO ${o.po_number} · ${o.supplier_name} · ${(o.lines ?? []).length} items` }))}
+          onChange={v => {
+            setPo(v);
+            const o = so.d?.orders.find(x => x.id === v);
+            if (o) { setSupplier(o.supplier_name); setQty(Object.fromEntries((o.lines ?? []).filter(l => l.stockItemId).map(l => [l.stockItemId!, l.qty]))); setQ(''); }
+          }} />
+      ) : null}
       <Field label="Supplier" value={supplier} onChangeText={setSupplier} />
       <Field label="Delivery note / invoice number" value={ref} onChangeText={setRef} autoCapitalize="characters" />
       {note ? <Image source={{ uri: note.uri }} style={{ width: '100%', height: 200, borderRadius: 8 }} resizeMode="contain" /> : null}
@@ -542,7 +560,7 @@ function Delivery({ room, done }: { room: ReturnType<typeof useStockroom>; done:
       ))}
       <Button label={lines.length ? `Receive ${lines.length} line${lines.length > 1 ? 's' : ''} into the stockroom` : 'Receive'}
         disabled={!lines.length || supplier.trim().length < 2 || !ref.trim()}
-        onPress={() => { room.delivery({ supplierName: supplier.trim(), reference: ref.trim(), lines }, note); done(); }} />
+        onPress={() => { room.delivery({ supplierName: supplier.trim(), reference: ref.trim(), lines, ...(po ? { purchaseOrderId: po } : {}) }, note); done(); }} />
     </ScrollView>
   );
 }

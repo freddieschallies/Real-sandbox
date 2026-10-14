@@ -197,7 +197,7 @@ export class DemoStock {
   }
   private mine() { return this.s.holdings.filter(h => (h.tech ?? 'me') === 'me'); }
 
-  private record(kind: string, stockItemId: string, qty: number, technician: string | null, by: string, jobId: string | null, reference: string | null = null, unitCostCents: number | null = null) {
+  record(kind: string, stockItemId: string, qty: number, technician: string | null, by: string, jobId: string | null, reference: string | null = null, unitCostCents: number | null = null) {
     const it = this.item(stockItemId)!;
     const job = jobId ? this.jobInfo(jobId) : null;
     (this.s.activity ??= []).unshift({ id: `a-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, at: new Date().toISOString(), kind, what: WHAT[kind] ?? kind,

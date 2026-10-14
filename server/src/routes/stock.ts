@@ -12,6 +12,7 @@ import * as S from '../core/stock.ts';
 import { isOnJob } from '../jobsRepo.ts';
 import { holdingsOf, stockroomQty } from '../stockRepo.ts';
 import { checkVan } from '../vanRepo.ts';
+import { lastBought } from './stockOrders.ts';
 import { DateOnly, Iso, Refused, Uuid, parse } from '../http.ts';
 import type { InvoiceReader, ReadInvoice } from '../invoiceReader.ts';
 import { managerOf, notify, tellStockroom } from './field.ts';
@@ -443,6 +444,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
          FROM stock_items i LEFT JOIN stockroom_stock s ON s.stock_item_id = i.id
         WHERE i.active ORDER BY i.needs_review DESC, i.code`,
     );
+    const last = await lastBought(req.db);
     return rows.map(r => {
       const inStockroom = Number(r.in_stockroom);
       const minQty = Number(r.min_qty);
@@ -452,6 +454,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
         minQty, reorderQty: r.reorder_qty == null ? null : Number(r.reorder_qty), photoId: r.photo_id, supplierName: r.supplier_name,
         belowMin: minQty > 0 && inStockroom < minQty, ordered: r.ordered_at ? { at: r.ordered_at, qty: Number(r.ordered_qty), note: r.ordered_note } : null,
         sellingPriceCents: r.selling_price_cents, lastUsed: r.last_used, category: r.category, onNames: r.on_names,
+        lastBought: last.get(r.id) ?? null,
       };
     });
   });
@@ -465,7 +468,8 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
          FROM stock_items i LEFT JOIN stockroom_stock s ON s.stock_item_id = i.id LEFT JOIN users u ON u.id = i.ordered_by
         WHERE i.active AND i.min_qty > 0 AND COALESCE(s.qty, 0) < i.min_qty
         ORDER BY (i.ordered_at IS NOT NULL), COALESCE(s.qty, 0) / i.min_qty, i.description`);
-    const lines = rows.map(r => ({ ...r, suggested: S.orderQty(r.in_stockroom, r.min_qty, r.reorder_qty) }));
+    const last = await lastBought(req.db, rows.map(r => r.id));
+    const lines = rows.map(r => ({ ...r, suggested: S.orderQty(r.in_stockroom, r.min_qty, r.reorder_qty), last_bought: last.get(r.id) ?? null }));
     return { toOrder: lines.filter(l => !l.ordered_at), ordered: lines.filter(l => l.ordered_at) };
   });
 
@@ -551,6 +555,7 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
     const b = parse(z.object({
       id: Uuid.optional(), at: Iso, supplierName: z.string().trim().min(2).max(200), reference: z.string().trim().min(1).max(60),
       photoId: Uuid.optional(), lines: z.array(z.object({ stockItemId: Uuid, qty: z.number().positive() })).min(1).max(200),
+      purchaseOrderId: Uuid.optional(),
     }), req.body);
     const me = req.actor.id;
     const out = await tx(req.db, async c => {
@@ -561,8 +566,15 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
       if (dup.rowCount) throw new Refused(409, [`delivery ${b.reference} from ${b.supplierName} was already received`]);
       const supplierId = await learnSupplier(c, me, b.supplierName);
       const id = b.id ?? randomUUID();
-      await c.query('INSERT INTO stock_deliveries (id, supplier_id, supplier_name, reference, photo_id, received_by, received_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-        [id, supplierId, b.supplierName, b.reference, b.photoId ?? null, me, b.at]);
+      // Against the stockroom's purchase order: it is received (collected).
+      if (b.purchaseOrderId) {
+        const po = (await c.query("SELECT status FROM purchase_orders WHERE id = $1 AND source = 'stockroom'", [b.purchaseOrderId])).rows[0];
+        if (!po) throw new Refused(404, ['no such purchase order']);
+        if (po.status !== 'approved') throw new Refused(409, [`that purchase order is ${po.status === 'collected' ? 'already received' : po.status}`]);
+      }
+      await c.query('INSERT INTO stock_deliveries (id, supplier_id, supplier_name, reference, photo_id, received_by, received_at, purchase_order_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        [id, supplierId, b.supplierName, b.reference, b.photoId ?? null, me, b.at, b.purchaseOrderId ?? null]);
+      if (b.purchaseOrderId) await c.query("UPDATE purchase_orders SET status = 'collected', collected_at = $2 WHERE id = $1", [b.purchaseOrderId, b.at]);
       for (const l of b.lines) {
         await c.query(`INSERT INTO stock_movements (stock_item_id, qty, kind, to_stockroom, delivery_id, created_by) VALUES ($1, $2, 'receive', true, $3, $4)`,
           [l.stockItemId, l.qty, id, me]);
@@ -657,7 +669,7 @@ async function nextNewCode(c: Q): Promise<number> {
   return Number((await c.query("SELECT next_company_number('new_stock_item', 1001) AS n")).rows[0].n);
 }
 
-async function learnSupplier(c: Q, me: string, name: string): Promise<string> {
+export async function learnSupplier(c: Q, me: string, name: string): Promise<string> {
   const existing = await c.query("SELECT id FROM suppliers WHERE lower(name) = lower($1) AND status <> 'rejected'", [name]);
   if (existing.rows[0]) return existing.rows[0].id;
   const id = (await c.query('INSERT INTO suppliers (name, first_named_by) VALUES ($1, $2) RETURNING id', [name, me])).rows[0].id;

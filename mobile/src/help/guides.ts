@@ -195,6 +195,30 @@ export const GUIDES: Guide[] = [
     'When it comes back, sign it back in with its condition.',
   ] },
 
+  { id: 'stock-take', title: 'Do a stock take', roles: ['stockroom'], steps: [
+    'Stock take → choose what to count (Stock, Tools, PPE or Everything) → "Start a stock take".',
+    'Want to count on paper first? "Print a count sheet".',
+    'Find each item (type its code or name), type how many are on the shelf and tap ✓. What the app expected shows only after you count.',
+    '"Differences" shows what is short or over and what it is worth.',
+    '"Sign off the stock take", saying why the counts differ. The stockroom is corrected and Accounts is told. "Print the results" for the file.',
+  ] },
+  { id: 'stock-order', title: 'Order stock from a supplier (purchase order)', roles: ['stockroom'], steps: [
+    'To order: everything below its minimum, with who it was last bought from, when and at what price.',
+    'Untick what you don\'t want now, check the supplier and how many on each item.',
+    'Tap "Make the PO for …": one PO per supplier.',
+    'Send it: "Email the purchase order" (on the letterhead), "Send by WhatsApp", or print it.',
+    'When the goods arrive: Stock → "Receive a delivery" and choose the PO: the items fill in by themselves.',
+  ] },
+  { id: 'stock-suppliers', title: 'Keep suppliers\' contact details', roles: ['stockroom'], steps: [
+    'Suppliers → the supplier → "Contact details".',
+    'The person, the email for orders and the cell number for WhatsApp. Purchase orders then go straight to them.',
+  ] },
+  { id: 'numbers', title: 'Carry on the numbering from the old system', roles: ['accounts', ...CEO], steps: [
+    'Accounts → Numbering (or Start-up → Carry on your numbering).',
+    'Type the next job card, invoice, quote, credit note and purchase order numbers, carrying on from your old system (last invoice 48000: type 48001).',
+    'Save. A number can\'t be at or below one already used, so they never clash.',
+  ] },
+
   // ---- Fleet -------------------------------------------------------------------------------------
   { id: 'fleet-check', title: 'Daily vehicle checks', roles: ['mechanic'], steps: [
     'Vehicles → each vehicle in service → daily check: odometer, oil, water, tyres.',

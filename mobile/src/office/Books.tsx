@@ -12,6 +12,7 @@ import * as D from '../../../server/src/core/documents.ts';
 import * as P from '../../../server/src/core/pastel.ts';
 import * as CR from '../../../server/src/core/clientRates.ts';
 import { WhoView } from './Who.tsx';
+import { NumbersForm } from './Numbers.tsx';
 import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, st } from '../ui.tsx';
 import { C } from '../theme.ts';
 
@@ -521,11 +522,14 @@ export function InvoiceDetail({ b, id }: { b: Books; id: string }) {
 const PREFIX: Record<P.PastelKind, string> = { invoice: 'INV', quote: 'Q', credit: 'CN', supplier_invoice: '' };
 /** Accounts: the Pastel link and set-up, and (for reference) who did what. */
 export function Accounts({ b, canPrices, canBooks = false }: { b: Books; canPrices: boolean; canBooks?: boolean }) {
-  const [part, setPart] = useState<'pastel' | 'who'>('pastel');
+  const s = useStore();
+  // Carrying on the numbering from the previous system: the CEO and Accounts.
+  const numbers = ['accounts', 'director', 'creator'].includes(s.session?.user.level ?? '');
+  const [part, setPart] = useState<'pastel' | 'who' | 'numbers'>('pastel');
   return (
     <>
-      <Choice options={['pastel', 'who'] as const} value={part} onChange={setPart} labels={{ pastel: 'Pastel', who: 'Who did what' }} />
-      {part === 'who' ? <WhoView /> : <PastelScreen b={b} canPrices={canPrices} canBooks={canBooks} />}
+      <Choice options={numbers ? ['pastel', 'who', 'numbers'] as const : ['pastel', 'who'] as const} value={part} onChange={setPart} labels={{ pastel: 'Pastel', who: 'Who did what', numbers: 'Numbering' }} />
+      {part === 'who' ? <WhoView /> : part === 'numbers' ? <NumbersForm /> : <PastelScreen b={b} canPrices={canPrices} canBooks={canBooks} />}
     </>
   );
 }

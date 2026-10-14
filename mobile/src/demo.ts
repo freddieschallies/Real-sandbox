@@ -16,6 +16,7 @@ import { DemoBreakdowns, seedBreakdowns, type DemoBdState } from './demoBreakdow
 import { NO_CHARGE_REASONS, jobOutcome } from '../../server/src/core/jobOutcome.ts';
 import * as SR from '../../server/src/core/search.ts';
 import * as SU from '../../server/src/core/setup.ts';
+import { DemoStockroom, seedStockroom, type DemoStockroomState } from './demoStockroom.ts';
 import { FIELDS as CUSTOMER_FIELDS, guessMapping, parseCsv, splitHeader, toCustomers } from '../../server/src/core/customerSheet.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
@@ -52,8 +53,10 @@ export interface DemoState {
   stockControl?: DemoStockState;
   vanStock?: DemoVanState;
   times?: DemoTimesState;
+  /** Carry-on numbering: the next job card number set by the CEO or Accounts. */
+  nextJob?: number;
   /** The CEO's start-up checklist. */
-  setup?: { departmentsChecked: boolean; skipped: string[]; dismissed: boolean };
+  setup?: { departmentsChecked: boolean; skipped: string[]; dismissed: boolean; numbersChecked?: boolean };
   /** A logo the CEO uploaded in the demo, instead of the ZSP one. */
   logoPhotoId?: string;
   /** Tabs pinned to the bottom of the phone, per position (Settings → Phone menus). */
@@ -83,6 +86,8 @@ export interface DemoState {
   docs?: DemoDocsState;
   /** Accounts: supplier invoices (the office's scans, checks of the slips, supplier Pastel codes). */
   suppliers?: DemoSupplierState;
+  /** Stock takes and ordering from suppliers. */
+  stockroom2?: DemoStockroomState;
   /** Purchase orders for stock runs. */
   pos?: DemoPOState;
   queries?: { id: string; from: string; to: string; job_id: string | null; subject: string; created_at: string; read: Record<string, string>; messages: { id: string; from: string; body: string; at: string }[] }[];
@@ -261,7 +266,7 @@ export class DemoTransport implements Transport {
       };
       const o = this.office();
       const st = (id: string) => o.store(id) ?? this.state.office!.stores[0];
-      const n0 = Math.max(...this.state.jobs.map(j => j.meta.job_number)) + 1;
+      const n0 = this.nextJobNumber();
       // A machine uplifted yesterday, with a loan machine at the store, being repaired.
       const y = new Date(Date.now() - 22 * 3600_000);
       const iso = (ms: number) => new Date(y.getTime() + ms * 60_000).toISOString();
@@ -436,6 +441,59 @@ export class DemoTransport implements Transport {
     return this.office().workOf(this.who.id, this.who.level)[area];
   }
 
+  /** The next job card number: after the highest, or the number the CEO or Accounts set. */
+  private nextJobNumber(): number {
+    const n = Math.max(Math.max(...this.state.jobs.map(j => j.meta.job_number)) + 1, this.state.nextJob ?? 0);
+    if (this.state.nextJob) this.state.nextJob = n + 1;
+    return n;
+  }
+  /** Carry-on numbering, as the server does it. */
+  private numbers() {
+    const d = this.docs().d;
+    const pb = (this.state.pos ??= { list: [], next: 1001 }) as unknown as { next: number; list: { po_number: number }[] };
+    const sr = this.stockroom2().r;
+    const hi = (xs: number[]) => (xs.length ? Math.max(...xs) : null);
+    const jobs = hi(this.state.jobs.map(j => j.meta.job_number));
+    const pos = hi([...pb.list.map(x => x.po_number), ...sr.orders.map(o => o.po_number)]);
+    return [
+      { kind: 'job', label: 'Job cards', next: Math.max((jobs ?? 10000) + 1, this.state.nextJob ?? 0), highestUsed: jobs },
+      { kind: 'invoice', label: 'Invoices', next: d.nextInvoice, highestUsed: hi(d.invoices.map(i => i.invoice_number)) },
+      { kind: 'quote', label: 'Quotes', next: d.nextQuote, highestUsed: hi(d.quotes.map(q => q.quote_number)) },
+      { kind: 'credit', label: 'Credit notes', next: d.nextCredit ?? 9001, highestUsed: hi((d.credits ?? []).map(c => c.credit_number)) },
+      { kind: 'purchase_order', label: 'Purchase orders', next: Math.max(pb.next, sr.nextPo), highestUsed: pos },
+    ];
+  }
+  private setNumbers(b: { next?: Record<string, number>; checked?: boolean }) {
+    const cur = this.numbers();
+    const problems: string[] = [];
+    for (const [k, v] of Object.entries(b.next ?? {})) {
+      const c = cur.find(x => x.kind === k);
+      const why = c ? SU.numberProblem(Number(v), c.highestUsed) : 'unknown';
+      if (why) problems.push(`${c?.label ?? k}: ${why}`);
+    }
+    if (problems.length) return refuse(400, ...problems);
+    const d = this.docs().d;
+    const pb = (this.state.pos ??= { list: [], next: 1001 }) as unknown as { next: number };
+    for (const [k, v] of Object.entries(b.next ?? {})) {
+      if (k === 'job') this.state.nextJob = v;
+      if (k === 'invoice') d.nextInvoice = v;
+      if (k === 'quote') d.nextQuote = v;
+      if (k === 'credit') d.nextCredit = v;
+      if (k === 'purchase_order') { pb.next = v; this.stockroom2().r.nextPo = v; }
+    }
+    const st = (this.state.setup ??= { departmentsChecked: false, skipped: [], dismissed: false });
+    if (b.checked !== undefined || Object.keys(b.next ?? {}).length) st.numbersChecked = b.checked ?? true;
+    this.persist(this.state);
+    return ok({ numbers: this.numbers(), checked: !!st.numbersChecked });
+  }
+
+  /** Stock takes and ordering from suppliers. */
+  private stockroom2(): DemoStockroom {
+    const prof = (this.docs().company().profile ?? {}) as Record<string, string | null>;
+    return new DemoStockroom((this.state.stockroom2 ??= seedStockroom()), this.stock().s, this.who.name,
+      { name: String(prof.trading_name || prof.legal_name || 'ZSP'), address: prof.address, phone: prof.phone, email: prof.email, vatNo: prof.vat_no });
+  }
+
   /** The CEO's start-up page, as the server does it. */
   private setupOf() {
     const o = this.office();
@@ -448,6 +506,7 @@ export class DemoTransport implements Transport {
     const prof = (this.docs().company().profile ?? {}) as Record<string, string | null>;
     const depts = this.vans().v.departments.filter(dd => (dd as { active?: boolean }).active !== false);
     const steps = SU.setupSteps({
+      numbersChecked: !!st.numbersChecked,
       policy: true, company: prof as never, logo: true, letterhead: !!this.state.letterhead?.headerPhotoId, departments: depts.length, departmentsChecked: st.departmentsChecked,
       people: people.length, byRole, withEmail: people.filter(x => x.email).length, withLogin: people.filter(x => ['on', 'code', 'locked'].includes(x.login)).length, noEmail: people.filter(x => !x.email).length,
       rates: (this.state.docs?.rates ?? {}) as Record<string, number>, clients: this.docs().customers().length, stores: o.o.stores.length,
@@ -456,6 +515,11 @@ export class DemoTransport implements Transport {
     return { company: REAL ? REAL.company.name : 'ZSP', steps, done: steps.filter(x => x.done).length, total: steps.length, dismissed: st.dismissed, people };
   }
   private setupRoute(p: string, req: Request, b: any): Response {
+    if (p === '/setup/numbers') {
+      const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
+      if (!this.does('access') && lvl !== 'accounts') return refuse(403, 'the CEO or Accounts sets the numbering');
+      return req.method === 'PUT' ? this.setNumbers(b ?? {}) : ok({ numbers: this.numbers(), checked: !!this.state.setup?.numbersChecked });
+    }
     if (!this.does('access')) return refuse(403, "the start-up page is the CEO's");
     const save = () => this.persist(this.state);
     if (p === '/setup' && req.method === 'GET') {
@@ -582,7 +646,7 @@ export class DemoTransport implements Transport {
     // A client that is not paying: only when the office confirms the job must go ahead (Accounts is told).
     const hold = this.docs().holdOf(store!.client);
     if (hold && !b.holdOk) return refuse(409, `${store!.client} is on hold: ${hold.reason}. Tick "Open it anyway" if this job must go ahead (Accounts is told).`);
-    const n = Math.max(...this.state.jobs.map(j => j.meta.job_number)) + 1;
+    const n = this.nextJobNumber();
     if (hold) this.docs().openedOnHold(store!.client, n, this.who.name);
     const j = officeJob(n, b.jobType, b.priority ?? 'normal', store!, b.faultReported.trim(), { id: b.leadTechnicianId, name: o.name(b.leadTechnicianId) }, b.scheduledDate, b.helperIds ?? [], b.clientOrderRef);
     j.meta.checklist = (b.maintenanceSteps ?? []).map((step: string, i: number) => ({ id: `chk-${n}-${i}`, step, done: false }));
@@ -1146,7 +1210,7 @@ export class DemoTransport implements Transport {
       name: this.who.name,
       openJob: (storeId, fault, leadId, date, priority, ref) => {
         const st = this.state.office!.stores.find(x => x.id === storeId)!;
-        const n = Math.max(...this.state.jobs.map(j => j.meta.job_number)) + 1;
+        const n = this.nextJobNumber();
         const j = officeJob(n, 'follow_up', priority, st, fault, { id: leadId, name: this.office().name(leadId) }, date, [], ref ?? undefined);
         this.state.jobs.push(j);
         return { id: j.meta.id, job_number: n };
@@ -1665,15 +1729,46 @@ export class DemoTransport implements Transport {
       return ok(this.stock().s.returns.filter(r => r.status === st));
     }
     if ((m = p.match(/^\/stock\/returns\/([^/]+)\/receive$/))) return this.stockResult(this.stock().receive(m[1], b));
-    if (p === '/stock/stockroom') return ok(this.stock().stockroomList());
-    if (p === '/stock/order-list') return ok(this.stock().orderList());
+    // Stock takes and ordering from suppliers (the stock controller).
+    if (p.startsWith('/stock/stocktakes') || p.startsWith('/stock/orders') || p.startsWith('/stock/suppliers')) {
+      if (!this.does('stockroom')) return refuse(403, p.startsWith('/stock/stocktakes') ? 'stock takes are for the stock controller' : 'ordering stock is for the stock controller');
+      const sr = this.stockroom2();
+      const res = (r: { ok: true; body: unknown; status?: number } | { ok: false; status: number; reasons: string[] }) => { this.persist(this.state); return r.ok ? { status: r.status ?? 200, body: r.body } : refuse(r.status, ...r.reasons); };
+      if (p === '/stock/stocktakes') return req.method === 'POST' ? res(sr.start(b ?? {})) : ok(sr.takes());
+      if ((m = p.match(/^\/stock\/stocktakes\/([^/]+)\/count$/))) return res(sr.count(m[1], b));
+      if ((m = p.match(/^\/stock\/stocktakes\/([^/]+)\/sign-off$/))) return res(sr.signOff(m[1], b ?? {}, (itemId, d, note) => this.stock().record('stocktake_adjustment', itemId, Math.abs(d), null, this.who.name, null, note)));
+      if ((m = p.match(/^\/stock\/stocktakes\/([^/]+)\/cancel$/))) return res(sr.cancelTake(m[1]));
+      if ((m = p.match(/^\/stock\/stocktakes\/([^/]+)$/))) return res(sr.take(m[1]));
+      if (p === '/stock/orders') return req.method === 'POST' ? res(sr.makeOrder(b)) : ok(sr.orders());
+      if ((m = p.match(/^\/stock\/orders\/([^/]+)\/email$/))) return res(sr.sent(m[1], 'email', Array.isArray(b?.to) ? b.to : []));
+      if ((m = p.match(/^\/stock\/orders\/([^/]+)\/sent$/))) return res(sr.sent(m[1], String(b?.how ?? 'phone'), b?.to ? [b.to] : null));
+      if ((m = p.match(/^\/stock\/orders\/([^/]+)\/cancel$/))) return res(sr.cancelOrder(m[1], String(b?.note ?? '')));
+      if ((m = p.match(/^\/stock\/orders\/([^/]+)$/))) return res(sr.order(m[1]));
+      if (p === '/stock/suppliers') return ok(sr.suppliers());
+      if ((m = p.match(/^\/stock\/suppliers\/([^/]+)$/))) return res(sr.setSupplier(decodeURIComponent(m[1]), b ?? {}));
+    }
+    if (p === '/stock/stockroom') { const sr = this.stockroom2(); return ok(this.stock().stockroomList().map(i => ({ ...i, lastBought: sr.lastBought(i.id) }))); }
+    if (p === '/stock/order-list') {
+      const sr = this.stockroom2();
+      const ol = this.stock().orderList();
+      const add = (l: { id: string }) => ({ ...l, last_bought: sr.lastBought(l.id) });
+      this.persist(this.state);
+      return ok({ toOrder: ol.toOrder.map(add), ordered: ol.ordered.map(add) });
+    }
     if ((m = p.match(/^\/stock\/items\/([^/]+)\/settings$/))) return this.stockResult(this.stock().settings(m[1], b));
     if ((m = p.match(/^\/stock\/items\/([^/]+)\/ordered$/))) return this.stockResult(this.stock().markOrdered(m[1], b));
     if ((m = p.match(/^\/stock\/items\/([^/]+)\/history$/))) return ok(this.stock().history(m[1]));
     if (p === '/stock/holdings') return ok(this.stock().allHoldings());
     if (p === '/stock/activity') return ok(this.stock().activity());
     if ((m = p.match(/^\/stock\/items\/([^/]+)$/)) && req.method === 'PATCH') return this.stockResult(this.stock().nameItem(m[1], b));
-    if (p === '/stock/deliveries') return this.stockResult(this.stock().delivery(b), 201);
+    if (p === '/stock/deliveries') {
+      const sr = this.stockroom2();
+      const bad = sr.received(b);
+      if (bad && !bad.ok) return refuse(bad.status, ...bad.reasons);
+      const r = this.stock().delivery(b);
+      this.persist(this.state);
+      return this.stockResult(r, 201);
+    }
     if (p === '/stock/invoices') return ok(this.stock().s.invoices.filter(i => i.status === 'confirmed'));
     if (p === '/me/flags') return ok(this.state.flags.filter(f => (f.status === 'open' || f.status === 'explained') && (f.tech ?? 'me') === 'me'));
     if ((m = p.match(/^\/flags\/([^/]+)\/explain$/))) {

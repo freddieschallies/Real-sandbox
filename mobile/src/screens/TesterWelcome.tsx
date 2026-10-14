@@ -31,6 +31,9 @@ const STEPS: [string, string[]][] = [
     'Purchase orders: going to a supplier for parts? My day → Purchase orders → "Ask for a purchase order": the supplier, the parts and the job. Once approved (switch to Stock controller → Purchase orders → Approve) the PO number is on your phone to show at the counter. Then "Scan the supplier\'s slip for this PO": the parts go on that job, where you use them or send what is left back to the stockroom.',
   ]],
   ['As stock controller (Lindiwe)', [
+    'Stock take: choose Stock (parts) and "Start a stock take". Type how many of each item are on the shelf and tap ✓ (what the app expected shows only after you count). Count fuses as 45: a difference. "Sign off the stock take" with the reason: the stockroom is corrected and Accounts is told. An earlier one is under "Earlier stock takes".',
+    'To order: each item shows who it was last bought from, when and at what price. Check the supplier and quantity, then "Make the PO for …". Send it: email (on the letterhead), WhatsApp, or print. Then Stock → "Receive a delivery" and choose that PO: the items fill in by themselves.',
+    'Suppliers: each supplier\'s contact person, email for orders and cell for WhatsApp.',
     'To issue: open Thabo\'s request, tick each item as you pick it, then issue it.',
     'To receive: count and tick what Thabo sent back.',
     'Stock: the whole inventory by item or technician; Live: every movement as it happens; Issued register.',
@@ -99,6 +102,7 @@ const STEPS: [string, string[]][] = [
     'Ask the CEO to give her the stockroom: a Stockroom tab appears at the top and she has the stock controller\'s full screens.',
   ]],
   ['As Accounts (Nandi)', [
+    'Accounts → Numbering: the next job card, invoice, quote, credit note and purchase order numbers carry on from the old system (e.g. type 48001 if the last invoice was 48000). A number at or below one already used is refused.',
     'Jobs: every job card, to check that all is in order (she cannot change them). Each job says where the money stands.',
     'Supplier invoices: "Take a photo of an invoice", or "Choose a file" for a PDF that came by email. It is read by itself in a few seconds (in the test drive the reading is pretend: fan motors from Cool Parts Wholesale). Check it next to the picture; tick the stockroom delivery the goods came in on; "Save and approve".',
     'Supplier invoices → To check: the technicians\' till slips come in here by themselves. Approve each one, or "Query it" with a note (the technician is told).',

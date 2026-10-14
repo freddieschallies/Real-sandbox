@@ -2823,3 +2823,101 @@ test('a new company starts up: the CEO publishes the monitoring policy in the ap
   assert.equal((await call('tech', 'POST', '/policy/publish', { body: 'x'.repeat(300) })).status, 403);
   assert.ok(nc.companyId);
 });
+
+test('stock take: count blind, differences need a word, signing off corrects the stockroom and tells Accounts', async () => {
+  for (const who of ['stock', 'tech', 'books']) {
+    if ((await call(who, 'GET', '/me')).status === 401) tokens[who] = (await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW })).body.token;
+  }
+  assert.equal((await call('tech', 'POST', '/stock/stocktakes', {})).status, 403);
+  await db.query('UPDATE stock_items SET cost_cents = 20000 WHERE id = $1', [ids.seal]);
+  const room = async () => Number((await db.query('SELECT coalesce(qty, 0) AS q FROM stockroom_stock WHERE stock_item_id = $1', [ids.seal])).rows[0]?.q ?? 0);
+  const before = await room();
+  const st = await call('stock', 'POST', '/stock/stocktakes', { category: 'stock' });
+  assert.equal(st.status, 201);
+  assert.equal((await call('stock', 'POST', '/stock/stocktakes', {})).status, 409, 'one open at a time');
+  let t = (await call('stock', 'GET', `/stock/stocktakes/${st.body.id}`)).body;
+  const line = t.items.find((i: { id: string }) => i.id === ids.seal);
+  assert.equal(line.expected, null, 'not shown before it is counted');
+  assert.equal(t.summary.counted, 0);
+  const c = await call('stock', 'PUT', `/stock/stocktakes/${st.body.id}/count`, { stockItemId: ids.seal, counted: before - 2 });
+  assert.equal(c.body.diff, -2);
+  t = (await call('stock', 'GET', `/stock/stocktakes/${st.body.id}`)).body;
+  assert.equal(t.summary.differences, 1);
+  assert.equal(t.summary.lossCents, 40000);
+  // Not everything counted: only with "partial"; a difference needs a word.
+  assert.equal((await call('stock', 'POST', `/stock/stocktakes/${st.body.id}/sign-off`, { note: 'Two used on jobs, not booked' })).status, t.summary.left ? 409 : 200);
+  assert.equal((await call('stock', 'POST', `/stock/stocktakes/${st.body.id}/sign-off`, { partial: true })).status, 400);
+  const so = await call('stock', 'POST', `/stock/stocktakes/${st.body.id}/sign-off`, { partial: true, note: 'Two used on jobs, not booked' });
+  assert.equal(so.status, 200, JSON.stringify(so.body));
+  assert.equal(await room(), before - 2, 'the stockroom is corrected');
+  assert.ok((await call('books', 'GET', '/me/notifications')).body.some((n: { message: string }) => /Stock take signed off: 1 item differ, R 400,00 short/.test(n.message)));
+  assert.equal((await call('stock', 'PUT', `/stock/stocktakes/${st.body.id}/count`, { stockItemId: ids.seal, counted: 1 })).status, 409, 'finished');
+  const list = (await call('stock', 'GET', '/stock/stocktakes')).body;
+  assert.equal(list.open, null);
+  assert.equal(list.past[0].differences, 1);
+  assert.equal(list.past[0].net_cents, -40000);
+});
+
+test('ordering: last supplier and price per item, a purchase order per supplier from the order list, emailed, received against the delivery', async () => {
+  for (const who of ['stock', 'tech']) {
+    if ((await call(who, 'GET', '/me')).status === 401) tokens[who] = (await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW })).body.token;
+  }
+  // Received from a supplier once: that is the last supplier.
+  await call('stock', 'PUT', `/stock/items/${ids.seal}/settings`, { minQty: 500, reorderQty: 600, supplierName: 'Valve House' });
+  const del = await call('stock', 'POST', '/stock/deliveries', { at: '2026-10-20T09:00:00+02:00', supplierName: 'Scotsman Parts Test', reference: 'DN-551', lines: [{ stockItemId: ids.seal, qty: 1 }] });
+  assert.equal(del.status, 201);
+  const ol = (await call('stock', 'GET', '/stock/order-list')).body;
+  const line = ol.toOrder.find((l: { id: string }) => l.id === ids.seal);
+  assert.ok(line, 'below its minimum');
+  assert.equal(line.last_bought.supplier, 'Scotsman Parts Test');
+  assert.equal(line.last_bought.ref, 'DN-551');
+  assert.equal((await call('stock', 'GET', '/stock/stockroom')).body.find((i: { id: string }) => i.id === ids.seal).lastBought.supplier, 'Scotsman Parts Test');
+  // A purchase order for that supplier: the item is marked ordered with the PO number.
+  assert.equal((await call('tech', 'POST', '/stock/orders', { supplierName: 'X', lines: [{ stockItemId: ids.seal, qty: 1 }] })).status, 403);
+  const po = await call('stock', 'POST', '/stock/orders', { supplierName: 'Scotsman Parts Test', lines: [{ stockItemId: ids.seal, qty: line.suggested }], note: 'Deliver before Friday' });
+  assert.equal(po.status, 201, JSON.stringify(po.body));
+  const after = (await call('stock', 'GET', '/stock/order-list')).body;
+  assert.ok(after.ordered.some((l: { id: string; ordered_note: string }) => l.id === ids.seal && l.ordered_note.startsWith(`PO ${po.body.poNumber},`)));
+  const one = (await call('stock', 'GET', `/stock/orders/${po.body.id}`)).body;
+  assert.match(one.text, new RegExp(`purchase order ${po.body.poNumber}`));
+  assert.match(one.text, /Please quote PO/);
+  // Emailed on the letterhead; the supplier's email is kept.
+  const before = mailBox.length;
+  const sent = await call('stock', 'POST', `/stock/orders/${po.body.id}/email`, { to: ['orders@scotsman.test'] });
+  assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  assert.equal(mailBox.length, before + 1);
+  assert.match(mailBox.at(-1)!.subject, new RegExp(`Purchase order ${po.body.poNumber}`));
+  assert.match(mailBox.at(-1)!.html, /PURCHASE ORDER/);
+  const sup = (await call('stock', 'GET', '/stock/suppliers')).body.find((x: { name: string }) => x.name === 'Scotsman Parts Test');
+  assert.equal(sup.email, 'orders@scotsman.test');
+  assert.equal((await call('stock', 'PUT', `/stock/suppliers/${sup.id}`, { email: 'orders@scotsman.test', phone: '0351234567', contactName: 'Jaco' })).status, 200);
+  const orders = (await call('stock', 'GET', '/stock/orders')).body.orders;
+  assert.equal(orders.find((o: { id: string }) => o.id === po.body.id).sent_how, 'email');
+  // The delivery against it: received, and off the ordered list.
+  const rec = await call('stock', 'POST', '/stock/deliveries', { at: new Date().toISOString(), supplierName: 'Scotsman Parts Test', reference: 'DN-600', purchaseOrderId: po.body.id, lines: [{ stockItemId: ids.seal, qty: 2 }] });
+  assert.equal(rec.status, 201, JSON.stringify(rec.body));
+  assert.equal((await db.query('SELECT status FROM purchase_orders WHERE id = $1', [po.body.id])).rows[0].status, 'collected');
+  assert.equal((await call('stock', 'POST', '/stock/deliveries', { at: new Date().toISOString(), supplierName: 'Scotsman Parts Test', reference: 'DN-601', purchaseOrderId: po.body.id, lines: [{ stockItemId: ids.seal, qty: 1 }] })).status, 409, 'once');
+  await call('stock', 'PUT', `/stock/items/${ids.seal}/settings`, { minQty: 0, supplierName: 'Valve House' });
+});
+
+test('numbering carries on from the previous system: the CEO or Accounts, never at or below a number already used', async () => {
+  for (const who of ['books', 'admin', 'director']) {
+    if ((await call(who, 'GET', '/me')).status === 401) tokens[who] = (await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW })).body.token;
+  }
+  assert.equal((await call('admin', 'GET', '/setup/numbers')).status, 403);
+  const n = (await call('books', 'GET', '/setup/numbers')).body.numbers;
+  const inv = n.find((x: { kind: string }) => x.kind === 'invoice');
+  assert.ok(inv.highestUsed > 0);
+  const bad = await call('books', 'PUT', '/setup/numbers', { next: { invoice: inv.highestUsed } });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.reasons[0], /Invoices: must be more than/);
+  const ok = await call('books', 'PUT', '/setup/numbers', { next: { invoice: 48001, job: 250001 } });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.checked, true);
+  // The next job opened gets the number.
+  const job = await call('admin', 'POST', '/jobs', { jobType: 'breakdown', storeId: ids.store, faultReported: 'Numbering check', scheduledDate: '2026-10-20', leadTechnicianId: ids.tech });
+  assert.equal(job.status, 201, JSON.stringify(job.body));
+  assert.equal((await db.query('SELECT job_number FROM jobs WHERE id = $1', [job.body.id])).rows[0].job_number, 250001);
+  assert.equal((await call('director', 'GET', '/setup')).body.steps.find((s: { key: string }) => s.key === 'numbers').done, true);
+});

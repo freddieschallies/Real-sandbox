@@ -12,6 +12,7 @@ export interface RoomItem {
   category?: 'stock' | 'tool' | 'ppe'; onNames?: number;
   minQty?: number; reorderQty?: number | null; photoId?: string | null; supplierName?: string | null; belowMin?: boolean;
   ordered?: { at: string; qty: number; note: string | null } | null;
+  lastBought?: import('./Parts.tsx').LastBought | null;
   lastUsed?: { at: string; kind: string; qty: number; jobNumber: number | null; store: string | null; technician: string | null; vehicle: string | null } | null;
 }
 export interface Overview { toIssue: number; toReceive: number; newItems: number; invoicesToday: number }
@@ -115,7 +116,7 @@ export function useStockroom() {
       overview: c.overview ? { ...c.overview, newItems: Math.max(0, c.overview.newItems - 1) } : c.overview }));
   };
 
-  const delivery = (b: { supplierName: string; reference: string; lines: { stockItemId: string; qty: number }[] }, note?: { id: string; uri: string; mime: string } | null) => {
+  const delivery = (b: { supplierName: string; reference: string; lines: { stockItemId: string; qty: number }[]; purchaseOrderId?: string }, note?: { id: string; uri: string; mime: string } | null) => {
     if (note) uploadPhoto(`Delivery note ${b.reference}`, 'delivery_note', note);
     s.queue(`Delivery ${b.reference} from ${b.supplierName}`, { method: 'POST', path: '/stock/deliveries', json: { ...b, id: s.newId(), at: nowIso(), photoId: note?.id } });
     save(c => ({ ...c, room: c.room.map(i => ({ ...i, inStockroom: i.inStockroom + b.lines.filter(l => l.stockItemId === i.id).reduce((n, l) => n + l.qty, 0) })) }));

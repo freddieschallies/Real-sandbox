@@ -1,10 +1,12 @@
 // The stock controller's order list (fills as stock drops below each item's minimum) and one part's
 // page: its photo, minimum, how many to order, the usual supplier, and everywhere it went.
+import { rand } from '../../../server/src/core/documents.ts';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Image, Pressable, Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { nowIso, takePhoto } from '../device.ts';
 import { rememberPhoto, usePhotoUri } from '../photo.ts';
+import { StockOrders, useStockOrders } from './Ordering.tsx';
 import { Body, Button, Card, Field, Heading, Label, Notice, Pill, st, Select } from '../ui.tsx';
 import { C } from '../theme.ts';
 import type { RoomItem } from './useStockroom.ts';
@@ -12,7 +14,11 @@ import type { RoomItem } from './useStockroom.ts';
 export interface OrderLine {
   id: string; code: string; description: string; unit: string; min_qty: number; reorder_qty: number | null; photo_id: string | null; supplier_name: string | null;
   supplier_code: string | null; in_stockroom: number; suggested: number; ordered_at: string | null; ordered_qty: number | null; ordered_note: string | null; ordered_by: string | null;
+  last_bought?: LastBought | null;
 }
+export interface LastBought { supplier: string; at: string; unitPriceCents: number | null; ref: string | null; how: 'delivery' | 'invoice'; lastPriceCents: number | null }
+/** "Last bought from X on 3 Oct, R 320,00 (invoice INV-1)". */
+export const lastText = (l: LastBought | null | undefined) => (l ? `Last bought from ${l.supplier} on ${new Date(l.at).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}${l.lastPriceCents != null ? `, ${rand(l.lastPriceCents)} each` : ''}${l.ref ? ` (${l.how === 'invoice' ? 'invoice' : 'delivery'} ${l.ref})` : ''}` : 'Not bought yet');
 export interface Move {
   id: string; at: string; kind: string; qty: number; note: string | null; job_number: number | null; store: string | null; technician: string | null; by: string;
   vehicle: string | null; fleet_job_number: number | null; to_workshop?: boolean; from_workshop?: boolean;
@@ -43,47 +49,70 @@ export function useOrderList() {
 
 export function OrderList({ ol, open }: { ol: ReturnType<typeof useOrderList>; open: (id: string) => void }) {
   const s = useStore();
-  const [marking, setMarking] = useState<string | null>(null);
-  const [qty, setQty] = useState('');
-  const [note, setNote] = useState('');
+  const so = useStockOrders();
   const d = ol.d;
+  // Per line: on the order or not, how many, and from whom (the last supplier, else the usual one).
+  const [pick, setPick] = useState<Record<string, { on: boolean; qty: string; supplier: string }>>({});
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   if (!d) return <Body quiet>Loading the order list…</Body>;
-  const bySupplier = d.toOrder.reduce<Record<string, OrderLine[]>>((m, l) => { (m[l.supplier_name || 'No supplier set'] ??= []).push(l); return m; }, {});
-  const send = async (path: string, json: object) => { await s.ask({ method: 'POST', path, json }); setMarking(null); await ol.load(); };
+  const of = (l: OrderLine) => pick[l.id] ?? { on: true, qty: String(l.suggested), supplier: l.last_bought?.supplier ?? l.supplier_name ?? '' };
+  const set = (l: OrderLine, p: Partial<{ on: boolean; qty: string; supplier: string }>) => setPick(x => ({ ...x, [l.id]: { ...of(l), ...p } }));
+  const groups = d.toOrder.reduce<Record<string, OrderLine[]>>((m, l) => { const k = of(l).supplier.trim() || ''; (m[k] ??= []).push(l); return m; }, {});
+  const make = async (supplier: string, lines: OrderLine[]) => {
+    const on = lines.filter(l => of(l).on && Number(of(l).qty.replace(',', '.')) > 0);
+    if (!on.length) return;
+    setBusy(supplier);
+    const r = await s.ask({ method: 'POST', path: '/stock/orders', json: { supplierName: supplier, lines: on.map(l => ({ stockItemId: l.id, qty: Number(of(l).qty.replace(',', '.')) })) } });
+    setBusy(null);
+    if (r && r.status < 300) { setMsg({ ok: true, text: `PO ${(r.body as { poNumber: number }).poNumber} made for ${supplier}: send it below.` }); await Promise.all([ol.load(), so.load()]); }
+    else setMsg({ ok: false, text: ((r?.body as { reasons?: string[] })?.reasons ?? ['No signal: try again.']).join('; ') });
+  };
   return (
     <>
-      <Notice tone="info" title="What to order" lines={['Fills by itself as stock drops below each item\'s minimum. Set the minimum on the part (Stock → the part → Minimum).']} />
+      <Notice tone="info" title="What to order" lines={['Fills by itself as stock drops below each item\'s minimum (set on the part). Choose the supplier and how many, then make the purchase order and send it.']} />
+      {msg ? <Notice tone={msg.ok ? 'good' : 'bad'} title={msg.text} /> : null}
       <Heading>To order ({d.toOrder.length})</Heading>
       {!d.toOrder.length ? <Body quiet>Nothing is below its minimum.</Body> : null}
-      {Object.entries(bySupplier).map(([sup, lines]) => (
-        <View key={sup} style={{ gap: 8 }}>
-          <Label>{sup}</Label>
-          {lines.map(l => (
-            <Card key={l.id} style={{ borderLeftWidth: 5, borderLeftColor: l.in_stockroom <= 0 ? C.bad : C.warn }}>
-              <Pressable onPress={() => open(l.id)} accessibilityRole="button" accessibilityLabel={`Part ${l.description}`} style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
-                <Thumb id={l.photo_id} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[st.body, { fontWeight: '700' }]}>{l.description}</Text>
-                  <Text style={st.small}>{l.code}{l.supplier_code ? ` · supplier code ${l.supplier_code}` : ''}</Text>
-                  <Text style={[st.small, { color: l.in_stockroom <= 0 ? C.bad : C.warn }]}>{n(l.in_stockroom)} in the stockroom · minimum {n(l.min_qty)}</Text>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Label>Order</Label>
-                  <Text style={{ color: C.text, fontSize: 22, fontWeight: '800' }}>{n(l.suggested)}</Text>
-                  <Text style={st.small}>{l.unit}</Text>
-                </View>
-              </Pressable>
-              {marking === l.id ? (
-                <View style={{ gap: 8 }}>
-                  <Field label={`How many ordered (${l.unit})`} value={qty} onChangeText={setQty} keyboardType="decimal-pad" />
-                  <Field label="Order number or note" value={note} onChangeText={setNote} placeholder="e.g. Voltex order 5521" />
-                  <Button label="Mark as ordered" disabled={!(Number(qty) > 0)} onPress={() => send(`/stock/items/${l.id}/ordered`, { qty: Number(qty), note: note.trim() || undefined })} />
-                </View>
-              ) : <Button label="Ordered it" kind="secondary" onPress={() => { setMarking(l.id); setQty(String(l.suggested)); setNote(''); }} style={{ minHeight: 44 }} />}
-            </Card>
-          ))}
-        </View>
-      ))}
+      {Object.entries(groups).sort(([a], [b2]) => (a ? 0 : 1) - (b2 ? 0 : 1) || a.localeCompare(b2)).map(([sup, lines]) => {
+        const on = lines.filter(l => of(l).on);
+        const est = on.reduce((n2, l) => n2 + (l.last_bought?.supplier === sup ? l.last_bought.lastPriceCents ?? 0 : 0) * (Number(of(l).qty) || 0), 0);
+        return (
+          <View key={sup || 'none'} style={{ gap: 8 }}>
+            <Label>{sup || 'No supplier yet: type one on each item'}</Label>
+            {lines.map(l => {
+              const x = of(l);
+              return (
+                <Card key={l.id} style={{ borderLeftWidth: 5, borderLeftColor: l.in_stockroom <= 0 ? C.bad : C.warn, opacity: x.on ? 1 : 0.6 }}>
+                  <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+                    <Pressable onPress={() => set(l, { on: !x.on })} accessibilityRole="checkbox" accessibilityState={{ checked: x.on }} accessibilityLabel={`Order ${l.description}`}
+                      style={{ width: 26, height: 26, borderRadius: 5, borderWidth: 2, borderColor: x.on ? C.accent : C.line, backgroundColor: x.on ? C.accent : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
+                      {x.on ? <Text style={{ color: C.accentText, fontWeight: '900' }}>✓</Text> : null}
+                    </Pressable>
+                    <Pressable onPress={() => open(l.id)} accessibilityRole="button" accessibilityLabel={`Part ${l.description}`} style={{ flex: 1, flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+                      <Thumb id={l.photo_id} size={44} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[st.body, { fontWeight: '700' }]}>{l.description}</Text>
+                        <Text style={st.small}>{l.code}{l.supplier_code ? ` · their code ${l.supplier_code}` : ''} · <Text style={{ color: l.in_stockroom <= 0 ? C.bad : C.warn }}>{n(l.in_stockroom)} left, minimum {n(l.min_qty)}</Text></Text>
+                        <Text style={st.small}>{lastText(l.last_bought)}{l.supplier_name && l.supplier_name !== l.last_bought?.supplier ? ` · usual: ${l.supplier_name}` : ''}</Text>
+                      </View>
+                    </Pressable>
+                  </View>
+                  {x.on ? (
+                    <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                      <View style={{ flexGrow: 2, flexBasis: 180 }}><Field label="Supplier" value={x.supplier} onChangeText={t => set(l, { supplier: t })} /></View>
+                      <View style={{ flexGrow: 1, flexBasis: 90 }}><Field label={`How many (${l.unit})`} value={x.qty} onChangeText={t => set(l, { qty: t })} keyboardType="decimal-pad" /></View>
+                    </View>
+                  ) : null}
+                </Card>
+              );
+            })}
+            {sup ? <Text style={st.small}>{`${on.length} item${on.length === 1 ? '' : 's'} ticked${est ? `, about ${rand(est)} excl. VAT at the last prices` : ''}`}</Text> : null}
+            {sup ? <Button label={`Make the PO for ${sup}`} disabled={!on.length} busy={busy === sup} onPress={() => make(sup, lines)} /> : null}
+          </View>
+        );
+      })}
+      <StockOrders so={so} changed={ol.load} />
       <Heading>Ordered, waiting for delivery ({d.ordered.length})</Heading>
       {!d.ordered.length ? <Body quiet>Nothing waiting.</Body> : null}
       {d.ordered.map(l => (
@@ -98,7 +127,7 @@ export function OrderList({ ol, open }: { ol: ReturnType<typeof useOrderList>; o
           </View>
         </Card>
       ))}
-      <Text style={st.small}>When the delivery is received (Stock → Receive a delivery) it comes off this list by itself.</Text>
+      <Text style={st.small}>When the delivery is received (Stock → Receive a delivery, against its PO) it comes off this list by itself.</Text>
     </>
   );
 }
@@ -153,6 +182,11 @@ export function PartDetail({ it, done, reload }: { it: RoomItem; done: () => voi
         <Label>Last used</Label>
         {lastUse ? <Body>{lastUse.job_number ? `Job ${lastUse.job_number}${lastUse.store ? `, ${lastUse.store}` : ''}` : lastUse.vehicle ? `Vehicle ${lastUse.vehicle}${lastUse.fleet_job_number ? ` (job card ${lastUse.fleet_job_number})` : ''}` : 'Used'}{lastUse.technician ? ` · ${lastUse.technician}` : ''}</Body> : <Body quiet>{hist ? 'Not used yet.' : 'Loading…'}</Body>}
         {lastUse ? <Text style={st.small}>{when(lastUse.at)} · {n(lastUse.qty)} {it.unit}</Text> : null}
+      </Card>
+      <Card>
+        <Label>Last bought</Label>
+        <Body>{lastText(it.lastBought)}</Body>
+        {it.supplierName && it.supplierName !== it.lastBought?.supplier ? <Text style={st.small}>Usual supplier: {it.supplierName}</Text> : null}
       </Card>
       <Heading>Order list</Heading>
       <Field label={`Minimum to keep in the stockroom (${it.unit})`} value={min} onChangeText={setMin} keyboardType="decimal-pad" hint="Below this it goes on the order list. 0 = never." />
