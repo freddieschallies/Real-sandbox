@@ -22,6 +22,7 @@ import { registerPurchaseOrderRoutes } from './routes/purchaseOrders.ts';
 import { registerWhoRoutes } from './routes/who.ts';
 import { registerClientRoutes } from './routes/clients.ts';
 import { registerSearchRoutes } from './routes/search.ts';
+import { registerSetupRoutes } from './routes/setup.ts';
 import { registerPeopleRoutes, registerTerminationRoutes } from './routes/people.ts';
 import { registerLoginRoutes } from './routes/logins.ts';
 import { registerStaffRoutes } from './routes/staff.ts';
@@ -68,6 +69,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerWhoRoutes(app);
   registerClientRoutes(app, opts.mailer === undefined ? mailerFromEnv() : opts.mailer);
   registerSearchRoutes(app);
+  registerSetupRoutes(app);
   registerTerminationRoutes(app);
   registerPeopleRoutes(app);
   registerLoginRoutes(app);

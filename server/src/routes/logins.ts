@@ -53,6 +53,69 @@ export async function registerEmail(c: Q, companyId: string, userId: string, ema
      ON CONFLICT (user_id) DO UPDATE SET email = EXCLUDED.email`, [email, userId, companyId]);
 }
 
+/** A new person: name, contact, position (their role), trade and department. */
+export const NewPerson = z.object({
+  fullName: z.string().trim().min(3, 'their full name').max(100),
+  email: z.string().trim().email('a valid email').max(200).optional().or(z.literal('')),
+  phone: z.string().trim().max(30).optional(),
+  position: z.enum(LEVELS as [LoginLevel, ...LoginLevel[]]),
+  trade: z.enum(Object.keys(TRADES) as [Trade, ...Trade[]]).nullish(),
+  departmentId: Uuid.nullish(),
+});
+
+/** Adds a person (no password: they choose one with a setup code). HR adds the usual positions; the others are the CEO's. */
+export async function addPerson(c: Q, actor: Actor, companyId: string, b: z.infer<typeof NewPerson>) {
+  const full = can(actor, 'manage_access');
+  if (!full && !HR_POSITIONS.includes(b.position)) throw new Refused(403, ['HR adds technicians, admin, accounts, department managers and stock controllers; the other positions are the CEO\'s']);
+  if (b.position === 'creator' && actor.level !== 'creator') throw new Refused(403, ['only the Creator adds another Creator']);
+  if (b.trade && b.position !== 'technician') throw new Refused(400, ['only technicians have a trade']);
+  if ((await c.query("SELECT 1 FROM users WHERE lower(full_name) = lower($1) AND status <> 'left'", [b.fullName])).rowCount) {
+    throw new Refused(409, [`${b.fullName} is already under People`]);
+  }
+  if (b.departmentId && !(await c.query('SELECT 1 FROM departments WHERE id = $1', [b.departmentId])).rowCount) throw new Refused(400, ['unknown department']);
+  const email = b.email ? b.email.toLowerCase() : null;
+  if (email && (await c.query('SELECT 1 FROM users WHERE lower(email) = $1', [email])).rowCount) throw new Refused(409, ['that email is already someone else\'s']);
+  const id = (await c.query(
+    `INSERT INTO users (full_name, email, phone, login_level, trade, department_id, password_hash, login_enabled)
+     VALUES ($1, $2, $3, $4, $5, $6, '!', false) RETURNING id`,
+    [b.fullName, email, b.phone || null, b.position, b.trade ?? null, b.departmentId ?? null])).rows[0].id as string;
+  await registerEmail(c, companyId, id, email);
+  await c.query('INSERT INTO access_changes (changed_by, user_id, action, change) VALUES ($1, $2, $3, $4)', [actor.id, id, 'added', `Added as ${POSITION_LABEL[b.position]}`]);
+  await audit(c, actor.id, 'person_added', 'user', id, { position: b.position });
+  return { id, full_name: b.fullName, position: POSITION_LABEL[b.position] };
+}
+
+/** A setup code for someone's first sign-in (or a forgotten password), and the message to send them. */
+export async function issueCode(c: Q, actor: Actor, companyId: string, id: string) {
+  const u = await target(c, id);
+  if (u.id === actor.id) throw new Refused(403, ['change your own password under Settings → My password']);
+  if (!managesLogin(actor, u)) {
+    throw new Refused(403, [can(actor, 'manage_access') ? 'only the Creator looks after the Creator\'s login'
+      : `the admin looks after everyone's login except the directors' and the CEO's; ${u.full_name.split(' ')[0]}'s is the CEO's`]);
+  }
+  if (u.status === 'left') throw new Refused(409, [`${u.full_name} has left the company`]);
+  if (!u.email) throw new Refused(409, [`${u.full_name.split(' ')[0]} needs an email first: it is what he signs in with (edit the contact details)`]);
+  await registerEmail(c, companyId, id, u.email);
+  await c.query("UPDATE login_codes SET cancelled_at = now(), cancel_reason = 'replaced by a new code' WHERE user_id = $1 AND used_at IS NULL AND cancelled_at IS NULL", [id]);
+  const code = newSetupCode();
+  const expires = (await c.query(
+    `INSERT INTO login_codes (user_id, code_hash, issued_by, expires_at) VALUES ($1, $2, $3, now() + make_interval(days => $4)) RETURNING expires_at`,
+    [id, hashCode(id, code), actor.id, CODE_DAYS])).rows[0].expires_at as Date;
+  await c.query('UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1', [id]);
+  await log(c, actor.id, id, u.has_password ? 'New setup code (to reset the password)' : 'Setup code given for the first sign-in');
+  await audit(c, actor.id, 'login_code_issued', 'user', id);
+  const company = (await c.query('SELECT name FROM companies WHERE id = $1', [companyId])).rows[0]?.name ?? '';
+  const until = expires.toLocaleDateString('en-ZA', { day: 'numeric', month: 'long', timeZone: 'Africa/Johannesburg' });
+  return {
+    code, expiresAt: expires.toISOString(), email: u.email as string,
+    // Ready to send by WhatsApp or SMS. The code alone is no use without the email, and works once.
+    message: `Hi ${u.full_name.split(' ')[0]}, this is your ${company} job card app sign-in.\n`
+      + `1. Open the app and tap "I have a setup code".\n2. Email: ${u.email}\n3. Setup code: ${code}\n`
+      + `4. Choose your own password (at least 8 characters). Don't tell anyone your password.\n`
+      + `The code works once, until ${until}.`,
+  };
+}
+
 export function registerLoginRoutes(app: FastifyInstance) {
   const office = (req: FastifyRequest) => {
     if (!editsProfiles(req.actor)) throw new Refused(403, ['only HR or the CEO looks after logins']);
@@ -72,35 +135,8 @@ export function registerLoginRoutes(app: FastifyInstance) {
   // ---- Add a person ----------------------------------------------------------------------------
   app.post('/people', async req => {
     office(req);
-    const b = parse(z.object({
-      fullName: z.string().trim().min(3, 'their full name').max(100),
-      email: z.string().trim().email('a valid email').max(200).optional().or(z.literal('')),
-      phone: z.string().trim().max(30).optional(),
-      position: z.enum(LEVELS as [LoginLevel, ...LoginLevel[]]),
-      trade: z.enum(Object.keys(TRADES) as [Trade, ...Trade[]]).nullish(),
-      departmentId: Uuid.nullish(),
-    }), req.body);
-    const full = can(req.actor, 'manage_access');
-    if (!full && !HR_POSITIONS.includes(b.position)) throw new Refused(403, ['HR adds technicians, admin, department managers and stock controllers; the other positions are the CEO\'s']);
-    if (b.position === 'creator' && req.actor.level !== 'creator') throw new Refused(403, ['only the Creator adds another Creator']);
-    if (b.trade && b.position !== 'technician') throw new Refused(400, ['only technicians have a trade']);
-    return tx(req.db, async c => {
-      if ((await c.query("SELECT 1 FROM users WHERE lower(full_name) = lower($1) AND status <> 'left'", [b.fullName])).rowCount) {
-        throw new Refused(409, [`${b.fullName} is already under People`]);
-      }
-      if (b.departmentId && !(await c.query('SELECT 1 FROM departments WHERE id = $1', [b.departmentId])).rowCount) throw new Refused(400, ['unknown department']);
-      const email = b.email ? b.email.toLowerCase() : null;
-      if (email && (await c.query('SELECT 1 FROM users WHERE lower(email) = $1', [email])).rowCount) throw new Refused(409, ['that email is already someone else\'s']);
-      // No password yet: the person chooses one with the setup code.
-      const id = (await c.query(
-        `INSERT INTO users (full_name, email, phone, login_level, trade, department_id, password_hash, login_enabled)
-         VALUES ($1, $2, $3, $4, $5, $6, '!', false) RETURNING id`,
-        [b.fullName, email, b.phone || null, b.position, b.trade ?? null, b.departmentId ?? null])).rows[0].id as string;
-      await registerEmail(c, req.companyId, id, email);
-      await c.query('INSERT INTO access_changes (changed_by, user_id, action, change) VALUES ($1, $2, $3, $4)', [req.actor.id, id, 'added', `Added as ${POSITION_LABEL[b.position]}`]);
-      await audit(c, req.actor.id, 'person_added', 'user', id, { position: b.position });
-      return { id, full_name: b.fullName, position: POSITION_LABEL[b.position] };
-    });
+    const b = parse(NewPerson, req.body);
+    return tx(req.db, async c => addPerson(c, req.actor, req.companyId, b));
   });
 
   // ---- One person's login ----------------------------------------------------------------------
@@ -129,31 +165,7 @@ export function registerLoginRoutes(app: FastifyInstance) {
   app.post('/people/:id/login/code', async (req: FastifyRequest<{ Params: { id: string } }>) => {
     logins(req);
     const id = parse(Uuid, req.params.id);
-    return tx(req.db, async c => {
-      const u = await target(c, id);
-      may(req, u);
-      if (u.status === 'left') throw new Refused(409, [`${u.full_name} has left the company`]);
-      if (!u.email) throw new Refused(409, [`${u.full_name.split(' ')[0]} needs an email first: it is what he signs in with (edit the contact details)`]);
-      await registerEmail(c, req.companyId, id, u.email);
-      await c.query("UPDATE login_codes SET cancelled_at = now(), cancel_reason = 'replaced by a new code' WHERE user_id = $1 AND used_at IS NULL AND cancelled_at IS NULL", [id]);
-      const code = newSetupCode();
-      const expires = (await c.query(
-        `INSERT INTO login_codes (user_id, code_hash, issued_by, expires_at) VALUES ($1, $2, $3, now() + make_interval(days => $4)) RETURNING expires_at`,
-        [id, hashCode(id, code), req.actor.id, CODE_DAYS])).rows[0].expires_at as Date;
-      await c.query('UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1', [id]);
-      await log(c, req.actor.id, id, u.has_password ? 'New setup code (to reset the password)' : 'Setup code given for the first sign-in');
-      await audit(c, req.actor.id, 'login_code_issued', 'user', id);
-      const company = (await c.query('SELECT name FROM companies WHERE id = $1', [req.companyId])).rows[0]?.name ?? '';
-      const until = expires.toLocaleDateString('en-ZA', { day: 'numeric', month: 'long', timeZone: 'Africa/Johannesburg' });
-      return {
-        code, expiresAt: expires.toISOString(), email: u.email,
-        // Ready to send by WhatsApp or SMS. The code alone is no use without the email, and works once.
-        message: `Hi ${u.full_name.split(' ')[0]}, this is your ${company} job card app sign-in.\n`
-          + `1. Open the app and tap "I have a setup code".\n2. Email: ${u.email}\n3. Setup code: ${code}\n`
-          + `4. Choose your own password (at least 8 characters). Don't tell anyone your password.\n`
-          + `The code works once, until ${until}.`,
-      };
-    });
+    return tx(req.db, async c => issueCode(c, req.actor, req.companyId, id));
   });
 
   app.post('/people/:id/login/stop', async (req: FastifyRequest<{ Params: { id: string } }>) => {

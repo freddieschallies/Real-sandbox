@@ -9,12 +9,13 @@ import { DemoTools, seedTools, type DemoToolsState } from './demoTools.ts';
 import { DEMO_LOGO } from './demoLogo.ts';
 import { EXAMPLE_TECH, REAL, realDeep } from './demoReal.ts';
 import { APP_OF, MAX_PINNED, MENU_LABEL, MENU_LEVELS, MENU_TABS, cleanPinned, usualTabs } from '../../server/src/core/phoneMenu.ts';
-import type { LoginLevel } from '../../server/src/core/permissions.ts';
+import { LEVELS, TRADES, type LoginLevel } from '../../server/src/core/permissions.ts';
 import { DemoOffice, END_REASONS, HR_POSITIONS, POSITION_LABEL, seedOffice, terminate, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
 import { DemoLogins, type DemoLoginsState } from './demoLogins.ts';
 import { DemoBreakdowns, seedBreakdowns, type DemoBdState } from './demoBreakdowns.ts';
 import { NO_CHARGE_REASONS, jobOutcome } from '../../server/src/core/jobOutcome.ts';
 import * as SR from '../../server/src/core/search.ts';
+import * as SU from '../../server/src/core/setup.ts';
 import { FIELDS as CUSTOMER_FIELDS, guessMapping, parseCsv, splitHeader, toCustomers } from '../../server/src/core/customerSheet.ts';
 import * as J from '../../server/src/core/jobCard.ts';
 import * as H from '../../server/src/core/handover.ts';
@@ -51,6 +52,8 @@ export interface DemoState {
   stockControl?: DemoStockState;
   vanStock?: DemoVanState;
   times?: DemoTimesState;
+  /** The CEO's start-up checklist. */
+  setup?: { departmentsChecked: boolean; skipped: string[]; dismissed: boolean };
   /** A logo the CEO uploaded in the demo, instead of the ZSP one. */
   logoPhotoId?: string;
   /** Tabs pinned to the bottom of the phone, per position (Settings → Phone menus). */
@@ -431,6 +434,75 @@ export class DemoTransport implements Transport {
     if (area === 'fleet' && this.who.level === 'mechanic') return true;
     if (area === 'stockroom' && this.who.level === 'stockroom') return true;
     return this.office().workOf(this.who.id, this.who.level)[area];
+  }
+
+  /** The CEO's start-up page, as the server does it. */
+  private setupOf() {
+    const o = this.office();
+    const L = this.loginBook();
+    const st = (this.state.setup ??= { departmentsChecked: false, skipped: [], dismissed: false });
+    const people = o.loginPeople().filter(x => x.login_level !== 'creator').map(x => ({ ...x, department: this.vans().deptOf(x.id)?.name ?? null, login: L.listState(x.id) }))
+      .sort((a, c) => a.full_name.localeCompare(c.full_name));
+    const byRole: Record<string, number> = {};
+    for (const x of people) { const k = (POSITION_LABEL as Record<string, string>)[x.login_level]?.toLowerCase() ?? x.login_level; byRole[k] = (byRole[k] ?? 0) + 1; }
+    const prof = (this.docs().company().profile ?? {}) as Record<string, string | null>;
+    const depts = this.vans().v.departments.filter(dd => (dd as { active?: boolean }).active !== false);
+    const steps = SU.setupSteps({
+      policy: true, company: prof as never, logo: true, letterhead: !!this.state.letterhead?.headerPhotoId, departments: depts.length, departmentsChecked: st.departmentsChecked,
+      people: people.length, byRole, withEmail: people.filter(x => x.email).length, withLogin: people.filter(x => ['on', 'code', 'locked'].includes(x.login)).length, noEmail: people.filter(x => !x.email).length,
+      rates: (this.state.docs?.rates ?? {}) as Record<string, number>, clients: this.docs().customers().length, stores: o.o.stores.length,
+      stock: this.stock().s.items.length, vehicles: this.fleet().list().length, skipped: st.skipped,
+    });
+    return { company: REAL ? REAL.company.name : 'ZSP', steps, done: steps.filter(x => x.done).length, total: steps.length, dismissed: st.dismissed, people };
+  }
+  private setupRoute(p: string, req: Request, b: any): Response {
+    if (!this.does('access')) return refuse(403, "the start-up page is the CEO's");
+    const save = () => this.persist(this.state);
+    if (p === '/setup' && req.method === 'GET') {
+      const depts = this.vans().v.departments.filter(dd => (dd as { active?: boolean }).active !== false).map(dd => ({ id: dd.id, name: dd.name }));
+      return ok({ ...this.setupOf(), departments: depts, roles: LEVELS.filter(l => l !== 'creator').map(l => ({ level: l, label: POSITION_LABEL[l], help: SU.ROLE_HELP[l] ?? '', hr: HR_POSITIONS.includes(l) })),
+        trades: Object.entries(TRADES).map(([key, label]) => ({ key, label })) });
+    }
+    if (p === '/setup' && req.method === 'PUT') {
+      const st = (this.state.setup ??= { departmentsChecked: false, skipped: [], dismissed: false });
+      if (b.departmentsChecked !== undefined) st.departmentsChecked = !!b.departmentsChecked;
+      if (b.skip && !st.skipped.includes(b.skip)) st.skipped.push(b.skip);
+      if (b.unskip) st.skipped = st.skipped.filter(x => x !== b.unskip);
+      if (b.dismissed !== undefined) st.dismissed = !!b.dismissed;
+      save();
+      return ok(this.setupOf());
+    }
+    if (p === '/setup/people') {
+      const list = Array.isArray(b?.people) ? b.people : [];
+      if (!list.length) return refuse(400, 'at least one person');
+      const vn = this.vans();
+      const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
+      const results = list.map((x: any) => {
+        const name = String(x?.fullName ?? '').trim() || '(no name)';
+        if (x?.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(x.email))) return { ok: false, name, reasons: ['a valid email'] };
+        const dept = x?.departmentId ? vn.v.departments.find(dd => dd.id === x.departmentId) : undefined;
+        const r = this.office().addPerson(x, true, lvl === 'creator', dept?.name ?? '');
+        if (!r.ok) return { ok: false, name, reasons: r.reasons };
+        if (dept) vn.v.memberOf[(r.body as { id: string }).id] = dept.id;
+        return { ok: true, id: (r.body as { id: string }).id, name, position: POSITION_LABEL[x.position as LoginLevel] ?? x.position };
+      });
+      save();
+      return ok({ added: results.filter((r: { ok: boolean }) => r.ok).length, results });
+    }
+    if (p === '/setup/codes') {
+      const L = this.loginBook();
+      const people = this.office().loginPeople();
+      const codes = (Array.isArray(b?.userIds) ? b.userIds : []).map((id: string) => {
+        const t = people.find(x => x.id === id);
+        if (!t) return { ok: false, userId: id, name: '', reasons: ['no such person'] };
+        if (!t.email) return { ok: false, userId: id, name: t.full_name, reasons: [`${t.full_name.split(' ')[0]} needs an email first: it is what he signs in with (edit the contact details)`] };
+        const r = L.issueCode(id, this.who.name, REAL ? REAL.company.name : 'ZSP');
+        return r.ok ? { ok: true, userId: id, name: t.full_name, phone: t.phone, code: (r.body as { code: string }).code, message: (r.body as { message: string }).message } : { ok: false, userId: id, name: t.full_name, reasons: r.reasons };
+      });
+      save();
+      return ok({ codes });
+    }
+    return refuse(404, 'demo: not available');
   }
 
   /** Search, as the server does it: only what this person may already see. */
@@ -1433,6 +1505,7 @@ export class DemoTransport implements Transport {
     if (!this.state.acknowledged) return { status: 403, body: { error: 'acknowledge the monitoring policy first', code: 'policy_required' } };
     if (!this.state.vanStock) this.vans();
     if (p === '/search') return ok(this.search(new URLSearchParams(req.path.split('?')[1] ?? '').get('q') ?? ''));
+    if (p === '/setup' || p.startsWith('/setup/')) return this.setupRoute(p, req, b);
     const dr = this.docRoute(p, req, b);
     if (dr) return dr;
     const qr = this.queryRoute(p, req, b);

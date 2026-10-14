@@ -2759,3 +2759,67 @@ test('search: each person finds only what he may already see; stock prices only 
   assert.ok(!kinds(st).includes('invoice'));
   assert.equal((await call('stock', 'GET', '/search?q=%25%25')).status, 200, 'odd characters are just text');
 });
+
+test('a new company starts up: the CEO publishes the monitoring policy in the app, adds employees with their roles, and gives them setup codes', async () => {
+  const nc = await createCompany(appDb, 'Coastal Cooling Test', { name: 'Nina Owner', email: 'nina@coastal.test', password: 'Cold-Rooms-2026!' });
+  const login = await call('', 'POST', '/auth/login', { email: 'nina@coastal.test', password: 'Cold-Rooms-2026!' });
+  assert.equal(login.status, 200);
+  tokens.nina = login.body.token;
+  // Nothing works until the policy is published and accepted; the CEO gets the usual one with the company's name.
+  assert.equal((await call('nina', 'GET', '/setup')).status, 403);
+  const none = await call('nina', 'GET', '/policy/current');
+  assert.equal(none.status, 404);
+  assert.equal(none.body.canPublish, true);
+  assert.match(none.body.draft, /^Coastal Cooling Test: Vehicle and App Monitoring Policy/);
+  assert.equal((await call('nina', 'POST', '/policy/publish', { body: 'too short' })).status, 400);
+  const pub = await call('nina', 'POST', '/policy/publish', { body: none.body.draft });
+  assert.equal(pub.status, 200);
+  assert.equal(pub.body.version, '1.0');
+  assert.equal((await call('nina', 'POST', '/policy/acknowledge', { policyVersionId: pub.body.id })).status, 200);
+  // The checklist.
+  let s = (await call('nina', 'GET', '/setup')).body;
+  const step = (k: string) => s.steps.find((x: { key: string }) => x.key === k);
+  assert.equal(step('policy').done, true);
+  assert.equal(step('people').done, false);
+  assert.ok(s.roles.some((r: { level: string; help: string }) => r.level === 'accounts' && r.help.includes('Invoices')));
+  assert.ok(!s.roles.some((r: { level: string }) => r.level === 'creator'));
+  assert.ok(s.departments.length > 0, 'the usual departments to start with');
+  // Employees, many at once, with their roles; a bad row says why and the others go in.
+  const added = await call('nina', 'POST', '/setup/people', { people: [
+    { fullName: 'Ayesha Accounts', email: 'ayesha@coastal.test', phone: '0821234567', position: 'accounts' },
+    { fullName: 'Sam Stockroom', email: 'sam@coastal.test', position: 'stockroom' },
+    { fullName: 'Tom Technician', email: 'tom@coastal.test', position: 'technician', trade: 'foodservice', departmentId: s.departments[0].id },
+    { fullName: 'No Email Admin', position: 'admin' },
+    { fullName: 'Bad', email: 'not-an-email', position: 'admin' },
+  ] });
+  assert.equal(added.status, 200, JSON.stringify(added.body));
+  assert.equal(added.body.added, 4);
+  assert.equal(added.body.results.find((r: { name: string }) => r.name === 'Bad').ok, false);
+  s = (await call('nina', 'GET', '/setup')).body;
+  assert.equal(step('people').done, true);
+  assert.match(step('people').detail, /1 accounts/);
+  assert.equal(s.people.length, 4, 'only this company\'s people');
+  // Setup codes for everyone without a login: the one without an email is told why.
+  const codes = await call('nina', 'POST', '/setup/codes', { userIds: s.people.map((p: { id: string }) => p.id) });
+  assert.equal(codes.status, 200);
+  const ok = codes.body.codes.filter((x: { ok: boolean }) => x.ok);
+  assert.equal(ok.length, 3);
+  assert.match(ok[0].message, /Coastal Cooling Test job card app/);
+  assert.match(codes.body.codes.find((x: { ok: boolean }) => !x.ok).reasons[0], /needs an email/);
+  s = (await call('nina', 'GET', '/setup')).body;
+  assert.match(step('logins').detail, /3 of 4/);
+  // The person signs in with the code and chooses a password; the new company is his only one.
+  const tom = ok.find((x: { name: string }) => x.name === 'Tom Technician');
+  const first = await call('', 'POST', '/auth/setup', { email: 'tom@coastal.test', code: tom.code, password: 'Tom-Fridges-77' });
+  assert.ok([200, 201].includes(first.status), JSON.stringify(first.body));
+  // Departments ticked as right, the stock list skipped, the page put away.
+  s = (await call('nina', 'PUT', '/setup', { departmentsChecked: true, skip: 'stock', dismissed: true })).body;
+  assert.equal(step('departments').done, true);
+  assert.equal(step('stock').done, true);
+  assert.equal(s.dismissed, true);
+  // Not for anyone else: the first company's HR and technician.
+  assert.equal((await call('hr', 'GET', '/setup')).status, 403);
+  assert.equal((await call('tech', 'GET', '/setup')).status, 403);
+  assert.equal((await call('tech', 'POST', '/policy/publish', { body: 'x'.repeat(300) })).status, 403);
+  assert.ok(nc.companyId);
+});

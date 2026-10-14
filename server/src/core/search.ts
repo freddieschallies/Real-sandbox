@@ -27,6 +27,8 @@ export const hasAll = (text: string, q: string) => { const t = text.toLowerCase(
 
 /** The other words people use for each screen or tab. */
 export const PLACE_WORDS: Record<string, string> = {
+  help: 'help how to guide guides tutorial instructions steps learn',
+  setup: 'start-up startup start up setup set up new company checklist employees logins roles',
   today: 'home dashboard overview summary',
   breakdowns: 'call outs callouts emails whatsapp group intake new calls',
   jobs: 'job cards jobcards work orders open jobs',

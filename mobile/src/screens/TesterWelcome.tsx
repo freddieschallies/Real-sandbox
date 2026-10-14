@@ -117,6 +117,10 @@ const STEPS: [string, string[]][] = [
     'Accounts → Pastel batch: Invoices, Credit notes, Quotations and Supplier invoices, each once. Set the Pastel codes first (Line codes and VAT: also the credit notes and purchases accounts; Supplier codes).',
   ]],
   ['As the CEO (Lilanie)', [
+    'Start-up (first in the menu): the checklist a new company goes through. Open "Employees and their roles": type several people at once, each with a role (Accounts, Stock controller, Admin…), then "Add these people". Then "Logins": "Make setup codes" and copy each person\'s message to send by WhatsApp.',
+    'A brand-new company: the CEO\'s very first sign-in asks them to publish the company\'s monitoring policy (the usual one with the company\'s name, changed if they want); everyone accepts it before using the app.',
+    'Search: the magnifying glass at the top of every front page. Try a job number, a store, "valve", "prices" or "timesheet": the screens you can open, and the job cards, stock (with prices for whoever sees prices), quotes, invoices and people you may see. Tap one to open it.',
+    'How to use the app: at the bottom of every front page (and the side menu on a computer), step-by-step guides for each person\'s own work. Switch to Tech and look at the bottom of My day.',
     'Settings → Letterhead: add a picture of the top and the bottom of your letterhead. Every report, quote, invoice and timesheet then prints and emails on it.',
     'Timesheets: open a sheet a technician did not submit (Missing) and tap "Fill in and submit for him". Only the CEO can; it shows as filled in by you and he is told.',
     'The company logo is in the header of every screen and on every quote, invoice and timesheet. Change it under Accounts → Company ("Change the logo"); each company sets its own.',

@@ -38,6 +38,8 @@ import { MoneyOutList, SupplierInvoiceDetail, SupplierInvoiceList } from './Supp
 import { DebtorDetail, DebtorList } from './Debtors.tsx';
 import { CustomerDetail, CustomerList } from './Customers.tsx';
 import { SearchButton, SearchPanel, type Openers } from '../search/Search.tsx';
+import { StartUp, useSetup } from './StartUp.tsx';
+import { HelpLink, HelpPanel } from '../help/Help.tsx';
 import { ProfitView } from './Profit.tsx';
 import { PurchaseOrderList } from './PurchaseOrders.tsx';
 import { AddPerson, LOGIN_PILL, LoginCard } from './Logins.tsx';
@@ -45,7 +47,7 @@ import { ImportCustomers, StoreDetail, StoreList, pointFrom } from './Stores.tsx
 import { BreakdownAlert, BreakdownById, BreakdownList, BreakdownSettings, type Bd } from './Breakdowns.tsx';
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
-type Tab = 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'pos' | 'customers' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
+type Tab = 'setup' | 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'pos' | 'customers' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
 type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | { kind: 'supplierinv'; id: string } | { kind: 'debtor'; id: string } | { kind: 'customer'; id: string; show?: 'statement' } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
@@ -64,7 +66,7 @@ const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: '
 /** On the phone, unless the CEO or an admin pinned others: the first four show and the rest go under More, most used first. */
 const PHONE_ORDER: string[] = MENU_TABS.office.map(t => t.key);
 /** Screens that use the whole width on a computer (no list and detail). */
-const FULL: Tab[] = ['today', 'profit', 'pos', 'accounts', 'map', 'departments', 'timesheets', 'settings'];
+const FULL: Tab[] = ['setup', 'today', 'profit', 'pos', 'accounts', 'map', 'departments', 'timesheets', 'settings'];
 const OFFICE_LEVELS = ['admin', 'accounts', 'management', 'hr', 'director', 'creator'];
 export const isOffice = (level?: string) => OFFICE_LEVELS.includes(level ?? '');
 
@@ -101,13 +103,16 @@ export function OfficeApp() {
   const [supTick, setSupTick] = useState(0);
   const [debTick, setDebTick] = useState(0);
   const [searching, setSearching] = useState(false);
+  const [helping, setHelping] = useState(false);
   const bdDone = (jobId?: string) => { setBdTick(t => t + 1); o.load(); if (jobId) go('jobs', { kind: 'job', id: jobId }); else setSel(null); };
 
   const menu = usePhoneMenu();
+  const setup = useSetup(['creator', 'director'].includes(s.session?.user.level ?? '') || !!work?.access);
   const [menuStart, setMenuStart] = useState<string | undefined>(undefined);
   const level = s.session?.user.level ?? '';
   // Every tab the office has (in the order of the side menu on a computer); each person gets the ones their work allows.
   const allTabs: { key: Tab; label: string; short?: string; count?: number }[] = [
+    ...(!setup.d?.dismissed ? [{ key: 'setup' as Tab, label: 'Start-up', count: setup.d ? setup.d.total - setup.d.done || undefined : undefined }] : []),
     { key: 'today', label: 'Today' },
     { key: 'breakdowns', label: 'Breakdowns', count: bdCount || undefined },
     { key: 'jobs', label: 'Jobs', count: ov ? ov.jobs.carried_over + ov.jobs.urgent : undefined },
@@ -130,12 +135,14 @@ export function OfficeApp() {
     { key: 'repairs', label: 'Workshop', count: o.d.jobs.filter(j => j.ready_to_deliver && j.status !== 'closed' && j.status !== 'cancelled').length || undefined },
     { key: 'stores', label: 'Stores' },
     { key: 'barcodes', label: 'QR codes' },
+    ...(setup.d?.dismissed ? [{ key: 'setup' as Tab, label: 'Start-up' }] : []),
     { key: 'settings', label: 'Settings' },
   ];
   const brand = useBrand();
   useLetterhead(); // ready for printing quotes, invoices and timesheets on the letterhead
   const mine = officeTabKeys(level, work, { people: canPeople, settings: menu.canEdit || brand.canTheme });
   const tabs = allTabs.filter(t => mine.includes(t.key));
+  const has = (k: Tab) => tabs.some(t => t.key === k);
   const arrange = () => { setMenuStart(level); go('settings'); };
   // Until the person picks a tab, show their first one (their work may load after the screen does);
   // after that, only move them if the tab they are on is no longer theirs.
@@ -149,6 +156,7 @@ export function OfficeApp() {
 
   const list = (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 40 }}>
+      {tab === 'setup' ? <StartUp setup={setup} go={w => (w === 'importcustomers' ? go('stores', { kind: 'importcustomers' }) : w === 'newstore' ? go('stores', { kind: 'newstore' }) : go(w))} /> : null}
       {tab === 'today' ? <TodayView o={o} go={go} flags={does('flags')} /> : null}
       {tab === 'breakdowns' ? <BreakdownList view={bdView} setView={v => { setBdView(v); setSel(null); }} open={b => setSel({ kind: 'breakdown', id: b.id, b })} selected={sel?.kind === 'breakdown' ? sel.id : null} tick={bdTick} /> : null}
       {tab === 'jobs' ? <JobList o={o} open={id => setSel({ kind: 'job', id })} add={does('jobs') ? () => setSel({ kind: 'newjob' }) : undefined} selected={sel?.kind === 'job' ? sel.id : null} /> : null}
@@ -171,7 +179,8 @@ export function OfficeApp() {
       {tab === 'repairs' ? <WorkshopBoard o={o} openJob={id => go('jobs', { kind: 'job', id })} /> : null}
       {tab === 'barcodes' ? <PrintBarcodes /> : null}
       {tab === 'stores' ? <StoreList o={o} canEdit={does('stores')} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} importIt={does('stores') ? () => setSel({ kind: 'importcustomers' }) : undefined} open={id => setSel({ kind: 'store', id })} /> : null}
-      {tab === 'settings' ? <>{does('access') ? <BreakdownSettings /> : null}<ThemeSettings /><LetterheadSettings /><StorageSettings />{does('access') || level === 'admin' ? <MyPasswordSettings /> : null}{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
+      {tab === 'settings' ? <>{has('setup') ? <Button label={`Start-up checklist${setup.d ? ` (${setup.d.done} of ${setup.d.total} done)` : ''}`} kind="secondary" onPress={() => go('setup')} /> : null}{does('access') ? <BreakdownSettings /> : null}<ThemeSettings /><LetterheadSettings /><StorageSettings />{does('access') || level === 'admin' ? <MyPasswordSettings /> : null}{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
+      {!wide ? <HelpLink onPress={() => setHelping(true)} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
       <Text style={st.small}>{o.d.loadedAt ? `Updated ${when(o.d.loadedAt)}` : o.loading ? 'Loading…' : 'Needs signal to load.'}</Text>
     </ScrollView>
@@ -238,7 +247,6 @@ export function OfficeApp() {
   );
 
   // Search: every tab this person has, and what their work lets them see; a result opens where it lives.
-  const has = (k: Tab) => tabs.some(t => t.key === k);
   const openers: Openers = {
     ...(has('jobs') ? { job: id => go('jobs', { kind: 'job', id }) } : {}),
     ...(has('stores') ? { store: id => go('stores', { kind: 'store', id }) } : {}),
@@ -249,7 +257,8 @@ export function OfficeApp() {
     ...(has('supplier') ? { supplier_invoice: id => go('supplier', { kind: 'supplierinv', id }) } : {}),
     ...(has('people') ? { person: id => go('people', { kind: 'person', id }) } : {}),
   };
-  const search = searching ? <SearchPanel places={tabs.map(t => ({ key: t.key, label: t.label, open: () => go(t.key) }))} open={openers} close={() => setSearching(false)} /> : null;
+  const search = searching ? <SearchPanel places={[...tabs.map(t => ({ key: t.key, label: t.label, open: () => go(t.key) })), { key: 'help', label: 'How to use the app', open: () => setHelping(true) }]} open={openers} close={() => setSearching(false)} />
+    : helping ? <HelpPanel close={() => setHelping(false)} /> : null;
 
   if (wide) {
     return (
@@ -266,6 +275,7 @@ export function OfficeApp() {
                 {t.count ? <Pill text={String(t.count)} tone="warn" /> : null}
               </Pressable>
             ))}
+            <HelpLink onPress={() => setHelping(true)} />
           </ScrollView>
           <View style={{ width: FULL.includes(tab) ? undefined : 460, flex: FULL.includes(tab) ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
           {!FULL.includes(tab) ? <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}</View> : null}

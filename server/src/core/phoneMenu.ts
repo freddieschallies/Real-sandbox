@@ -9,7 +9,7 @@ export const MAX_PINNED = 4;
 /** Every tab each app can have, most used first (the automatic order on the phone). */
 export const MENU_TABS: Record<MenuApp, { key: string; label: string }[]> = {
   office: [
-    { key: 'today', label: 'Today' }, { key: 'breakdowns', label: 'Breakdowns' }, { key: 'jobs', label: 'Jobs' }, { key: 'departments', label: 'Departments' },
+    { key: 'setup', label: 'Start-up' }, { key: 'today', label: 'Today' }, { key: 'breakdowns', label: 'Breakdowns' }, { key: 'jobs', label: 'Jobs' }, { key: 'departments', label: 'Departments' },
     { key: 'timesheets', label: 'Timesheets' }, { key: 'flags', label: 'Flags' }, { key: 'people', label: 'People' },
     { key: 'map', label: 'Team map' }, { key: 'vans', label: 'Van stock' }, { key: 'queries', label: 'Queries' },
     { key: 'quotes', label: 'Quotes' }, { key: 'invoices', label: 'Invoices' }, { key: 'supplier', label: 'Supplier invoices' }, { key: 'pos', label: 'Purchase orders' }, { key: 'customers', label: 'Customers' }, { key: 'debtors', label: 'Debtors' }, { key: 'profit', label: 'Profit' }, { key: 'accounts', label: 'Accounts' },
@@ -44,6 +44,8 @@ export function officeTabKeys(level: string, work: Partial<Record<WorkArea, bool
     vans: does('vanstock'), departments: does('hr'),
     // HR and the CEO always have every timesheet; a department manager his own technicians'.
     timesheets: does('hr') || ['management', 'hr', 'director', 'creator', 'accounts'].includes(level),
+    // The CEO's start-up checklist for a new company.
+    setup: does('access'),
     people: opts.people, repairs: jobsSide, stores: jobsSide, barcodes: jobsSide, settings: opts.settings,
   };
   return MENU_TABS.office.map(t => t.key).filter(k => on[k]);

@@ -6,6 +6,7 @@ import { ItemPicture, Thumb } from '../ItemPicture.tsx';
 import { usePhoneMenu } from '../menu.tsx';
 import { ModeToggle } from '../appearance.tsx';
 import { SearchButton, SearchPanel } from '../search/Search.tsx';
+import { HelpLink, HelpPanel } from '../help/Help.tsx';
 import { BrandLogo } from '../brand.tsx';
 import React, { useEffect, useState } from 'react';
 import { Image, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
@@ -38,6 +39,7 @@ export function FleetApp() {
   useEffect(() => { if (tab === 'stock') ws.load(); }, [tab]);
   const [stack, setStack] = useState<Sel[]>([]);
   const [searching, setSearching] = useState(false);
+  const [helping, setHelping] = useState(false);
   const sel = stack.at(-1) ?? null;
   const open = (x: Sel) => setStack(st0 => (wide && (x.kind === 'vehicle' || x.kind === 'booking' || x.kind === 'wsitem' || (x.kind === 'assign' && !!x.techId && tab === 'techs')) ? [x] : [...st0, x]));
   const back = () => setStack(st0 => st0.slice(0, -1));
@@ -68,6 +70,7 @@ export function FleetApp() {
       {tab === 'stock' ? <WorkshopList ws={ws} role="mechanic" open={id => open({ kind: 'wsitem', id })} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} disabled={s.waiting > 0} /> : null}
       <Text style={st.small}>{f.d.loadedAt ? `Updated ${when(f.d.loadedAt)}` : f.loading ? 'Loading…' : 'Needs signal to load.'}</Text>
+      <HelpLink onPress={() => setHelping(true)} />
     </ScrollView>
   );
 
@@ -122,7 +125,8 @@ export function FleetApp() {
           <View style={{ width: 420, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
           <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose a vehicle, booking or technician.</Body></View>}</View>
         </View>
-        {searching ? <SearchPanel places={tabs.map(t => ({ key: t.key, label: t.label, open: () => { setTab(t.key); setStack([]); } }))} open={{ vehicle: id => { setTab('vehicles'); setStack([{ kind: 'vehicle', id }]); } }} close={() => setSearching(false)} /> : null}
+        {searching ? <SearchPanel places={[...tabs.map(t => ({ key: t.key, label: t.label, open: () => { setTab(t.key); setStack([]); } })), { key: 'help', label: 'How to use the app', open: () => setHelping(true) }]} open={{ vehicle: id => { setTab('vehicles'); setStack([{ kind: 'vehicle', id }]); } }} close={() => setSearching(false)} /> : null}
+        {helping ? <HelpPanel close={() => setHelping(false)} /> : null}
       </View>
     );
   }
@@ -133,7 +137,8 @@ export function FleetApp() {
       {!sel ? (
         <BottomTabs tabs={tabs} current={tab} onSelect={k => setTab(k)} accent={K.band} bottom={ins.bottom} pinned={menu.pinned} />
       ) : null}
-      {searching ? <SearchPanel places={tabs.map(t => ({ key: t.key, label: t.label, open: () => { setTab(t.key); setStack([]); } }))} open={{ vehicle: id => { setTab('vehicles'); setStack([{ kind: 'vehicle', id }]); } }} close={() => setSearching(false)} /> : null}
+      {searching ? <SearchPanel places={[...tabs.map(t => ({ key: t.key, label: t.label, open: () => { setTab(t.key); setStack([]); } })), { key: 'help', label: 'How to use the app', open: () => setHelping(true) }]} open={{ vehicle: id => { setTab('vehicles'); setStack([{ kind: 'vehicle', id }]); } }} close={() => setSearching(false)} /> : null}
+        {helping ? <HelpPanel close={() => setHelping(false)} /> : null}
     </View>
   );
 }

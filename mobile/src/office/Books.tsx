@@ -767,7 +767,7 @@ function LineCodes({ b, s, done }: { b: Books; s: P.PastelSettings; done: () => 
   );
 }
 
-function CompanyForm({ b, done }: { b: Books; done: () => void }) {
+export function CompanyForm({ b, done }: { b: Books; done: () => void }) {
   const p = b.company?.profile ?? {};
   const [f, setF] = useState<Record<string, string>>({
     legalName: p.legal_name ?? '', tradingName: p.trading_name ?? '', regNo: p.reg_no ?? '', vatNo: p.vat_no ?? '', address: p.address ?? '', phone: p.phone ?? '', email: p.email ?? '',
@@ -800,7 +800,7 @@ function CompanyForm({ b, done }: { b: Books; done: () => void }) {
 }
 
 /** The company logo: shown in the app's header and on every letterhead. */
-function LogoPicker() {
+export function LogoPicker() {
   const s = useStore();
   const { logo } = useBrand();
   const [msg, setMsg] = useState<string | null>(null);

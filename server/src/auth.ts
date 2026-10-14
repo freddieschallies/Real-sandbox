@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import bcrypt from 'bcryptjs';
 import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
+import { standardPolicy } from './core/setup.ts';
 import type { Db, Q } from './db.ts';
 import { audit } from './db.ts';
 import { keepIfRefused, openCompanyConnection } from './tenancy.ts';
@@ -58,7 +59,7 @@ export async function hasAcknowledgedPolicy(db: Q, userId: string): Promise<bool
 }
 
 const PUBLIC = new Set(['/health', '/auth/login', '/auth/setup', '/platform/login']);
-const BEFORE_POLICY = new Set(['/me', '/me/password', '/policy/current', '/policy/acknowledge']);
+const BEFORE_POLICY = new Set(['/me', '/me/password', '/policy/current', '/policy/acknowledge', '/policy/publish']);
 
 export async function companyActive(db: Db, companyId: string): Promise<boolean> {
   const { rows } = await db.query('SELECT active FROM companies WHERE id = $1', [companyId]);
@@ -199,8 +200,26 @@ export function registerAuth(app: FastifyInstance, db: Db) {
 
   app.get('/policy/current', async (req, reply) => {
     const { rows } = await req.db.query('SELECT id, version, body, published_at FROM policy_versions ORDER BY published_at DESC LIMIT 1');
-    if (!rows[0]) return reply.code(404).send({ error: 'no policy published' });
+    if (!rows[0]) {
+      // A new company: the CEO publishes it (the usual policy with the company's name, which they may change first).
+      const canPublish = can(req.actor, 'manage_access');
+      const company = canPublish ? (await req.db.query('SELECT name FROM companies WHERE id = $1', [req.companyId])).rows[0]?.name ?? 'The company' : null;
+      return reply.code(404).send({ error: 'no policy published', code: 'no_policy', canPublish, draft: company ? standardPolicy(company) : null });
+    }
     return rows[0];
+  });
+
+  // The CEO publishes the company's monitoring policy (the first one from the start-up, or a new version).
+  // Everyone reads and accepts it at their next sign-in.
+  app.post('/policy/publish', async (req, reply) => {
+    if (!can(req.actor, 'manage_access')) return reply.code(403).send({ error: 'only the CEO publishes the monitoring policy', reasons: ['only the CEO publishes the monitoring policy'] });
+    const v = z.object({ body: z.string().trim().min(200, 'the policy text (at least a few paragraphs)').max(20000) }).safeParse(req.body);
+    if (!v.success) return reply.code(400).send({ error: v.error.issues[0].message, reasons: v.error.issues.map(i => i.message) });
+    const n = Number((await req.db.query('SELECT count(*)::int AS n FROM policy_versions')).rows[0].n);
+    const version = `${n + 1}.0`;
+    const id = (await req.db.query('INSERT INTO policy_versions (version, body) VALUES ($1, $2) RETURNING id', [version, v.data.body])).rows[0].id;
+    await audit(req.db, req.actor.id, 'policy_published', 'policy_version', id, { version });
+    return { id, version };
   });
 
   app.post('/policy/acknowledge', async (req, reply) => {

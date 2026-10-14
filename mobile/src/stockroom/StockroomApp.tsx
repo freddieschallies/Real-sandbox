@@ -9,6 +9,7 @@ import { BottomTabs } from '../BottomTabs.tsx';
 import { usePhoneMenu } from '../menu.tsx';
 import { ModeToggle } from '../appearance.tsx';
 import { SearchButton, SearchPanel } from '../search/Search.tsx';
+import { HelpLink, HelpPanel } from '../help/Help.tsx';
 import { BrandLogo } from '../brand.tsx';
 import React, { useState } from 'react';
 import { Image, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
@@ -42,6 +43,7 @@ export function StockroomApp() {
   const [tab, setTab] = useState<Tab>('issue');
   const [sel, setSel] = useState<Sel>(null);
   const [searching, setSearching] = useState(false);
+  const [helping, setHelping] = useState(false);
   const [kitTick, setKitTick] = useState(0);
   const o = room.ctl.overview;
   // Standing in for the stock controller (an admin, when he is out): issuing stock and tools only.
@@ -91,6 +93,7 @@ export function StockroomApp() {
       {tab === 'items' ? <NewItemList items={room.ctl.room.filter(i => i.needsReview)} open={id => setSel({ kind: 'item', id })} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} disabled={s.waiting > 0} /> : null}
       {room.ctl.loadedAt ? <Text style={st.small}>Updated {when(room.ctl.loadedAt)}</Text> : <Text style={st.small}>{room.loading ? 'Loading…' : 'Needs signal to load.'}</Text>}
+      <HelpLink onPress={() => setHelping(true)} />
     </ScrollView>
   );
 
@@ -157,7 +160,8 @@ export function StockroomApp() {
             {detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}
           </View>
         </View>
-        {searching ? <SearchPanel places={tabs.map(t => ({ key: t.key, label: t.label, open: () => { setTab(t.key); setSel(null); } }))} open={{ stock: id => { setTab('room'); setSel(room.ctl.room.some(x => x.id === id) ? { kind: 'part', id } : null); }, po: () => { setTab('pos'); setSel(null); } }} close={() => setSearching(false)} /> : null}
+        {searching ? <SearchPanel places={[...tabs.map(t => ({ key: t.key, label: t.label, open: () => { setTab(t.key); setSel(null); } })), { key: 'help', label: 'How to use the app', open: () => setHelping(true) }]} open={{ stock: id => { setTab('room'); setSel(room.ctl.room.some(x => x.id === id) ? { kind: 'part', id } : null); }, po: () => { setTab('pos'); setSel(null); } }} close={() => setSearching(false)} /> : null}
+        {helping ? <HelpPanel close={() => setHelping(false)} /> : null}
       </View>
     );
   }
@@ -169,7 +173,8 @@ export function StockroomApp() {
       {!sel ? (
         <BottomTabs tabs={tabs} current={tab} onSelect={k => { if (tab === 'live') room.seenActivity(); setTab(k); }} accent={K.band} bottom={ins.bottom} pinned={menu.pinned} />
       ) : null}
-      {searching ? <SearchPanel places={tabs.map(t => ({ key: t.key, label: t.label, open: () => { setTab(t.key); setSel(null); } }))} open={{ stock: id => { setTab('room'); setSel(room.ctl.room.some(x => x.id === id) ? { kind: 'part', id } : null); }, po: () => { setTab('pos'); setSel(null); } }} close={() => setSearching(false)} /> : null}
+      {searching ? <SearchPanel places={[...tabs.map(t => ({ key: t.key, label: t.label, open: () => { setTab(t.key); setSel(null); } })), { key: 'help', label: 'How to use the app', open: () => setHelping(true) }]} open={{ stock: id => { setTab('room'); setSel(room.ctl.room.some(x => x.id === id) ? { kind: 'part', id } : null); }, po: () => { setTab('pos'); setSel(null); } }} close={() => setSearching(false)} /> : null}
+        {helping ? <HelpPanel close={() => setHelping(false)} /> : null}
     </View>
   );
 }
