@@ -262,6 +262,13 @@ export const GUIDES: Guide[] = [
     'Mark-up on parts in three price bands (cheap parts a bigger %): the example shows what a R100, R1 000 and R5 000 part sells at.',
     'The next invoice for this client is priced with these.',
   ] },
+  { id: 'ceo-support', title: 'Get help from Real Sandbox support', roles: CEO, steps: [
+    'Settings → Real Sandbox support: choose for how long (1 hour to 3 days), say what is wrong, tap "Let support in".',
+    'Phone or WhatsApp Real Sandbox to say it is ready. While they are in, a green band at the top says so.',
+    'They see and change what you can; everything they do is in your history under "Support".',
+    'Tap "End now" on the band (or in Settings) the moment you want them out. They can never get in without you.',
+    'Locked out of your own login? Phone Real Sandbox: they send you a new setup code without coming in.',
+  ] },
   { id: 'ceo-access', title: 'Decide who may do what', roles: CEO, steps: [
     'People → the person → Position: their role (technician, admin, accounts, stock controller, manager, HR, mechanic).',
     'Under the position, switch extra work on or off for that person (e.g. give Admin the stockroom when the stock controller is away).',

@@ -3204,3 +3204,56 @@ test('purchase orders: the technician photographs what he needs; the app reads i
   const office = (await call('admin', 'GET', '/purchase-orders?view=requested')).body;
   assert.ok((Array.isArray(office) ? office : office.orders ?? office.list ?? []).some((p: { id: string; photo_id: string }) => p.id === po.body.id && p.photo_id === pic.body.id));
 });
+
+test('owner dashboard: every company as counts only; support goes in only while the CEO allows it, and is in the history', async () => {
+  const dash = await call('platform', 'GET', '/platform/dashboard');
+  assert.equal(dash.status, 200, JSON.stringify(dash.body));
+  const zsp = dash.body.companies.find((c: { id: string }) => c.id === ids.company);
+  assert.ok(zsp.people > 3 && zsp.setup.total > 0 && zsp.ceo.email, JSON.stringify(zsp));
+  const client = (await db.query('SELECT name FROM clients LIMIT 1')).rows[0].name as string;
+  assert.ok(!JSON.stringify(dash.body).includes(client), 'no customer data on the dashboard');
+  assert.equal((await call('creator', 'GET', '/platform/dashboard')).status, 403);
+
+  // Not without the CEO's permission.
+  const no = await call('platform', 'POST', `/platform/companies/${ids.company}/enter`);
+  assert.equal(no.status, 409);
+  assert.equal((await call('tech', 'POST', '/support/grant', { hours: 4 })).status, 403, 'only the CEO lets support in');
+  const g = await call('creator', 'POST', '/support/grant', { hours: 4, reason: 'Pastel codes look wrong' });
+  assert.equal(g.status, 200, JSON.stringify(g.body));
+  const enter = await call('platform', 'POST', `/platform/companies/${ids.company}/enter`);
+  assert.equal(enter.status, 200, JSON.stringify(enter.body));
+  assert.match(enter.body.user.name, /^Support: Platform/);
+  tokens.support = enter.body.token;
+  const me = await call('support', 'GET', '/me');
+  assert.ok(me.body.support?.until && me.body.policyAcknowledged, JSON.stringify(me.body));
+  assert.equal((await call('support', 'GET', '/jobs')).status, 200, 'works with the CEO\'s rights');
+  assert.equal((await call('support', 'POST', '/support/grant', { hours: 72 })).status, 403, 'support cannot give itself more time');
+  const people = (await call('creator', 'GET', '/people')).body.people as { full_name: string }[];
+  assert.ok(!people.some(p => p.full_name.startsWith('Support:')), 'not on the staff list');
+  const seen = (await call('creator', 'GET', '/support')).body;
+  assert.equal(seen.active.enteredBy, 'Platform');
+  const logged = (await db.query("SELECT u.full_name FROM audit_log a JOIN users u ON u.id = a.actor_id WHERE a.action = 'support_entered'")).rows[0];
+  assert.match(logged.full_name, /^Support:/);
+
+  // The CEO ends it: support is out at once.
+  assert.equal((await call('creator', 'POST', '/support/end')).status, 200);
+  const out = await call('support', 'GET', '/jobs');
+  assert.equal(out.status, 401);
+  assert.equal(out.body.code, 'support_ended');
+
+  // A CEO who is locked out: the owner gives a new setup code, and the CEO chooses a new password with it.
+  assert.equal((await call('platform', 'POST', `/platform/companies/${ids.companyB}/ceo-code`)).status, 409, 'not while suspended');
+  await call('platform', 'PATCH', `/platform/companies/${ids.companyB}`, { active: true });
+  const code = await call('platform', 'POST', `/platform/companies/${ids.companyB}/ceo-code`);
+  assert.equal(code.status, 200, JSON.stringify(code.body));
+  assert.equal(code.body.email, 'bea@coastal.test');
+  const back = await call('', 'POST', '/auth/setup', { email: 'bea@coastal.test', code: code.body.code, password: PW });
+  assert.equal(back.status, 200, JSON.stringify(back.body));
+  tokens.bea = back.body.token;
+
+  // A new company without typing the CEO's password: the CEO gets a setup code.
+  const made = await call('platform', 'POST', '/platform/companies', { name: 'Inland Refrigeration', creator: { name: 'Ian Inland', email: 'ian@inland.test' } });
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  assert.match(made.body.code.code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+  assert.equal((await call('', 'POST', '/auth/login', { email: 'ian@inland.test', password: PW })).status, 401, 'no password until he uses the code');
+});

@@ -56,6 +56,10 @@ export interface Store {
   demoNoSignal: boolean;
   /** `setupCode`: first sign-in (or a forgotten password), choosing `password` as the new one. `remember`: 30 days on this phone. */
   signIn(mode: 'demo' | 'server', baseUrl: string, email: string, password: string, opts?: { remember?: boolean; setupCode?: string }): Promise<ActionResult>;
+  /** Signs in with an answer the server already gave (Real Sandbox support opening a company from the owner's dashboard). */
+  signInWith(mode: 'demo' | 'server', baseUrl: string, r: { token: string; user: Session['user']; company: Session['company']; until?: string }): Promise<ActionResult>;
+  /** The owner's dashboard: a question to the server (or the test drive) with the owner's own sign-in, not a company's. */
+  platform(mode: 'demo' | 'server', baseUrl: string, req: Omit<Request, 'idemKey'>, token?: string): Promise<{ status: number; body: any }>;
   /** After changing your own password: the new sign-in for this phone (every other phone is signed out). */
   replaceToken(token: string): Promise<void>;
   signOut(): Promise<void>;
@@ -237,6 +241,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [outbox, refresh, setCacheAndSave, transport]);
 
+  const signInWith = useCallback(async (mode: 'demo' | 'server', baseUrl: string, r: { token: string; user: Session['user']; company: Session['company']; until?: string }): Promise<ActionResult> => {
+    httpRef.current = mode === 'server' ? new HttpTransport(baseUrl) : null;
+    const s: Session = { mode, baseUrl, token: r.token, user: r.user, company: r.company, ...(r.until ? { support: { until: r.until } } : {}) };
+    sessionRef.current = s;
+    setSession(s);
+    await save(K.session, s);
+    setCacheAndSave(() => EMPTY);
+    outbox.clearAll();
+    try { await refresh(); } catch { /* the office screens load what they need */ }
+    return { ok: true };
+  }, [outbox, refresh, setCacheAndSave]);
+
+  const platform = useCallback(async (mode: 'demo' | 'server', baseUrl: string, req: Omit<Request, 'idemKey'>, token?: string) => {
+    const t: Transport = mode === 'demo' && demoRef.current ? demoRef.current : new HttpTransport(baseUrl);
+    try {
+      return await t.send({ ...req, idemKey: '' } as Request, token);
+    } catch (e) {
+      if (e instanceof Offline) return { status: 0, body: { error: 'offline', reasons: ['No connection to the server. The dashboard needs signal.'] } };
+      throw e;
+    }
+  }, []);
+
   const replaceToken = useCallback(async (token: string) => {
     if (!sessionRef.current) return;
     const s2 = { ...sessionRef.current, token };
@@ -339,7 +365,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     waiting: outbox.waiting, blocked: outbox.blocked, lastSentAt: outbox.lastSentAt,
     online: session?.mode === 'demo' ? !demoNoSignal : net.isConnected !== false,
     syncing, demoNoSignal,
-    signIn, replaceToken, signOut, policy, acknowledge, refresh, loadCard, jobAction, queue,
+    signIn, signInWith, platform, replaceToken, signOut, policy, acknowledge, refresh, loadCard, jobAction, queue,
     newId: randomUUID, ask, patchToday, patchCache, adjustStock, syncNow, discardBlocked, setDemoNoSignal, resetDemo,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

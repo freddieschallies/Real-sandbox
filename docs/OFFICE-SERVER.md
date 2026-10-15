@@ -56,7 +56,16 @@ docker compose exec api node --experimental-strip-types scripts/create-company.t
   --company "ZSP" --name "Fred Schallies" --email fred@zsp.co.za
 ```
 
-Each asks for a password. One email address can belong to only one login. Then publish that company's monitoring policy, after the attorney has reviewed it:
+Each asks for a password. One email address can belong to only one login.
+
+After that you don't need the scripts: in the app, tap **Real Sandbox owner sign-in** on the sign-in screen and use your owner login. The owner dashboard shows every company as numbers only (people, jobs this month, last activity, start-up progress, WhatsApp and Pastel), and lets you:
+
+- **Add a company** with its CEO's name and email: the CEO gets a setup code and chooses their own password.
+- **New CEO setup code** when a CEO is locked out or forgot their password.
+- **Suspend / Reactivate** a company (nothing is deleted).
+- **Open as support**, only while that company's CEO has tapped *Settings → Real Sandbox support → Let support in*, and only for the time they chose. Everything you do is in their history as "Support: <your name>", and they can end it any time.
+
+Then publish that company's monitoring policy, after the attorney has reviewed it:
 
 ```bash
 docker compose cp policy.md api:/tmp/policy.md

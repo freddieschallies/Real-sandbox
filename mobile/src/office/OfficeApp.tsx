@@ -1,6 +1,7 @@
 // The office screen (control base), for Admin, Management, Directors and the CEO. Made for a desktop
 // browser: menu, list and detail side by side. Works on a phone too, one screen at a time.
 import { jobOutcome, NO_CHARGE_REASONS, type NoChargeReason } from '../../../server/src/core/jobOutcome.ts';
+import { SupportBanner, SupportSettings } from './Support.tsx';
 import { BottomTabs } from '../BottomTabs.tsx';
 import { BrandLogo } from '../brand.tsx';
 import { usePhoneMenu } from '../menu.tsx';
@@ -186,7 +187,7 @@ export function OfficeApp() {
       {tab === 'repairs' ? <WorkshopBoard o={o} openJob={id => go('jobs', { kind: 'job', id })} /> : null}
       {tab === 'barcodes' ? <PrintBarcodes /> : null}
       {tab === 'stores' ? <StoreList o={o} canEdit={does('stores')} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} importIt={does('stores') ? () => setSel({ kind: 'importcustomers' }) : undefined} open={id => setSel({ kind: 'store', id })} /> : null}
-      {tab === 'settings' ? <>{has('setup') ? <Button label={`Start-up checklist${setup.d ? ` (${setup.d.done} of ${setup.d.total} done)` : ''}`} kind="secondary" onPress={() => go('setup')} /> : null}{does('access') ? <BreakdownSettings /> : null}<ThemeSettings /><LetterheadSettings /><StorageSettings />{does('access') || level === 'admin' ? <MyPasswordSettings /> : null}{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
+      {tab === 'settings' ? <>{has('setup') ? <Button label={`Start-up checklist${setup.d ? ` (${setup.d.done} of ${setup.d.total} done)` : ''}`} kind="secondary" onPress={() => go('setup')} /> : null}{does('access') && !s.session?.support ? <SupportSettings /> : null}{does('access') ? <BreakdownSettings /> : null}<ThemeSettings /><LetterheadSettings /><StorageSettings />{does('access') || level === 'admin' ? <MyPasswordSettings /> : null}{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
       {!wide ? <HelpLink onPress={() => setHelping(true)} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
       <Text style={st.small}>{o.d.loadedAt ? `Updated ${when(o.d.loadedAt)}` : o.loading ? 'Loading…' : 'Needs signal to load.'}</Text>
@@ -273,6 +274,7 @@ export function OfficeApp() {
     return (
       <View style={{ flex: 1, backgroundColor: C.bg }}>
         {header}
+        <SupportBanner ceo={does('access')} />
         {does('jobs') ? <BreakdownAlert open={id => go('breakdowns', { kind: 'breakdown', id })} /> : null}
         <View style={{ flex: 1, flexDirection: 'row' }}>
           {/* Compact so every tab fits on a normal screen; on a short window it scrolls, with a scrollbar. */}
@@ -297,6 +299,7 @@ export function OfficeApp() {
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       {header}
+      <SupportBanner ceo={does('access')} />
       <View style={{ flex: 1 }}>{detail ?? body}</View>
       {alert}
       {!sel ? (

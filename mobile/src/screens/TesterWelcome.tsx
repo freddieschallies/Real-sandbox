@@ -1,5 +1,6 @@
 // Shown instead of the sign-in screen in the test build that is shared for people to try.
 import React, { useState } from 'react';
+import { OwnerApp, ownerView, useOwnerOpen } from '../owner/OwnerApp.tsx';
 import { Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { Body, Button, Card, Heading, Label, Notice, Screen, st } from '../ui.tsx';
@@ -147,6 +148,8 @@ export function TesterWelcome() {
   const [why, setWhy] = useState<string[] | null>(() => switchError);
   React.useEffect(() => { const f = (e: string[] | null) => setWhy(e); switchListeners.add(f); return () => { switchListeners.delete(f); }; }, []);
   const go = async (who: 'demo' | 'stock' | 'mech' | 'office' | 'admin' | 'manager' | 'hr' | 'accounts') => { setBusy(who); setWhy(null); const r = await s.signIn('demo', '', who, 'demo'); setBusy(null); if (!r.ok) setWhy(r.reasons); };
+  const owner = useOwnerOpen();
+  if (owner) return <OwnerApp mode="demo" baseUrl="" back={() => ownerView.set(false)} />;
   if (own) return <Login demo back={() => setOwn(false)} />;
   return (
     <Screen title="Real Sandbox" sub={`Test drive · ${REAL ? REAL.company.name : 'ZSP'} job cards and stock`}>
@@ -180,6 +183,11 @@ export function TesterWelcome() {
       <Card>
         <Label>Good to know</Label>
         <Text style={st.small}>The real app runs on the technicians' phones and works without signal. Photos here come from a file picker; on a phone they use the camera. The tracker, the office dashboard and supplier invoice reading by AI are not part of this test.</Text>
+      </Card>
+      <Card>
+        <Label>Real Sandbox (the app's owner)</Label>
+        <Text style={st.small}>Your dashboard of every company using the app, as numbers only, and tech support when a CEO lets you in.</Text>
+        <Button label="Open the owner dashboard" kind="secondary" onPress={() => ownerView.set(true)} />
       </Card>
       {reset ? <Notice tone="good" title="Demo data reset" lines={['Back to the start: same jobs, same stock.']} /> : null}
       <Button label="Start over with fresh demo data" kind="quiet" onPress={async () => { await s.resetDemo(); setReset(true); }} />

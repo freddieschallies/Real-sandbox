@@ -35,6 +35,7 @@ import { registerTimesheetRoutes } from './routes/timesheets.ts';
 import { registerMenuRoutes } from './routes/menus.ts';
 import { registerAccessRoutes } from './routes/access.ts';
 import { registerPlatformRoutes } from './routes/platform.ts';
+import { registerSupportRoutes } from './routes/support.ts';
 import { registerStockRoutes } from './routes/stock.ts';
 import { registerFleetRoutes } from './routes/fleet.ts';
 import { registerVehicleRoutes } from './routes/vehicles.ts';
@@ -96,6 +97,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerToolStoreRoutes(app);
   registerAccessRoutes(app, db);
   registerPlatformRoutes(app, db);
+  registerSupportRoutes(app);
   registerStockRoutes(app, db, opts.invoiceReader ?? null);
   registerSupplierInvoiceRoutes(app, db, opts.invoiceReader ?? null);
   registerFleetRoutes(app, db);

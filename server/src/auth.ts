@@ -13,8 +13,9 @@ declare module 'fastify' {
   interface FastifyRequest { actor: Actor }
 }
 declare module '@fastify/jwt' {
-  // v: the person's session number (raised to sign them out on every phone); r: kept signed in on their own phone.
-  interface FastifyJWT { payload: { sub: string; cid?: string; platform?: boolean; v?: number; r?: boolean }; user: { sub: string; cid?: string; platform?: boolean; v?: number; r?: boolean } }
+  // v: the person's session number (raised to sign them out on every phone); r: kept signed in on their own phone;
+  // s: Real Sandbox support, working in the company for the time the CEO allowed (the support visit's id).
+  interface FastifyJWT { payload: { sub: string; cid?: string; platform?: boolean; v?: number; r?: boolean; s?: string }; user: { sub: string; cid?: string; platform?: boolean; v?: number; r?: boolean; s?: string } }
 }
 
 /**
@@ -85,6 +86,12 @@ export function registerAuth(app: FastifyInstance, db: Db) {
     const actor = await loadActor(req.db, req.user.sub, req.user.v ?? 0);
     if (!actor) return reply.code(401).send({ error: 'signed out: sign in again' });
     req.actor = actor;
+    if (req.user.s) {
+      // Support only while the CEO's permission lasts: ended or run out means signed out at once.
+      const ok = (await req.db.query('SELECT 1 FROM support_grants WHERE id = $1 AND ended_at IS NULL AND until > now()', [req.user.s])).rowCount;
+      if (!ok) return reply.code(401).send({ error: 'support access has ended: the CEO can let you in again', code: 'support_ended' });
+      return;
+    }
     // Nobody uses the app until they have acknowledged the current monitoring policy.
     if (!BEFORE_POLICY.has(path) && !(await hasAcknowledgedPolicy(req.db, actor.id))) {
       return reply.code(403).send({ error: 'acknowledge the monitoring policy first', code: 'policy_required' });
@@ -195,7 +202,8 @@ export function registerAuth(app: FastifyInstance, db: Db) {
       // Standing in for the stock controller: issuing stock and tools, not receiving or counting.
       stockCover: can(req.actor, 'assign_stock') && !can(req.actor, 'manage_stockroom') && rows[0].login_level !== 'stockroom',
       permissions: Object.entries(req.actor.perms ?? {}).filter(([, v]) => !!v).map(([k]) => k),
-      work: workOf(req.actor.perms ?? {}), policyAcknowledged: await hasAcknowledgedPolicy(req.db, req.actor.id) };
+      work: workOf(req.actor.perms ?? {}), policyAcknowledged: !!req.user.s || await hasAcknowledgedPolicy(req.db, req.actor.id),
+      support: req.user.s ? (await req.db.query('SELECT until FROM support_grants WHERE id = $1', [req.user.s])).rows[0] ?? null : null };
   });
 
   app.get('/policy/current', async (req, reply) => {

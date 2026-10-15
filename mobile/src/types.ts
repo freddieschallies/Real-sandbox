@@ -13,6 +13,8 @@ export interface Session {
     /** Which kinds of work the CEO switched on for this person. */ work?: Record<string, boolean>;
   };
   company: { id: string; name: string };
+  /** Real Sandbox support, in the company until this time (the CEO allowed it). */
+  support?: { until: string } | null;
 }
 
 export interface TodayJob {

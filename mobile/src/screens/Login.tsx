@@ -7,6 +7,7 @@ import { useStore } from '../state.tsx';
 import { Body, Button, Field, Label, Notice, Screen, Toggle, st } from '../ui.tsx';
 import { C } from '../theme.ts';
 import { passwordProblem } from '../password.ts';
+import { OwnerApp, ownerView, useOwnerOpen } from '../owner/OwnerApp.tsx';
 
 /** Built into the company's own app, so nobody types the server address. */
 const SERVER = (process.env.EXPO_PUBLIC_SERVER_URL ?? '').replace(/\/+$/, '');
@@ -70,6 +71,8 @@ export function Login({ demo, back }: { demo?: boolean; back?: () => void } = {}
     if (!r.ok) setError(r.reasons);
   };
   const needServer = !demo && !SERVER;
+  const owner = useOwnerOpen();
+  if (owner) return <OwnerApp mode={where} baseUrl={demo ? '' : SERVER} back={() => ownerView.set(false)} />;
 
   return (
     <Screen title="Real Sandbox" sub="Job cards and vehicles">
@@ -118,6 +121,7 @@ export function Login({ demo, back }: { demo?: boolean; back?: () => void } = {}
           <Button label="Try the demo as the office" kind="secondary" onPress={() => tryDemo('office')} busy={busy === 'office'} />
         </>
       ) : null}
+      {!demo ? <Button label="Real Sandbox owner sign-in" kind="quiet" onPress={() => ownerView.set(true)} /> : null}
     </Screen>
   );
 }

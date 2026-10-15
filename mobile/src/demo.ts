@@ -28,6 +28,7 @@ import * as CR from '../../server/src/core/clientRates.ts';
 import { DemoFleet, seedFleet, type DemoFleetState } from './demoFleet.ts';
 import { DemoWhatsApp, seedWhatsApp, type DemoWaState } from './demoWhatsApp.ts';
 import { DemoPastelSetup, seedPastelSetup, type DemoPastelState } from './demoPastel.ts';
+import { DemoSupport, SUPPORT_WHO, seedSupport, type DemoSupportState } from './demoSupport.ts';
 import type { PaySettings } from '../../server/src/core/pay.ts';
 import { demoFuel, demoVehiclesPage, type DemoTrip } from './demoVehicles.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
@@ -545,6 +546,66 @@ export class DemoTransport implements Transport {
     });
     return { company: REAL ? REAL.company.name : 'ZSP', steps, done: steps.filter(x => x.done).length, total: steps.length, dismissed: st.dismissed, people };
   }
+  private support() {
+    const st = ((this.state as { support?: DemoSupportState }).support ??= seedSupport());
+    const company = REAL ? REAL.company.name : 'ZSP (demo)';
+    return new DemoSupport(st, {
+      companyName: () => company,
+      health: () => {
+        const people = this.office().o.people;
+        const su = this.setupOf();
+        const wa = (this.state as { whatsapp2?: DemoWaState }).whatsapp2;
+        const ceo = people.find(x => x.login_level === 'creator');
+        const L = this.loginBook();
+        const info = ceo ? L.info(ceo.id, false, false, false) as { state?: string; email: string | null } : null;
+        return {
+          people: people.length, activeWeek: Math.min(people.length, 6), jobsMonth: this.state.jobs.length, lastActivity: new Date().toISOString(),
+          setup: { done: su.done, total: su.total },
+          whatsapp: wa?.setup.chosen ? { mode: wa.setup.mode, connected: !!(wa.setup.testSentAt || wa.setup.officialAt || (wa.setup.qrAt && !wa.setup.expired)) } : null,
+          pastel: !!(this.state as { pastelSetup?: DemoPastelState }).pastelSetup?.doneAt,
+          // In the test drive the CEO opens with the button, so the login counts as on unless it is locked.
+          ceo: ceo ? { id: ceo.id, name: ceo.full_name, email: info?.email ?? '', login: info?.state === 'locked' ? 'locked' : 'on', lastLogin: null } : null,
+        };
+      },
+      ceoCode: () => {
+        const ceo = this.office().o.people.find(x => x.login_level === 'creator');
+        if (!ceo) return { error: 'the company has no CEO login' };
+        const r = this.loginBook().issueCode(ceo.id, SUPPORT_WHO.name, REAL ? REAL.company.name : 'ZSP') as { ok: boolean; body?: any; reasons?: string[] };
+        if (!r.ok) return { error: r.reasons?.[0] ?? 'could not make a code' };
+        return { ...r.body, name: ceo.full_name };
+      },
+    });
+  }
+
+  /** Real Sandbox support (the CEO lets it in for a time) and the owner's dashboard. */
+  private supportRoute(p: string, req: Request, b: any): Response | null {
+    const res = (r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }) => { this.persist(this.state); return r.ok ? ok(r.body) : refuse(r.status, ...r.reasons); };
+    if (p.startsWith('/platform/')) {
+      const S = this.support();
+      let m: RegExpMatchArray | null;
+      if (p === '/platform/login') return ok({ token: 'demo-owner', name: 'Fred' });
+      if (p === '/platform/dashboard') return ok(S.dashboard());
+      if (p === '/platform/companies' && req.method === 'POST') return res(S.add(b));
+      if ((m = p.match(/^\/platform\/companies\/([^/]+)\/enter$/))) {
+        const r = S.enter(m[1]);
+        if (r.ok) this.who = SUPPORT_WHO;
+        return res(r);
+      }
+      if ((m = p.match(/^\/platform\/companies\/([^/]+)\/ceo-code$/))) return res(S.ceoCode(m[1]));
+      if ((m = p.match(/^\/platform\/companies\/([^/]+)$/)) && req.method === 'PATCH') return res(S.suspend(m[1], !!b.active, b.reason));
+      return refuse(404, 'not found');
+    }
+    const isSupport = this.who.id === SUPPORT_WHO.id;
+    if (isSupport && !this.support().open()) return { status: 401, body: { error: 'support access has ended: the CEO can let you in again', code: 'support_ended' } };
+    if (!p.startsWith('/support')) return null;
+    const S = this.support();
+    const ceo = this.does('access');
+    if (p === '/support' && req.method === 'GET') return ok(S.view(ceo, isSupport));
+    if (p === '/support/grant') return !ceo || isSupport ? refuse(403, isSupport ? 'support cannot give itself more time: the CEO does that' : 'only the CEO lets Real Sandbox support in') : res(S.grant(this.who.name, Number(b.hours), b.reason));
+    if (p === '/support/end') return !ceo && !isSupport ? refuse(403, 'only the CEO ends support access') : res(S.end(this.who.name));
+    return refuse(404, 'not found');
+  }
+
   private setupRoute(p: string, req: Request, b: any): Response {
     if (p === '/setup/numbers') {
       const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
@@ -1705,6 +1766,8 @@ export class DemoTransport implements Transport {
         company: { id: 'demo', name: 'ZSP (demo)' },
       });
     }
+    const sup = this.supportRoute(p, req, b);
+    if (sup) return sup;
     if (p === '/policy/current') return ok({ id: 'policy-1', version: '1.0', body: DEMO_POLICY });
     if (p === '/policy/acknowledge') { this.state.acknowledged = true; this.persist(this.state); return ok({ ok: true }); }
     if (!this.state.acknowledged) return { status: 403, body: { error: 'acknowledge the monitoring policy first', code: 'policy_required' } };
@@ -1756,7 +1819,7 @@ export class DemoTransport implements Transport {
       const work = this.office().workOf(this.who.id, level);
       this.persist(this.state);
       return ok({ id: this.who.id, full_name: this.who.name, login_level: level, work, fleetDuty: work.fleet && level !== 'mechanic', stockDuty: work.stockroom && level !== 'stockroom',
-        stockCover: !work.stockroom && this.covers() });
+        stockCover: !work.stockroom && this.covers(), support: this.who.id === SUPPORT_WHO.id ? { until: this.support().open()?.until ?? null } : null });
     }
     if (p === '/me/password') {
       const myLevel = this.office().levelOf(this.who.id) ?? this.who.level;
