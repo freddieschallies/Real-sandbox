@@ -11,7 +11,8 @@ export interface FleetData {
 const EMPTY: FleetData = { vehicles: [], faults: [], jobs: [], details: {}, loadedAt: null, bookings: [], positions: [], techs: [], checks: null };
 export type Shot = { id: string; uri: string; mime: string };
 
-export function useFleet() {
+/** active: false keeps it quiet (nothing loaded) until it is needed, e.g. the office away from its Vehicles page. */
+export function useFleet(active = true) {
   const s = useStore();
   const [d, setD] = useState<FleetData>(() => ({ ...EMPTY, ...(s.cache.fleet as Partial<FleetData> | undefined) }));
   const [loading, setLoading] = useState(false);
@@ -41,7 +42,7 @@ export function useFleet() {
     if (v) save(x => ({ ...x, details: { ...x.details, [id]: v } }));
   }, [s, save]);
 
-  useEffect(() => { load(); const t = setInterval(load, 20_000); return () => clearInterval(t); }, []);
+  useEffect(() => { if (!active) return; load(); const t = setInterval(load, 20_000); return () => clearInterval(t); }, [active]);
 
   const shoot = async (): Promise<Shot | null> => { const p = await takePhoto(); return p ? { id: s.newId(), uri: p.uri, mime: p.mime } : null; };
   const upload = (label: string, kind: string, p: Shot) =>

@@ -3,7 +3,7 @@ import type { Due, FaultSeverity, FleetJobType, FluidResult, TyreResult, Vehicle
 export interface FleetVehicle {
   id: string; registration: string; description: string | null; make: string | null; model: string | null; year: number | null;
   status: VehicleStatus; status_note: string | null; licence_expiry: string | null; next_service_km: number | null; next_service_at: string | null;
-  km: number | null; driver: string | null; open_faults: number; safety_faults: number; photo_id?: string | null;
+  km: number | null; driver: string | null; driver_since?: string | null; open_faults: number; safety_faults: number; photo_id?: string | null;
   open_job: { id: string; number: number; type: FleetJobType } | null;
   serviceDue: Due; licenceDue: Due;
   checked_today?: { oil: FluidResult; oilLitres: number | null; water: FluidResult; tyres: TyreResult; at: string } | null;
@@ -30,7 +30,12 @@ export interface VehicleDetail {
   jobs: { id: string; number: number; job_type: FleetJobType; status: string; reason: string; opened_at: string; completed_at: string | null; odometer_in: number; odometer_out: number | null; found_text: string | null; did_text: string | null; labour_hours: number | null; mechanic: string; parts_cents: number }[];
   km: { km: number; read_at: string; source: string; by: string }[];
   dailyChecks?: DailyCheck[];
-  inspections: { id: string; inspected_at: string; odometer_km: number; fuel_level: string; problems: string[]; new_problems: string[]; driver: string }[];
+  inspections: { id: string; inspected_at: string; odometer_km: number; fuel_level: string; problems: string[]; new_problems: string[]; driver: string;
+    status?: string; previous_driver?: string | null; handed_over_by?: string | null; remote_reason?: string | null; decision_note?: string | null }[];
+  /** Who drove it (scans), its fuel slips and its trips of the last 30 days, checked as on the timesheets. */
+  drivers?: { id: string; who: string; mode: 'driving' | 'riding_along'; from_at: string; to_at: string | null }[];
+  fuel?: { id: string; logged_at: string; litres: number; amount_cents: number; odometer_km: number | null; who: string }[];
+  trips?: (import('../../../server/src/core/timesheet.ts').TripOut & { driver: string | null; driverId: string | null })[];
 }
 
 export type TimeSlot = 'morning' | 'afternoon' | 'all_day';

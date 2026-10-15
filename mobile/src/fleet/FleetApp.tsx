@@ -74,18 +74,7 @@ export function FleetApp() {
     </ScrollView>
   );
 
-  const detail = (() => {
-    if (!sel) return null;
-    if (sel.kind === 'vehicle') return <VehicleScreen key={sel.id} id={sel.id} f={f} open={open} />;
-    if (sel.kind === 'job') { const j = f.d.jobs.find(x => x.id === sel.id); return j ? <JobScreen key={j.id} j={j} f={f} ws={ws} done={back} /> : <Body quiet>Job card completed.</Body>; }
-    if (sel.kind === 'newjob') return <NewJob key={sel.vehicleId} vehicleId={sel.vehicleId} bookingId={sel.bookingId} f={f} done={back} />;
-    if (sel.kind === 'wsitem') return <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}><WorkshopItem key={sel.id} id={sel.id} ws={ws} role="mechanic" done={back} /></ScrollView>;
-    if (sel.kind === 'check') return <DailyCheckScreen key={sel.vehicleId} vehicleId={sel.vehicleId} f={f} ws={ws.data} open={open} done={back} />;
-    if (sel.kind === 'booking') return <BookingScreen key={sel.id} id={sel.id} f={f} open={open} done={back} />;
-    if (sel.kind === 'newbooking') return <NewBooking key={sel.vehicleId ?? 'any'} vehicleId={sel.vehicleId} f={f} done={back} />;
-    if (sel.kind === 'assign') return <AssignScreen key={`${sel.techId}-${sel.vehicleId}`} techId={sel.techId} vehicleId={sel.vehicleId} f={f} done={back} />;
-    return <ReportFault key={sel.vehicleId} vehicleId={sel.vehicleId} f={f} done={back} />;
-  })();
+  const detail = sel ? <FleetDetail sel={sel} f={f} ws={ws} open={open} back={back} /> : null;
 
   const header = (
     <View style={{ backgroundColor: K.band, paddingTop: ins.top, paddingHorizontal: S.pad, paddingBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -145,9 +134,23 @@ export function FleetApp() {
 
 type FleetHook = ReturnType<typeof useFleet>;
 
+/** One fleet screen (a vehicle, a job card, a booking, a daily check…): the mechanic's app and the office's Vehicles page both show these. */
+export function FleetDetail({ sel, f, ws, open, back, extra }: { sel: Sel; f: FleetHook; ws: ReturnType<typeof useWorkshop>; open: (s: Sel) => void; back: () => void; extra?: React.ReactNode }) {
+  if (sel.kind === 'vehicle') return <VehicleScreen key={sel.id} id={sel.id} f={f} open={open} extra={extra} />;
+  const pane = (el: React.ReactNode) => <View style={{ flex: 1 }}>{extra ? <View style={{ paddingHorizontal: S.pad, paddingTop: S.pad }}>{extra}</View> : null}{el}</View>;
+  if (sel.kind === 'job') { const j = f.d.jobs.find(x => x.id === sel.id); return pane(j ? <JobScreen key={j.id} j={j} f={f} ws={ws} done={back} /> : <View style={{ padding: S.pad }}><Body quiet>Job card completed.</Body></View>); }
+  if (sel.kind === 'newjob') return pane(<NewJob key={sel.vehicleId} vehicleId={sel.vehicleId} bookingId={sel.bookingId} f={f} done={back} />);
+  if (sel.kind === 'wsitem') return pane(<ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}><WorkshopItem key={sel.id} id={sel.id} ws={ws} role="mechanic" done={back} /></ScrollView>);
+  if (sel.kind === 'check') return pane(<DailyCheckScreen key={sel.vehicleId} vehicleId={sel.vehicleId} f={f} ws={ws.data} open={open} done={back} />);
+  if (sel.kind === 'booking') return pane(<BookingScreen key={sel.id} id={sel.id} f={f} open={open} done={back} />);
+  if (sel.kind === 'newbooking') return pane(<NewBooking key={sel.vehicleId ?? 'any'} vehicleId={sel.vehicleId} f={f} done={back} />);
+  if (sel.kind === 'assign') return pane(<AssignScreen key={`${sel.techId}-${sel.vehicleId}`} techId={sel.techId} vehicleId={sel.vehicleId} f={f} done={back} />);
+  return pane(<ReportFault key={sel.vehicleId} vehicleId={sel.vehicleId} f={f} done={back} />);
+}
+
 // ---- Lists -----------------------------------------------------------------------------
 
-function VehicleCard({ x, onPress }: { x: FleetVehicle; onPress: () => void }) {
+export function VehicleCard({ x, onPress, more }: { x: FleetVehicle; onPress: () => void; more?: React.ReactNode }) {
   return (
     <Card onPress={onPress} accessibilityLabel={`Vehicle ${x.registration}`} style={x.status !== 'in_service' ? { borderLeftWidth: 5, borderLeftColor: x.status === 'off_road' ? C.bad : C.warn } : undefined}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -166,6 +169,7 @@ function VehicleCard({ x, onPress }: { x: FleetVehicle; onPress: () => void }) {
         {x.serviceDue.state === 'soon' || x.serviceDue.state === 'overdue' ? <Pill text={x.serviceDue.state === 'overdue' ? 'Service overdue' : 'Service soon'} tone={DUE[x.serviceDue.state]} /> : null}
         {x.licenceDue.state === 'soon' || x.licenceDue.state === 'overdue' ? <Pill text={x.licenceDue.state === 'overdue' ? 'Licence expired' : 'Licence soon'} tone={DUE[x.licenceDue.state]} /> : null}
       </View>
+      {more}
     </Card>
   );
 }
@@ -184,7 +188,7 @@ function VehicleList({ vehicles, open }: { vehicles: FleetVehicle[]; open: (id: 
 }
 const big = { get color() { return C.text; }, fontSize: 26, fontWeight: '800' as const };
 
-function FaultRow({ x, onPress }: { x: Fault; onPress?: () => void }) {
+export function FaultRow({ x, onPress }: { x: Fault; onPress?: () => void }) {
   return (
     <Card onPress={onPress} accessibilityLabel={`Fault ${x.description}`}>
       <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -220,7 +224,7 @@ function JobList({ jobs, open }: { jobs: FleetJob[]; open: (id: string) => void 
 
 // ---- One vehicle ---------------------------------------------------------------------------
 
-function VehicleScreen({ id, f, open }: { id: string; f: FleetHook; open: (s: Sel) => void }) {
+function VehicleScreen({ id, f, open, extra }: { id: string; f: FleetHook; open: (s: Sel) => void; extra?: React.ReactNode }) {
   const s = useStore();
   const d = f.d.details[id];
   const sum = f.d.vehicles.find(x => x.id === id);
@@ -232,6 +236,7 @@ function VehicleScreen({ id, f, open }: { id: string; f: FleetHook; open: (s: Se
   const booking = f.d.bookings.find(b => b.vehicle_id === id && b.status === 'booked');
   return (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}>
+      {extra}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Text style={{ color: C.text, fontSize: 28, fontWeight: '800', letterSpacing: 1, flex: 1 }}>{v.registration}</Text>
         <Pill text={STATUS[v.status].text} tone={STATUS[v.status].tone} />
@@ -288,6 +293,59 @@ function VehicleScreen({ id, f, open }: { id: string; f: FleetHook; open: (s: Se
       <Heading>Daily checks</Heading>
       {d.dailyChecks?.length ? <DailyCheckHistory rows={d.dailyChecks.slice(0, 10)} /> : <Body quiet>No daily checks yet.</Body>}
 
+      {d.drivers ? <>
+        <Heading>Who drove it</Heading>
+        <Card>
+          {d.drivers.slice(0, 10).map(x => (
+            <View key={x.id} style={{ flexDirection: 'row', gap: 8 }}>
+              <Text style={[st.body, { fontWeight: '700', minWidth: 130 }]}>{x.who}</Text>
+              <Text style={[st.small, { flex: 1 }]}>{x.mode === 'riding_along' ? 'riding along · ' : ''}{when(x.from_at)} → {x.to_at ? when(x.to_at) : 'now'}</Text>
+            </View>
+          ))}
+          {!d.drivers.length ? <Body quiet>Nobody has scanned it yet.</Body> : null}
+        </Card>
+      </> : null}
+
+      {d.inspections.length ? <>
+        <Heading>Handovers</Heading>
+        {d.inspections.slice(0, 8).map(i => (
+          <Card key={i.id}>
+            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+              <Text style={[st.body, { fontWeight: '700', flex: 1 }]}>{i.driver}{i.previous_driver ? ` from ${i.previous_driver}` : ''}</Text>
+              {i.status ? <Pill text={HANDOVER[i.status]?.text ?? i.status} tone={HANDOVER[i.status]?.tone ?? 'quiet'} /> : null}
+            </View>
+            <Text style={st.small}>{when(i.inspected_at)} · {km(i.odometer_km)} · fuel {String(i.fuel_level).replace(/_/g, ' ')}{i.handed_over_by ? ` · signed by ${i.handed_over_by}` : ''}</Text>
+            {i.problems.length ? <Text style={[st.small, { color: i.new_problems.length ? C.bad : C.warn }]}>Problems: {i.problems.map(p => p.replace(/_/g, ' ')).join(', ')}</Text> : null}
+            {i.remote_reason ? <Text style={st.small}>Nobody to sign: {i.remote_reason}</Text> : null}
+          </Card>
+        ))}
+      </> : null}
+
+      {d.fuel ? <>
+        <Heading>Fuel</Heading>
+        <Card>
+          {d.fuel.slice(0, 10).map(x => (
+            <View key={x.id} style={{ flexDirection: 'row', gap: 8 }}>
+              <Text style={[st.body, { fontWeight: '700', minWidth: 130 }]}>{x.litres.toLocaleString('en-ZA')} L · {rand(x.amount_cents)}</Text>
+              <Text style={[st.small, { flex: 1 }]}>{when(x.logged_at)} · {x.who}{x.odometer_km ? ` · ${km(x.odometer_km)}` : ''}</Text>
+            </View>
+          ))}
+          {!d.fuel.length ? <Body quiet>No fuel slips yet.</Body> : null}
+        </Card>
+      </> : null}
+
+      {d.trips ? <>
+        <Heading>Trips not allowed (last 30 days)</Heading>
+        {d.trips.filter(t => t.why.length).slice(0, 10).map(t => (
+          <Card key={t.id} style={{ borderColor: t.unauthorised ? C.bad : C.line }}>
+            <Text style={[st.body, { fontWeight: '700' }]}>{t.driver ?? 'Unknown driver'} · {t.km} km</Text>
+            <Text style={st.small}>{when(t.startedAt)}{t.endedAt ? ` → ${new Date(t.endedAt).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })}` : ''}</Text>
+            <Text style={[st.small, { color: t.unauthorised ? C.bad : C.quiet }]}>{t.whyText.join(' · ')}{t.allowed ? ` · allowed by ${t.allowed.by}: ${t.allowed.note}` : ''}</Text>
+          </Card>
+        ))}
+        {!d.trips.some(t => t.why.length) ? <Body quiet>{d.trips.length ? `${d.trips.length} trip${d.trips.length > 1 ? 's' : ''}, all fine.` : 'No trips from the tracker yet.'}</Body> : null}
+      </> : null}
+
       <Heading>Km history</Heading>
       <Card>
         {d.km.slice(0, 15).map((k, n) => (
@@ -301,6 +359,7 @@ function VehicleScreen({ id, f, open }: { id: string; f: FleetHook; open: (s: Se
     </ScrollView>
   );
 }
+const HANDOVER: Record<string, { text: string; tone: 'good' | 'warn' | 'bad' | 'quiet' }> = { signed: { text: 'Signed', tone: 'good' }, awaiting_approval: { text: 'To approve', tone: 'warn' }, approved: { text: 'Approved', tone: 'good' }, rejected: { text: 'Rejected', tone: 'bad' } };
 const dueColor = (s: F.Due['state']) => (s === 'overdue' ? C.bad : s === 'soon' ? C.warn : s === 'ok' ? C.good : C.quiet);
 
 function FaultWithDefer({ x, f }: { x: Fault; f: FleetHook }) {

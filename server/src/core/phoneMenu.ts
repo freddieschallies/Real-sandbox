@@ -13,7 +13,7 @@ export const MENU_TABS: Record<MenuApp, { key: string; label: string }[]> = {
     { key: 'timesheets', label: 'Timesheets' }, { key: 'flags', label: 'Flags' }, { key: 'people', label: 'People' },
     { key: 'map', label: 'Team map' }, { key: 'vans', label: 'Van stock' }, { key: 'queries', label: 'Queries' },
     { key: 'quotes', label: 'Quotes' }, { key: 'invoices', label: 'Invoices' }, { key: 'supplier', label: 'Supplier invoices' }, { key: 'pos', label: 'Purchase orders' }, { key: 'customers', label: 'Customers' }, { key: 'debtors', label: 'Debtors' }, { key: 'profit', label: 'Profit' }, { key: 'accounts', label: 'Accounts' },
-    { key: 'handovers', label: 'Handovers' }, { key: 'repairs', label: 'Workshop' }, { key: 'stores', label: 'Stores' }, { key: 'barcodes', label: 'QR codes' }, { key: 'settings', label: 'Settings' },
+    { key: 'vehicles', label: 'Vehicles' }, { key: 'repairs', label: 'Workshop' }, { key: 'stores', label: 'Stores' }, { key: 'barcodes', label: 'QR codes' }, { key: 'settings', label: 'Settings' },
   ],
   stockroom: [
     { key: 'issue', label: 'To issue' }, { key: 'receive', label: 'To receive' }, { key: 'pos', label: 'Purchase orders' }, { key: 'room', label: 'Stock' },
@@ -40,7 +40,7 @@ export function officeTabKeys(level: string, work: Partial<Record<WorkArea, bool
   const on: Record<string, boolean> = {
     today: jobsSide, jobs: jobsSide || does('jobcards'), queries: does('jobs'), breakdowns: does('jobs'),
     quotes: does('documents'), invoices: does('documents'), supplier: does('books'), pos: does('jobs') || does('books'), customers: does('documents'), debtors: does('documents'), profit: does('books'), accounts: does('documents'),
-    flags: does('flags'), handovers: does('flags'), map: does('flags') || level === 'management',
+    flags: does('flags'), vehicles: does('flags') || does('fleet'), map: does('flags') || level === 'management',
     vans: does('vanstock'), departments: does('hr'),
     // HR and the CEO always have every timesheet; a department manager his own technicians'.
     timesheets: does('hr') || ['management', 'hr', 'director', 'creator', 'accounts'].includes(level),
@@ -61,10 +61,13 @@ export function usualTabs(level: LoginLevel): string[] {
   return officeTabKeys(level, workOf(p), { people, settings: !!p.set_phone_menu });
 }
 
+/** Tabs that were renamed: a menu saved with the old name keeps its place. */
+export const RENAMED: Record<string, string> = { handovers: 'vehicles' };
+
 /** Clean a chosen list: known tabs of the app, no repeats, at most four. */
 export function cleanPinned(app: MenuApp, pinned: string[]): string[] {
   const known = new Set(MENU_TABS[app].map(t => t.key));
-  return [...new Set(pinned)].filter(k => known.has(k)).slice(0, MAX_PINNED);
+  return [...new Set(pinned.map(k => RENAMED[k] ?? k))].filter(k => known.has(k)).slice(0, MAX_PINNED);
 }
 
 /**

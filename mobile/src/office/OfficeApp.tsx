@@ -44,11 +44,12 @@ import { ProfitView } from './Profit.tsx';
 import { PurchaseOrderList } from './PurchaseOrders.tsx';
 import { AddPerson, LOGIN_PILL, LoginCard } from './Logins.tsx';
 import { ImportCustomers, StoreDetail, StoreList, pointFrom } from './Stores.tsx';
+import { VehiclesPage, type VehSection } from './Vehicles.tsx';
 import { BreakdownAlert, BreakdownById, BreakdownList, BreakdownSettings, type Bd } from './Breakdowns.tsx';
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
-type Tab = 'setup' | 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'pos' | 'customers' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'handovers' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
-type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'handover'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | { kind: 'supplierinv'; id: string } | { kind: 'debtor'; id: string } | { kind: 'customer'; id: string; show?: 'statement' } | null;
+type Tab = 'setup' | 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'pos' | 'customers' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'vehicles' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
+type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | { kind: 'supplierinv'; id: string } | { kind: 'debtor'; id: string } | { kind: 'customer'; id: string; show?: 'statement' } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
   cancelled: { text: 'Cancelled', tone: 'quiet' }, assigned: { text: 'Assigned', tone: 'quiet' }, in_progress: { text: 'In progress', tone: 'info' }, continue_later: { text: 'Continue later', tone: 'warn' }, closed: { text: 'Closed', tone: 'good' },
@@ -66,7 +67,7 @@ const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: '
 /** On the phone, unless the CEO or an admin pinned others: the first four show and the rest go under More, most used first. */
 const PHONE_ORDER: string[] = MENU_TABS.office.map(t => t.key);
 /** Screens that use the whole width on a computer (no list and detail). */
-const FULL: Tab[] = ['setup', 'today', 'profit', 'pos', 'accounts', 'map', 'departments', 'timesheets', 'settings'];
+const FULL: Tab[] = ['setup', 'today', 'profit', 'pos', 'accounts', 'map', 'departments', 'timesheets', 'vehicles', 'settings'];
 const OFFICE_LEVELS = ['admin', 'accounts', 'management', 'hr', 'director', 'creator'];
 export const isOffice = (level?: string) => OFFICE_LEVELS.includes(level ?? '');
 
@@ -86,6 +87,9 @@ export function OfficeApp() {
   const canPeople = !!o.d.people;
   const picked = React.useRef(false);
   const go = (t: Tab, x: Sel = null) => { picked.current = true; setTab(t); setSel(x); };
+  // The Vehicles page opens on a part of it, or on one vehicle (from Today's tiles and from search).
+  const [veh, setVeh] = useState<{ n: number; start?: { section?: VehSection; vehicleId?: string } }>({ n: 0 });
+  const goVeh = (start?: { section?: VehSection; vehicleId?: string }) => { setVeh(v => ({ n: v.n + 1, start })); go('vehicles'); };
   // Each person sees only the work the CEO switched on for them.
   const work = s.session?.user.work ?? {};
   const does = (a: string) => s.session?.user.level === 'creator' || !!work[a];
@@ -126,7 +130,7 @@ export function OfficeApp() {
     { key: 'profit', label: 'Profit' },
     { key: 'accounts', label: 'Accounts', short: 'Pastel' },
     { key: 'flags', label: 'Flags', count: ov?.flags?.unresolved },
-    { key: 'handovers', label: 'Handovers', short: 'Approve', count: ov?.handoversAwaitingApproval },
+    { key: 'vehicles', label: 'Vehicles', count: ov?.handoversAwaitingApproval || undefined },
     { key: 'map', label: 'Team map', short: 'Map' },
     { key: 'vans', label: 'Van stock', short: 'Vans' },
     { key: 'departments', label: 'Departments', short: 'Depts' },
@@ -157,7 +161,7 @@ export function OfficeApp() {
   const list = (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 40 }}>
       {tab === 'setup' ? <StartUp setup={setup} go={w => (w === 'importcustomers' ? go('stores', { kind: 'importcustomers' }) : w === 'newstore' ? go('stores', { kind: 'newstore' }) : go(w))} /> : null}
-      {tab === 'today' ? <TodayView o={o} go={go} flags={does('flags')} /> : null}
+      {tab === 'today' ? <TodayView o={o} go={go} goVeh={has('vehicles') ? goVeh : () => undefined} flags={does('flags')} /> : null}
       {tab === 'breakdowns' ? <BreakdownList view={bdView} setView={v => { setBdView(v); setSel(null); }} open={b => setSel({ kind: 'breakdown', id: b.id, b })} selected={sel?.kind === 'breakdown' ? sel.id : null} tick={bdTick} /> : null}
       {tab === 'jobs' ? <JobList o={o} open={id => setSel({ kind: 'job', id })} add={does('jobs') ? () => setSel({ kind: 'newjob' }) : undefined} selected={sel?.kind === 'job' ? sel.id : null} /> : null}
       {tab === 'queries' ? <QueryList q={qs} open={id => setSel({ kind: 'query', id })} ask={() => setSel({ kind: 'newquery' })} /> : null}
@@ -170,7 +174,6 @@ export function OfficeApp() {
       {tab === 'profit' ? <ProfitView openJob={id => go('jobs', { kind: 'job', id })} /> : null}
       {tab === 'accounts' ? <Accounts b={books} canPrices={does('prices')} canBooks={does('books')} /> : null}
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
-      {tab === 'handovers' ? <HandoverList o={o} open={id => setSel({ kind: 'handover', id })} /> : null}
       {tab === 'map' ? <TeamMap openPerson={canPeople ? id => go('people', { kind: 'person', id }) : undefined} /> : null}
       {tab === 'timesheets' ? <TimesheetsExport /> : null}
       {tab === 'departments' ? <DepartmentsBoard openPerson={canPeople ? id => go('people', { kind: 'person', id }) : undefined} /> : null}
@@ -186,6 +189,7 @@ export function OfficeApp() {
     </ScrollView>
   );
 
+  const body = tab === 'vehicles' ? <VehiclesPage key={veh.n} o={o} start={veh.start} /> : list;
   const close = () => setSel(null);
   const detail = (() => {
     if (!sel) return null;
@@ -200,7 +204,6 @@ export function OfficeApp() {
       done={id => setSel(id ? { kind: 'quote', id } : null)} />);
     if (sel.kind === 'invoice') return wrap(<InvoiceDetail key={sel.id} b={books} id={sel.id} />);
     if (sel.kind === 'flag') return wrap(<FlagDetail key={sel.id} id={sel.id} o={o} done={close} />);
-    if (sel.kind === 'handover') return wrap(<HandoverDetail key={sel.id} id={sel.id} o={o} done={close} />);
     if (sel.kind === 'van') return wrap(<><Heading>{o.d.people?.people.find(y => y.id === sel.id)?.full_name ?? 'Van'}</Heading><VanCard key={sel.id} userId={sel.id} /></>);
     if (sel.kind === 'person') return wrap(<PersonDetail key={sel.id} id={sel.id} o={o} ask={does('jobs') ? toId => setSel({ kind: 'newquery', toId }) : undefined}
       ended={() => { o.load(); setSel({ kind: 'leaver', id: sel.id }); }} />);
@@ -256,6 +259,7 @@ export function OfficeApp() {
     ...(has('pos') ? { po: () => go('pos') } : {}),
     ...(has('supplier') ? { supplier_invoice: id => go('supplier', { kind: 'supplierinv', id }) } : {}),
     ...(has('people') ? { person: id => go('people', { kind: 'person', id }) } : {}),
+    ...(has('vehicles') ? { vehicle: id => goVeh({ vehicleId: id }) } : {}),
   };
   const search = searching ? <SearchPanel places={[...tabs.map(t => ({ key: t.key, label: t.label, open: () => go(t.key) })), { key: 'help', label: 'How to use the app', open: () => setHelping(true) }]} open={openers} close={() => setSearching(false)} />
     : helping ? <HelpPanel close={() => setHelping(false)} /> : null;
@@ -277,7 +281,7 @@ export function OfficeApp() {
             ))}
             <HelpLink onPress={() => setHelping(true)} />
           </ScrollView>
-          <View style={{ width: FULL.includes(tab) ? undefined : 460, flex: FULL.includes(tab) ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{list}</View>
+          <View style={{ width: FULL.includes(tab) ? undefined : 460, flex: FULL.includes(tab) ? 1 : undefined, borderRightWidth: 1, borderRightColor: C.line }}>{body}</View>
           {!FULL.includes(tab) ? <View style={{ flex: 1 }}>{detail ?? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Body quiet>Choose something on the left.</Body></View>}</View> : null}
         </View>
         {search}
@@ -288,7 +292,7 @@ export function OfficeApp() {
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       {header}
-      <View style={{ flex: 1 }}>{detail ?? list}</View>
+      <View style={{ flex: 1 }}>{detail ?? body}</View>
       {alert}
       {!sel ? (
         <BottomTabs tabs={[...tabs].sort((a, b) => PHONE_ORDER.indexOf(a.key) - PHONE_ORDER.indexOf(b.key))} current={tab} onSelect={k => go(k)} accent={K.stripe} bottom={ins.bottom}
@@ -312,7 +316,7 @@ function Tile({ label, value, sub, tone = 'quiet', onPress }: { label: string; v
   );
 }
 
-function TodayView({ o, go, flags }: { o: OfficeHook; go: (t: Tab, x?: Sel) => void; flags: boolean }) {
+function TodayView({ o, go, goVeh, flags }: { o: OfficeHook; go: (t: Tab, x?: Sel) => void; goVeh: (start?: { section?: VehSection; vehicleId?: string }) => void; flags: boolean }) {
   const v = o.d.overview;
   if (!v) return <Body quiet>Loading…</Body>;
   const row = { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: S.gap };
@@ -330,13 +334,13 @@ function TodayView({ o, go, flags }: { o: OfficeHook; go: (t: Tab, x?: Sel) => v
       {flags ? <Heading>Needs a decision</Heading> : null}
       {flags ? <View style={row}>
         {v.flags ? <Tile label="Flags to resolve" value={v.flags.unresolved} sub={`${v.flags.explained} already explained`} tone={v.flags.unresolved ? 'warn' : 'good'} onPress={() => go('flags')} /> : null}
-        <Tile label="Handovers to approve" value={v.handoversAwaitingApproval} sub="taken with nobody to sign" tone={v.handoversAwaitingApproval ? 'warn' : 'good'} onPress={() => go('handovers')} />
+        <Tile label="Handovers to approve" value={v.handoversAwaitingApproval} sub="taken with nobody to sign" tone={v.handoversAwaitingApproval ? 'warn' : 'good'} onPress={() => goVeh({ section: 'handovers' })} />
       </View> : null}
       <Heading>Fleet</Heading>
       <View style={row}>
-        <Tile label="Daily checks today" value={`${v.fleet.checked_today} of ${v.fleet.due}`} tone={v.fleet.checked_today >= v.fleet.due ? 'good' : 'warn'} />
-        <Tile label="Safety faults open" value={v.fleet.safety_faults} tone={v.fleet.safety_faults ? 'bad' : 'good'} />
-        <Tile label="Off the road / workshop" value={v.fleet.off} sub={`${v.fleet.in_service} in service`} />
+        <Tile label="Daily checks today" value={`${v.fleet.checked_today} of ${v.fleet.due}`} tone={v.fleet.checked_today >= v.fleet.due ? 'good' : 'warn'} onPress={() => goVeh({ section: 'vehicles' })} />
+        <Tile label="Safety faults open" value={v.fleet.safety_faults} tone={v.fleet.safety_faults ? 'bad' : 'good'} onPress={() => goVeh({ section: 'faults' })} />
+        <Tile label="Off the road / workshop" value={v.fleet.off} sub={`${v.fleet.in_service} in service`} onPress={() => goVeh({ section: 'vehicles' })} />
       </View>
       {v.fleet.missedYesterday.length ? (
         <Notice tone="warn" title={`Daily check missed yesterday: ${v.fleet.missedYesterday.length}`} lines={[v.fleet.missedYesterday.map(x => x.registration).join(', ')]} />
@@ -836,55 +840,6 @@ function FlagDetail({ id, o, done }: { id: string; o: OfficeHook; done: () => vo
       <Field label="How was it handled?" value={note} onChangeText={setNote} multiline placeholder="e.g. Spoke to him, contactor added to the job card" />
       <Reasons a={ans} />
       <Button label="Resolve flag" disabled={note.trim().length < 5} onPress={async () => { const r = await o.send('POST', `/flags/${f.id}/resolve`, { note: note.trim() }); setAns(r); if (r.ok) done(); }} />
-    </>
-  );
-}
-
-// ---- Handovers -----------------------------------------------------------------------------------
-
-function HandoverList({ o, open }: { o: OfficeHook; open: (id: string) => void }) {
-  return (
-    <>
-      <Notice tone="info" title="Taken with nobody to sign" lines={['A driver took a vehicle when neither the previous driver nor a supervisor was there. Check the inspection and approve it, or reject it.']} />
-      {o.d.handovers.map(h => (
-        <Card key={h.id} onPress={() => open(h.id)} accessibilityLabel={`Handover ${h.registration}`}>
-          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-            <Text style={[st.body, { fontWeight: '800', flex: 1 }]}>{h.registration}</Text>
-            <Pill text="To approve" tone="warn" />
-          </View>
-          <Text style={st.small}>{h.driver} · {when(h.inspected_at)}{h.previous_driver ? ` · from ${h.previous_driver}` : ''}</Text>
-        </Card>
-      ))}
-      {!o.d.handovers.length ? <Body quiet>Nothing waiting.</Body> : null}
-    </>
-  );
-}
-
-function HandoverDetail({ id, o, done }: { id: string; o: OfficeHook; done: () => void }) {
-  const h = o.d.handovers.find(x => x.id === id);
-  const [note, setNote] = useState('');
-  const [ans, setAns] = useState<Answer | null>(null);
-  if (!h) return <Body quiet>Decided.</Body>;
-  const decide = async (approve: boolean) => { const r = await o.send('POST', `/vehicles/inspections/${h.id}/decide`, { approve, ...(note.trim() ? { note: note.trim() } : {}) }); setAns(r); if (r.ok) done(); };
-  return (
-    <>
-      <Text style={{ color: C.text, fontSize: 26, fontWeight: '800', letterSpacing: 1 }}>{h.registration}</Text>
-      <Card>
-        <Text style={st.body}>{h.driver} took it over{h.previous_driver ? ` from ${h.previous_driver}` : ''}, {when(h.inspected_at)}</Text>
-        <Text style={st.small}>{h.odometer_km.toLocaleString('en-ZA')} km · fuel {h.fuel_level.replace('_', ' ')}</Text>
-      </Card>
-      <Card><Label>Why nobody signed</Label><Body>{h.remote_reason ?? '–'}</Body></Card>
-      <Card style={{ borderColor: h.new_problems.length ? C.bad : C.line }}>
-        <Label>Problems found</Label>
-        <Body>{h.problems.length ? h.problems.map(p => p.replace(/_/g, ' ')).join(', ') : 'None'}</Body>
-        {h.new_problems.length ? <Text style={[st.small, { color: C.bad }]}>New since the last handover: {h.new_problems.join(', ')}</Text> : null}
-      </Card>
-      <Field label="Note (needed to reject)" value={note} onChangeText={setNote} />
-      <Reasons a={ans} />
-      <View style={{ flexDirection: 'row', gap: 10 }}>
-        <Button label="Approve" onPress={() => decide(true)} style={{ flex: 1 }} />
-        <Button label="Reject" kind="danger" onPress={() => decide(false)} style={{ flex: 1 }} />
-      </View>
     </>
   );
 }

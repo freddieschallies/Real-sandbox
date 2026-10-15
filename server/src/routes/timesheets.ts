@@ -114,6 +114,37 @@ async function tripsOn(c: Q, x: Ctx, techId: string, date: string) {
   return { problems: all.filter(t => t.why.length), km: all.reduce((n, t) => n + t.km, 0), tracked: all.length > 0 };
 }
 
+/** Every trip between two dates (South African days), checked the same way as on the timesheets, with the
+ *  driver's name and department; for one vehicle, or the drivers of some departments. */
+export async function tripsBetween(c: Q, from: string, to: string, opts: { vehicleId?: string; departments?: 'all' | string[]; limit?: number } = {}) {
+  const x = await ctxOf(c);
+  const rows = (await c.query(
+    `SELECT t.id, t.started_at, t.ended_at, coalesce(t.distance_km, 0)::float AS km, v.id AS vehicle_id, v.registration, t.purpose::text AS purpose, t.start_lat, t.start_lng, t.end_lat, t.end_lng,
+            s.name AS store, s.lat AS store_lat, s.lng AS store_lng, a.note AS allowed_note, a.allowed_at, ab.full_name AS allowed_by,
+            t.driver_id, d.full_name AS driver, d.department_id
+       FROM trips t JOIN vehicles v ON v.id = t.vehicle_id LEFT JOIN users d ON d.id = t.driver_id
+       LEFT JOIN job_visits jv ON jv.id = t.job_visit_id LEFT JOIN jobs j ON j.id = jv.job_id
+       LEFT JOIN stores s ON s.id = coalesce(t.destination_store_id, j.store_id) LEFT JOIN trip_allowed a ON a.trip_id = t.id LEFT JOIN users ab ON ab.id = a.allowed_by
+      WHERE (t.started_at AT TIME ZONE 'Africa/Johannesburg')::date BETWEEN $1::date AND $2::date
+        AND ($3::uuid IS NULL OR t.vehicle_id = $3) AND ($4::uuid[] IS NULL OR d.department_id = ANY($4))
+      ORDER BY t.started_at DESC LIMIT $5`,
+    [from, to, opts.vehicleId ?? null, !opts.departments || opts.departments === 'all' ? null : opts.departments, opts.limit ?? 2000])).rows;
+  const out = [];
+  for (const r of rows) {
+    const tech = r.driver_id ? await techOf(c, x, r.driver_id) : { mayTakeHome: false, home: null };
+    const t = T.tripCheck({
+      id: r.id, startedAt: new Date(r.started_at).toISOString(), endedAt: r.ended_at ? new Date(r.ended_at).toISOString() : null, km: r.km, registration: r.registration, purpose: r.purpose,
+      start: r.start_lat != null ? { lat: r.start_lat, lng: r.start_lng } : null, end: r.end_lat != null ? { lat: r.end_lat, lng: r.end_lng } : null,
+      store: r.store, storeAt: r.store_lat != null ? { lat: r.store_lat, lng: r.store_lng } : null,
+      allowed: r.allowed_by ? { by: r.allowed_by, note: r.allowed_note, at: new Date(r.allowed_at).toISOString() } : null,
+    }, { hours: x.hours, mayTakeHome: tech.mayTakeHome, home: tech.home });
+    out.push({ ...t, vehicleId: r.vehicle_id as string, driverId: r.driver_id as string | null, driver: r.driver as string | null });
+  }
+  return out;
+}
+/** Who may allow a trip (the same people who see that technician's timesheets). */
+export const tripScope = (a: Parameters<typeof scopeOf>[0]) => scopeOf(a);
+
 /** The day as everyone sees it: his office time on it, hours invoiced, trips not allowed. Also (for the
  *  CEO and Accounts only, never on the day itself) what his share of the jobs was invoiced, and the km he drove. */
 async function fullDay(c: Q, x: Ctx, techId: string, date: string, base: T.Day) {

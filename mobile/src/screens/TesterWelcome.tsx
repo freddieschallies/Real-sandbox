@@ -134,7 +134,8 @@ const STEPS: [string, string[]][] = [
     'Staff record: on Ayanda\'s profile, add an issue or a warning (a warning needs the action taken and the reason). Delete one: it goes, but a line says who deleted a record and when. HR does this too; give Zanele "HR" work to let her as well.',
     'Tools and PPE: each profile shows what the stockroom has on that person\'s name.',
     'Departments: the same screen HR has. Ayanda is in Plumbing, which has no manager yet.',
-    'Today: jobs, flags, handovers to approve, daily checks, safety faults and stock on one screen. Flags and Handovers: resolve and approve.',
+    'Today: jobs, flags, handovers to approve, daily checks, safety faults and stock on one screen. Flags: resolve them.',
+    'Vehicles: everything about the vehicles. Tiles on top (tap one), then who drives what, handovers to approve, faults, service and licence discs due, fuel and trips not allowed for the month, and the map. Tap a vehicle for its job cards, bookings, daily checks, who drove it, fuel and trips; book it in or put a tech in.',
   ]],
 ];
 

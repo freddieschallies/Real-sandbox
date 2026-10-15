@@ -26,6 +26,7 @@ import { DemoSuppliers, seedSuppliers, type DemoSupplierState } from './demoSupp
 import { DemoPOs, type DemoPOState } from './demoPOs.ts';
 import * as CR from '../../server/src/core/clientRates.ts';
 import { DemoFleet, seedFleet, type DemoFleetState } from './demoFleet.ts';
+import { demoFuel, demoVehiclesPage, type DemoTrip } from './demoVehicles.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
 import type { CardView, Flag, LoanMachine, MachineMove, StockLine, Today, TodayJob, Workshop } from './types.ts';
 
@@ -955,10 +956,10 @@ export class DemoTransport implements Transport {
     const level = this.office().levelOf(this.who.id) ?? this.who.level;
     const canEdit = ['admin', 'director', 'creator'].includes(level);
     const menus = this.state.phoneMenus ?? {};
-    if (p === '/me/phone-menu') return ok({ pinned: menus[level] ?? null, canEdit });
+    if (p === '/me/phone-menu') return ok({ pinned: menus[level] ? cleanPinned(APP_OF[level as keyof typeof APP_OF] ?? 'office', menus[level]!) : null, canEdit });
     if (!canEdit) return refuse(403, 'only the CEO or an admin arranges the phone menus');
     if (p === '/phone-menus' && req.method === 'GET') {
-      return ok({ maxPinned: MAX_PINNED, positions: MENU_LEVELS.map(l => ({ level: l, label: MENU_LABEL[l], app: APP_OF[l], tabs: MENU_TABS[APP_OF[l]!], usual: usualTabs(l), pinned: menus[l] ?? null, updatedAt: null })) });
+      return ok({ maxPinned: MAX_PINNED, positions: MENU_LEVELS.map(l => ({ level: l, label: MENU_LABEL[l], app: APP_OF[l], tabs: MENU_TABS[APP_OF[l]!], usual: usualTabs(l), pinned: menus[l] ? cleanPinned(APP_OF[l]!, menus[l]!) : null, updatedAt: null })) });
     }
     const m = p.match(/^\/phone-menus\/([^/]+)$/);
     if (m && req.method === 'PUT') {
@@ -987,6 +988,7 @@ export class DemoTransport implements Transport {
     const done = (r: Parameters<DemoTransport['fleetResult']>[0]) => this.fleetResult(r);
     const q = new URLSearchParams(req.path.split('?')[1] ?? '');
     const need = (area: Parameters<DemoTransport['does']>[0], what: string) => (this.does(area) ? null : refuse(403, what));
+    if (p === '/office/vehicles') return this.vehiclesPage(q.get('month'));
     if (p === '/office/overview') { const v = o.overview(); return ok(this.does('flags') ? v : { ...v, flags: null, handoversAwaitingApproval: 0 }); }
     if ((p === '/jobs' && req.method === 'POST') || /\/(assign|cancel)$/.test(p) || req.method === 'PATCH') { const n = need('jobs', 'opening and editing jobs is not part of your work'); if (n) return n; }
     if (p.startsWith('/flags') || p.startsWith('/vehicles/inspections')) { const n = need('flags', 'flags and approvals are not part of your work'); if (n) return n; }
@@ -1460,6 +1462,48 @@ export class DemoTransport implements Transport {
     return new DemoFleet(fl);
   }
 
+  /** Who is in each vehicle now (for the made-up fuel slips). */
+  private driverOf(vehicleId: string) {
+    const t = this.fleet().technicians(this.thaboIn()).find(x => x.vehicle_id === vehicleId && x.mode === 'driving');
+    return t?.full_name ?? this.fleet().s.drivers[vehicleId] ?? 'Pool vehicle';
+  }
+  private fuelBetween(from: string, to: string) {
+    return demoFuel(this.fleet().list() as never, id => this.driverOf(id), from, to, this.state.fuel ?? [], this.state.vehicle?.id ?? 'veh-1');
+  }
+  private tripCache: { key: string; trips: DemoTrip[] } | null = null;
+  private tripsBetween(from: string, to: string) {
+    const techs = this.office().o.people.filter(x => x.login_level === 'technician').map(x => ({ id: x.id, name: x.full_name }));
+    const key = `${from}|${to}|${techs.length}|${JSON.stringify(this.times().t.allowedTrips ?? {})}`;
+    if (this.tripCache?.key !== key) this.tripCache = { key, trips: this.times().tripsBetween(from, to, techs) };
+    return this.tripCache.trips;
+  }
+  /** The office's Vehicles page: each part only for whoever may see it (as on the server). */
+  private vehiclesPage(month: string | null): Response {
+    const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
+    const fleet = this.does('fleet'), handovers = this.does('flags');
+    const trips = this.does('hr') || ['hr', 'director', 'creator', 'accounts', 'management'].includes(lvl);
+    if (!fleet && !handovers && !trips) return refuse(403, 'the Vehicles page is for the fleet, and for flags and approvals');
+    return ok(demoVehiclesPage({
+      month, can: { fleet, manageFleet: fleet, handovers, trips, fuel: fleet || ['director', 'creator', 'accounts'].includes(lvl) },
+      vehicles: fleet ? this.fleet().list() as never : [], km: this.fleet().s.km, handovers: this.office().inspections('awaiting_approval').length,
+      fuel: (a, b) => this.fuelBetween(a, b), trips: (a, b) => this.tripsBetween(a, b),
+    }));
+  }
+  /** On a vehicle's own screen: who drove it, its fuel slips, its trips and handovers. */
+  private vehicleExtras(id: string) {
+    const v = this.fleet().s.vehicles.find(x => x.id === id);
+    if (!v) return {};
+    const t = today();
+    const back = (n: number) => { const d = new Date(`${t}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - n); return d.toISOString().slice(0, 10); };
+    const who = this.driverOf(id);
+    return {
+      drivers: who !== 'Pool vehicle' ? [{ id: `drv-${id}`, who, mode: 'driving', from_at: new Date(`${t}T07:10:00+02:00`).toISOString(), to_at: null }] : [],
+      fuel: this.fuelBetween(back(60), t).filter(x => x.vehicleId === id).slice(0, 20),
+      trips: this.tripsBetween(back(30), t).filter(x => x.registration === v.registration).slice(0, 20),
+      inspections: this.office().inspections().filter(i => i.registration === v.registration).slice(0, 10),
+    };
+  }
+
   private fleetResult(r: { ok: true; body: unknown; status?: number } | { ok: false; status: number; reasons: string[] }): Response {
     this.persist(this.state);
     return r.ok ? ok(r.body, r.status ?? 200) : refuse(r.status, ...r.reasons);
@@ -1912,7 +1956,7 @@ export class DemoTransport implements Transport {
     if (p === '/fleet') return ok(this.fleet().list());
     if (p === '/fleet/faults') return ok(this.fleet().openFaults());
     if (p === '/fleet/jobs') return ok(this.fleet().jobsList(new URLSearchParams(req.path.split('?')[1] ?? '').get('status') ?? 'open'));
-    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)$/)) && req.method === 'GET') return this.fleetResult(this.fleet().detail(m[1]));
+    if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)$/)) && req.method === 'GET') { const r = this.fleet().detail(m[1]); if (r.ok) Object.assign(r.body as object, this.vehicleExtras(m[1])); return this.fleetResult(r); }
     if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)$/)) && req.method === 'PATCH') return this.fleetResult(this.fleet().patchVehicle(m[1], b));
     if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/status$/))) return this.fleetResult(this.fleet().setStatus(m[1], b));
     if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/odometer$/))) return this.fleetResult(this.fleet().odometer(m[1], b.km));

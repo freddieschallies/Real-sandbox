@@ -2921,3 +2921,47 @@ test('numbering carries on from the previous system: the CEO or Accounts, never 
   assert.equal((await db.query('SELECT job_number FROM jobs WHERE id = $1', [job.body.id])).rows[0].job_number, 250001);
   assert.equal((await call('director', 'GET', '/setup')).body.steps.find((s: { key: string }) => s.key === 'numbers').done, true);
 });
+
+test('vehicles page: who drives what, fuel, km and trips not allowed, each part only for who may see it', async () => {
+  const D = new Date(Date.now() - 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+  const month = D.slice(0, 7);
+  const veh = (await db.query("SELECT id FROM vehicles WHERE registration = 'ND 333-111'")).rows[0].id;
+  const slip = (await db.query("INSERT INTO photos (kind, file_path, taken_at, taken_by) VALUES ('fuel_slip', 'x/slip.jpg', now(), $1) RETURNING id", [ids.tech3])).rows[0].id;
+  await db.query('INSERT INTO fuel_logs (vehicle_id, user_id, litres, amount_cents, slip_photo_id, logged_at) VALUES ($1, $2, 42.5, 98000, $3, $4)', [veh, ids.tech3, slip, `${D}T12:00:00+02:00`]);
+
+  const r = await call('director', 'GET', `/office/vehicles?month=${month}`);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.month, month);
+  assert.deepEqual(r.body.can, { fleet: true, manageFleet: true, handovers: true, trips: true, fuel: true });
+  const v = r.body.vehicles.find((x: { registration: string }) => x.registration === 'ND 333-111');
+  assert.equal(v.fuelLitres, 42.5);
+  assert.equal(v.fuelCents, 98000);
+  assert.equal(v.tripsNotAllowed, 1, 'the 19:00 trip with no reason');
+  const trip = r.body.trips.find((x: { registration: string }) => x.registration === 'ND 333-111');
+  assert.deepEqual(trip.why, ['no_reason', 'after_hours']);
+  assert.equal(trip.driver, 'tech3');
+  assert.ok(r.body.summary.tripsNotAllowed >= 1);
+  assert.ok(r.body.summary.fuelLitres >= 42.5);
+  assert.equal(typeof r.body.summary.handovers, 'number');
+  assert.equal((await call('director', 'GET', '/office/vehicles?month=2026-13')).status, 400);
+
+  // The vehicle itself: its fuel slips, its trips (checked) and who drove it.
+  const d = await call('director', 'GET', `/fleet/vehicles/${veh}`);
+  assert.equal(d.status, 200, JSON.stringify(d.body));
+  assert.equal(d.body.fuel.length, 1);
+  assert.equal(d.body.fuel[0].who, 'tech3');
+  assert.ok(d.body.trips.some((x: { unauthorised: boolean }) => x.unauthorised));
+  assert.ok(Array.isArray(d.body.drivers));
+
+  // The mechanic sees the fleet and fuel, not the technicians' trips; a technician none of it.
+  const m = await call('mech', 'GET', `/office/vehicles?month=${month}`);
+  assert.equal(m.status, 200);
+  assert.equal(m.body.trips, null);
+  assert.equal(m.body.can.trips, false);
+  assert.equal((await call('tech', 'GET', '/office/vehicles')).status, 403);
+
+  // A phone menu saved when the tab was still called Handovers keeps its place as Vehicles.
+  await db.query("INSERT INTO phone_menus (level, pinned) VALUES ('director', ARRAY['today', 'handovers']) ON CONFLICT (company_id, level) DO UPDATE SET pinned = EXCLUDED.pinned");
+  assert.deepEqual((await call('director', 'GET', '/me/phone-menu')).body.pinned, ['today', 'vehicles']);
+  await db.query("DELETE FROM phone_menus WHERE level = 'director'");
+});

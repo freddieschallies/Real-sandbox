@@ -10,8 +10,10 @@ import { DateOnly, Iso, Refused, Uuid, parse } from '../http.ts';
 import { managerOf, notify } from './field.ts';
 import { useFromWorkshop } from '../stockRepo.ts';
 import { newVehicleCode, validVehicleCode } from '../core/qr.ts';
+import { tripsBetween } from './timesheets.ts';
 
 const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+const addDays = (date: string, n: number) => { const d = new Date(`${date}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 
 export async function latestKm(c: Q, vehicleId: string): Promise<number | null> {
   const r = (await c.query('SELECT max(km) AS km FROM odometer_readings WHERE vehicle_id = $1', [vehicleId])).rows[0];
@@ -45,19 +47,14 @@ export async function mechanics(c: Q): Promise<string[]> {
        OR EXISTS (SELECT 1 FROM access_overrides o WHERE o.user_id = u.id AND o.action = 'manage_fleet' AND o.effect = 'grant'))`)).rows.map(r => r.id);
 }
 
-export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
-  const viewer = (req: FastifyRequest) => { if (!can(req.actor, 'view_fleet')) throw new Refused(403, ['fleet only']); };
-  const mechanic = (req: FastifyRequest) => { if (!can(req.actor, 'manage_fleet')) throw new Refused(403, ['mechanic only']); };
-
-  // ---- The fleet at a glance ------------------------------------------------------
-
-  app.get('/fleet', async req => {
-    viewer(req);
-    const { rows } = await req.db.query(
+/** Every active vehicle with its driver now, km, faults, open job card, today's check and what is due. */
+export async function fleetRows(c: Q) {
+    const { rows } = await c.query(
       `SELECT v.id, v.registration, v.description, v.make, v.model, v.year, v.status, v.status_note, v.licence_expiry, v.next_service_km, v.next_service_at, v.photo_id,
               (SELECT max(km) FROM odometer_readings o WHERE o.vehicle_id = v.id) AS km,
               (SELECT u.full_name FROM vehicle_scans s JOIN users u ON u.id = s.user_id
                 WHERE s.vehicle_id = v.id AND s.mode = 'driving' AND s.released_at IS NULL ORDER BY s.scanned_at DESC LIMIT 1) AS driver,
+              (SELECT s.scanned_at FROM vehicle_scans s WHERE s.vehicle_id = v.id AND s.mode = 'driving' AND s.released_at IS NULL ORDER BY s.scanned_at DESC LIMIT 1) AS driver_since,
               (SELECT count(*) FROM vehicle_faults f WHERE f.vehicle_id = v.id AND f.status IN ('open', 'in_progress'))::int AS open_faults,
               (SELECT count(*) FROM vehicle_faults f WHERE f.vehicle_id = v.id AND f.status IN ('open', 'in_progress') AND f.severity = 'safety')::int AS safety_faults,
               (SELECT json_build_object('id', j.id, 'number', j.number, 'type', j.job_type) FROM fleet_jobs j WHERE j.vehicle_id = v.id AND j.status = 'open') AS open_job,
@@ -73,6 +70,17 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
       return { ...r, km, next_service_at: nextAt, licence_expiry: lic,
         serviceDue: F.serviceDue({ next_service_km: r.next_service_km, next_service_at: nextAt }, km, t), licenceDue: F.licenceDue(lic, t) };
     });
+}
+
+export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
+  const viewer = (req: FastifyRequest) => { if (!can(req.actor, 'view_fleet')) throw new Refused(403, ['fleet only']); };
+  const mechanic = (req: FastifyRequest) => { if (!can(req.actor, 'manage_fleet')) throw new Refused(403, ['mechanic only']); };
+
+  // ---- The fleet at a glance ------------------------------------------------------
+
+  app.get('/fleet', async req => {
+    viewer(req);
+    return fleetRows(req.db);
   });
 
   app.get('/fleet/vehicles/:id', async (req: FastifyRequest<{ Params: { id: string } }>) => {
@@ -94,16 +102,27 @@ export function registerFleetRoutes(app: FastifyInstance, _db: Db) {
            FROM fleet_jobs j JOIN users u ON u.id = j.opened_by WHERE j.vehicle_id = $1 ORDER BY j.opened_at DESC LIMIT 50`),
       q(`SELECT o.km, o.read_at, o.source, u.full_name AS by FROM odometer_readings o JOIN users u ON u.id = o.recorded_by
           WHERE o.vehicle_id = $1 ORDER BY o.read_at DESC LIMIT 60`),
-      q(`SELECT i.id, i.inspected_at, i.odometer_km, i.fuel_level, i.problems, i.new_problems, u.full_name AS driver
-           FROM vehicle_inspections i JOIN users u ON u.id = i.driver_id WHERE i.vehicle_id = $1 ORDER BY i.inspected_at DESC LIMIT 10`),
+      q(`SELECT i.id, i.inspected_at, i.odometer_km, i.fuel_level, i.problems, i.new_problems, u.full_name AS driver, i.status::text AS status,
+                p.full_name AS previous_driver, i.handed_over_by_name AS handed_over_by, i.handover_by::text AS handover_how, i.remote_reason, i.decision_note
+           FROM vehicle_inspections i JOIN users u ON u.id = i.driver_id LEFT JOIN users p ON p.id = i.previous_driver_id
+          WHERE i.vehicle_id = $1 ORDER BY i.inspected_at DESC LIMIT 15`),
     ]);
+    // Who drove it, its fuel slips and its trips (checked as on the timesheets): for the office's Vehicles page.
+    const drivers = await q(
+      `SELECT s.id, u.full_name AS who, s.mode::text AS mode, s.scanned_at AS from_at, s.released_at AS to_at FROM vehicle_scans s JOIN users u ON u.id = s.user_id
+        WHERE s.vehicle_id = $1 ORDER BY s.scanned_at DESC LIMIT 20`);
+    const fuel = can(req.actor, 'view_all_fuel') || can(req.actor, 'view_fleet') ? await q(
+      `SELECT f.id, f.logged_at, f.litres::float AS litres, f.amount_cents, f.odometer_km::float AS odometer_km, u.full_name AS who, f.slip_photo_id
+         FROM fuel_logs f JOIN users u ON u.id = f.user_id WHERE f.vehicle_id = $1 ORDER BY f.logged_at DESC LIMIT 20`) : [];
+    const t0 = today();
+    const trips = await tripsBetween(req.db, addDays(t0, -30), t0, { vehicleId: id, limit: 40 });
     const latest = km.length ? Math.max(...km.map((k: { km: number }) => Number(k.km))) : null;
     const t = today();
     return {
       vehicle: { ...v, licence_expiry: v.licence_expiry ? toDate(v.licence_expiry) : null, next_service_at: v.next_service_at ? toDate(v.next_service_at) : null, km: latest },
       serviceDue: F.serviceDue({ next_service_km: v.next_service_km, next_service_at: v.next_service_at ? toDate(v.next_service_at) : null }, latest, t),
       licenceDue: F.licenceDue(v.licence_expiry ? toDate(v.licence_expiry) : null, t),
-      faults, jobs, km: km.map((k: { km: number }) => ({ ...k, km: Number(k.km) })), inspections, dailyChecks,
+      faults, jobs, km: km.map((k: { km: number }) => ({ ...k, km: Number(k.km) })), inspections, dailyChecks, drivers, fuel, trips,
     };
   });
 

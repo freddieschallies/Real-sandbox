@@ -247,6 +247,13 @@ export const GUIDES: Guide[] = [
     'Tap "Performance not shown · change", tick "Show performance on his monthly timesheet", and set his cost per hour if it differs.',
     'His card shows his performance and, for you only, what he made against what he cost.',
   ] },
+  { id: 'ceo-vehicles', title: 'Keep an eye on the vehicles', roles: [...CEO, 'admin', 'management'], steps: [
+    'Open Vehicles. The tiles on top show what needs you: handovers to approve, safety faults, services and licence discs due, daily checks, trips not allowed, fuel and km. Tap a tile to open that part.',
+    'Handovers: a driver took a vehicle with nobody to sign. Check the photos and problems, then Approve or Reject (rejecting needs a note).',
+    'Trips: trips with a company vehicle that need a reason. If he was sent, tap "Allow it" and say why; it stops counting on his timesheet.',
+    'Tap a vehicle for everything about it: job cards, bookings, daily checks, km, faults, who drove it, fuel slips and trips. From there you can book it in, open a job card or put a tech in.',
+    'Change the Month at the top to look back (fuel, km and trips are per month).',
+  ] },
 ];
 
 /** The guides for this person's role, everyone's last. */

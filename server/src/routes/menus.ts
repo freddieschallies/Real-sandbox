@@ -10,7 +10,7 @@ import { Refused, parse } from '../http.ts';
 export function registerMenuRoutes(app: FastifyInstance) {
   app.get('/me/phone-menu', async req => {
     const row = (await req.db.query('SELECT pinned FROM phone_menus WHERE level = $1', [req.actor.level])).rows[0];
-    return { pinned: (row?.pinned as string[] | undefined) ?? null, canEdit: can(req.actor, 'set_phone_menu') };
+    return { pinned: row?.pinned ? cleanPinned(APP_OF[req.actor.level] ?? 'office', row.pinned) : null, canEdit: can(req.actor, 'set_phone_menu') };
   });
 
   app.get('/phone-menus', async req => {
@@ -21,7 +21,7 @@ export function registerMenuRoutes(app: FastifyInstance) {
       positions: MENU_LEVELS.map(level => {
         const app = APP_OF[level]!;
         const row = rows.find(r => r.level === level);
-        return { level, label: MENU_LABEL[level], app, tabs: MENU_TABS[app], usual: usualTabs(level), pinned: row?.pinned ?? null, updatedAt: row?.updated_at ?? null };
+        return { level, label: MENU_LABEL[level], app, tabs: MENU_TABS[app], usual: usualTabs(level), pinned: row?.pinned ? cleanPinned(app, row.pinned) : null, updatedAt: row?.updated_at ?? null };
       }),
     };
   });

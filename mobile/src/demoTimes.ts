@@ -183,6 +183,14 @@ export class DemoTimes {
       allowed: this.t.allowedTrips?.[`trip-${techId}-${date}`] ?? null };
     return [T.tripCheck(trip, { hours: this.hours(), mayTakeHome: false, home: null })].filter(t => t.why.length);
   }
+  /** Trips that need a reason between two dates (finished days only), for the office's Vehicles page. */
+  tripsBetween(from: string, to: string, techs: { id: string; name: string }[]) {
+    const last = to < sast() ? to : addDays(sast(), -1);
+    const out: (T.TripOut & { driverId: string; driver: string })[] = [];
+    if (last < from) return out;
+    for (const d of T.daysBetween(from, last)) for (const t of techs) for (const x of this.trips(t.id, d, this.dayOf(t.id, d))) out.push({ ...x, driverId: t.id, driver: t.name });
+    return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  }
   /** Hours invoiced: jobs from more than two days ago are invoiced (most of the work, sometimes a little less). */
   private invoiced(techId: string, date: string, day: T.Day) {
     let minutes = 0, revenueCents = 0, km = 0;

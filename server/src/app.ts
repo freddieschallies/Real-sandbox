@@ -35,6 +35,7 @@ import { registerAccessRoutes } from './routes/access.ts';
 import { registerPlatformRoutes } from './routes/platform.ts';
 import { registerStockRoutes } from './routes/stock.ts';
 import { registerFleetRoutes } from './routes/fleet.ts';
+import { registerVehicleRoutes } from './routes/vehicles.ts';
 import { registerWorkshopRoutes } from './routes/workshop.ts';
 import type { InvoiceReader } from './invoiceReader.ts';
 import { mailerFromEnv, type Mailer } from './mailer.ts';
@@ -91,6 +92,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerStockRoutes(app, db, opts.invoiceReader ?? null);
   registerSupplierInvoiceRoutes(app, db, opts.invoiceReader ?? null);
   registerFleetRoutes(app, db);
+  registerVehicleRoutes(app);
   registerWorkshopRoutes(app);
   return app;
 }

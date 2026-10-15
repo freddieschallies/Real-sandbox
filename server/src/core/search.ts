@@ -42,7 +42,6 @@ export const PLACE_WORDS: Record<string, string> = {
   profit: 'margin money made cost profit per job',
   accounts: 'pastel rates prices price list labour rate call-out mark-up markup company details codes customer codes line codes batches who did what',
   flags: 'alerts warnings problems',
-  handovers: 'approve handover vehicle handover',
   map: 'team map live tracking where gps location',
   vans: 'van stock vans bill of quantities',
   departments: 'teams department managers',
@@ -71,7 +70,7 @@ export const PLACE_WORDS: Record<string, string> = {
   live: 'activity what happened',
   items: 'new items name items',
   // The fleet
-  vehicles: 'vehicles fleet bakkies cars trucks',
+  vehicles: 'vehicles fleet bakkies cars trucks handover handovers approve driver driving fuel trips unauthorised licence disc km odometer',
   bookings: 'booked services service due',
   faults: 'vehicle faults defects',
   techs: 'drivers technicians assign vehicle',
