@@ -6,6 +6,7 @@ import type { Flag } from './types.ts';
 import type { DemoOfficeState } from './demoOffice.ts';
 import { EXAMPLE_TECH, REAL, mayHaveIncidents } from './demoReal.ts';
 import * as W from '../../server/src/core/worth.ts';
+import { wagesOf, type PaySettings } from '../../server/src/core/pay.ts';
 
 export interface DemoTimesState { submitted: Record<string, { at: string; note: string | null; day: T.Day; filledBy?: string | null }>; seeded?: boolean; rules?: T.PayRules;
   /** Who looked at timesheets (the log HR and the CEO see). */ views?: { at: string; by: string; userId: string | null; departmentId: string | null; from?: string; to?: string; history?: boolean }[];
@@ -308,7 +309,7 @@ export class DemoTimes {
     return good({ date });
   }
 
-  exportFor(from: string, to: string, techs: { id: string; department: string | null }[], canFill = false, who: { canMoney: boolean; canPerformance: boolean; rates?: { hour: number; km: number } } = { canMoney: false, canPerformance: false }): Res {
+  exportFor(from: string, to: string, techs: { id: string; department: string | null }[], canFill = false, who: { canMoney: boolean; canPerformance: boolean; rates?: { hour: number; km: number }; pay?: (id: string) => PaySettings | null } = { canMoney: false, canPerformance: false }): Res {
     if (to < from) return bad(400, 'the end date is before the start date');
     const dates = T.daysBetween(from, to);
     if (dates.length > 31) return bad(400, 'at most 31 days at a time');
@@ -339,7 +340,8 @@ export class DemoTimes {
           performance = W.performanceLines(w);
           if (who.canMoney) { money = W.moneyLines(w); verdict = w.verdict; }
         }
-        return { id: t.id, full_name: this.name(t.id), department: t.department, days, totals, performance, money, verdict,
+        const paySet = who.canMoney ? who.pay?.(t.id) ?? null : null;
+        return { id: t.id, full_name: this.name(t.id), department: t.department, days, totals, performance, money, verdict, wages: paySet ? wagesOf(totals, paySet) : null,
           settings: who.canMoney ? set : who.canPerformance ? { showPerformance: set.showPerformance } : null };
       }),
       canMoney: who.canMoney, canPerformance: who.canPerformance, companyCostPerHourCents: who.canMoney ? who.rates?.hour ?? 0 : null,

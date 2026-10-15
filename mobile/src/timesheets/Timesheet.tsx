@@ -26,6 +26,8 @@ interface TechSheets {
   /** CEO, Accounts and HR, when switched on for him; money and verdict the CEO and Accounts only. */
   performance?: PerfLine[] | null; money?: PerfLine[] | null; verdict?: { text: string; tone: 'good' | 'warn' | 'bad' | 'quiet' } | null;
   settings?: { showPerformance: boolean; costPerHourCents?: number | null } | null;
+  /** His wages for the period, from the pay on his profile: the CEO and Accounts only. */
+  wages?: { rateCents: number; salaried: boolean; normalCents: number; overtimeCents: number; doubleCents: number; totalCents: number } | null;
 }
 interface Export {
   from: string; to: string; generatedAt: string; rules?: { weekdayNormalMin: number; saturdayNormalMin: number };
@@ -516,6 +518,13 @@ function TechSummary({ t, d, open, reload }: { t: TechSheets; d: Export; open?: 
           <Lines lines={t.money} />
         </View>
       ) : null}
+      {t.wages ? (
+        <View style={{ gap: 4 }}>
+          <Label>Wages for these days (CEO and Accounts only)</Label>
+          <Text style={[st.body, { fontWeight: '800' }]}>R {(t.wages.totalCents / 100).toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+          <Text style={st.small}>{t.wages.salaried ? `Salary R ${(t.wages.normalCents / 100).toFixed(2)}` : `Normal R ${(t.wages.normalCents / 100).toFixed(2)}`} · overtime R {(t.wages.overtimeCents / 100).toFixed(2)} · Sundays and public holidays R {(t.wages.doubleCents / 100).toFixed(2)} · at R {(t.wages.rateCents / 100).toFixed(2)}/h</Text>
+        </View>
+      ) : d.canMoney ? <Text style={st.small}>No pay set for him yet: People → {t.full_name} → Pay.</Text> : null}
       {d.canMoney && t.settings ? (edit ? (
         <View style={{ gap: 8 }}>
           <Pressable onPress={() => setShow(v => !v)} accessibilityRole="switch" accessibilityState={{ checked: show }} accessibilityLabel={`Show performance ${t.full_name}`} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -603,7 +612,7 @@ function printSheets(d: Export, title: string, company: string, hide = false, pe
 <tr><td>${hm(x.paidMin ?? 0)}</td><td>${hm(x.travelMin)}</td><td>${hm(x.workMin)}</td><td>${hm(x.officeMin ?? 0)}</td><td>${hm(x.invoicedMin ?? 0)}</td><td>${hm(x.normalMin ?? 0)}</td><td>${hm(x.overtimeMin ?? 0)}</td><td>${hm(x.doubleMin ?? 0)}</td><td${x.unaccountedMin >= 30 ? ' class=bad' : ''}>${hm(x.unaccountedMin)}</td></tr></table>
 <h3>Office time</h3>${extras ? `<table><tr><th>Day</th><th>Time</th><th>What</th><th class=r>Hours</th></tr>${extras}</table>` : '<p>None.</p>'}
 <h3>Unauthorised trips with a company vehicle</h3>${trips ? `<table><tr><th>Day</th><th>Time</th><th>Vehicle</th><th class=r>Distance</th><th>Why</th></tr>${trips}</table>` : '<p>None.</p>'}
-${!hide && t.performance ? `<h3>Performance</h3>${lines(t.performance)}` : ''}${!hide && t.money ? `<h3>Made and cost the company</h3>${t.verdict ? `<p><b>${esc(t.verdict.text)}</b></p>` : ''}${lines(t.money)}` : ''}
+${!hide && t.performance ? `<h3>Performance</h3>${lines(t.performance)}` : ''}${!hide && t.money ? `<h3>Made and cost the company</h3>${t.verdict ? `<p><b>${esc(t.verdict.text)}</b></p>` : ''}${lines(t.money)}` : ''}${!hide && t.wages ? `<h3>Wages</h3><p><b>R ${(t.wages.totalCents / 100).toFixed(2)}</b>: ${t.wages.salaried ? 'salary' : 'normal'} R ${(t.wages.normalCents / 100).toFixed(2)}, overtime R ${(t.wages.overtimeCents / 100).toFixed(2)}, Sundays and public holidays R ${(t.wages.doubleCents / 100).toFixed(2)} (R ${(t.wages.rateCents / 100).toFixed(2)}/h)</p>` : ''}
 <p class=sign>Technician: ____________________ &nbsp;&nbsp; Manager / HR: ____________________</p></div>${letterheadBottom('<div class=bar></div>')}</section>`;
   }).join('');
   const pages = d.technicians.flatMap(t => t.days.map(s => {

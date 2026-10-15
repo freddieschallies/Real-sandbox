@@ -28,6 +28,7 @@ import * as CR from '../../server/src/core/clientRates.ts';
 import { DemoFleet, seedFleet, type DemoFleetState } from './demoFleet.ts';
 import { DemoWhatsApp, seedWhatsApp, type DemoWaState } from './demoWhatsApp.ts';
 import { DemoPastelSetup, seedPastelSetup, type DemoPastelState } from './demoPastel.ts';
+import type { PaySettings } from '../../server/src/core/pay.ts';
 import { demoFuel, demoVehiclesPage, type DemoTrip } from './demoVehicles.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
 import type { CardView, Flag, LoanMachine, MachineMove, StockLine, Today, TodayJob, Workshop } from './types.ts';
@@ -438,10 +439,37 @@ export class DemoTransport implements Transport {
   }
 
   /** Whether the signed-in person does this kind of work (their position, or switched on by the CEO). */
-  private does(area: 'jobs' | 'documents' | 'stores' | 'stockroom' | 'fleet' | 'flags' | 'prices' | 'access' | 'hr' | 'vanstock' | 'jobcards' | 'books') {
+  private does(area: 'jobs' | 'documents' | 'stores' | 'stockroom' | 'fleet' | 'flags' | 'prices' | 'access' | 'hr' | 'vanstock' | 'jobcards' | 'books' | 'rates' | 'pay') {
     if (area === 'fleet' && this.who.level === 'mechanic') return true;
     if (area === 'stockroom' && this.who.level === 'stockroom') return true;
     return this.office().workOf(this.who.id, this.who.level)[area];
+  }
+
+  /** What someone is paid (the test drive's own, or a made-up wage for a technician). */
+  private payFor(id: string): PaySettings | null {
+    const own = (this.state as { pay?: Record<string, PaySettings & { costPerHourCents?: number | null }> }).pay?.[id];
+    if (own) return own;
+    const p = this.office().o.people.find(x => x.id === id);
+    return p?.login_level === 'technician' ? { wagePerHourCents: 7500 + (id.length % 4) * 500, salaryCents: null, overtimeX: 1.5, doubleX: 2 } : null;
+  }
+  private payRoute(p: string, req: Request, b: any): Response | null {
+    const m = p.match(/^\/people\/([^/]+)\/pay$/);
+    if (!m) return null;
+    if (!this.does('pay')) return refuse(403, 'pay is for Accounts and the CEO');
+    const id = m[1];
+    const person = this.office().o.people.find(x => x.id === id);
+    if (!person) return refuse(404, 'no such person');
+    const store = ((this.state as { pay?: Record<string, PaySettings & { costPerHourCents?: number | null; updatedBy?: string; updatedAt?: string }> }).pay ??= {});
+    const view = () => { const x = store[id] ?? { ...(this.payFor(id) ?? { wagePerHourCents: null, salaryCents: null, overtimeX: 1.5, doubleX: 2 }), costPerHourCents: this.times().worthOf(id).costPerHourCents ?? null };
+      return { wagePerHourCents: x.wagePerHourCents, salaryCents: x.salaryCents, overtimeX: x.overtimeX, doubleX: x.doubleX, costPerHourCents: (x as { costPerHourCents?: number | null }).costPerHourCents ?? null, note: null,
+        updatedBy: (x as { updatedBy?: string }).updatedBy ?? null, updatedAt: (x as { updatedAt?: string }).updatedAt ?? null }; };
+    if (req.method === 'GET') return ok({ person: { id, full_name: person.full_name, login_level: person.login_level }, pay: view(), companyCostPerHourCents: 18_000 });
+    if (b?.wagePerHourCents != null && b?.salaryCents != null) return refuse(400, 'an hourly wage or a monthly salary, not both');
+    store[id] = { wagePerHourCents: b?.wagePerHourCents ?? null, salaryCents: b?.salaryCents ?? null, overtimeX: Number(b?.overtimeX) || 1.5, doubleX: Number(b?.doubleX) || 2,
+      costPerHourCents: b?.costPerHourCents ?? null, updatedBy: this.who.name, updatedAt: new Date().toISOString() };
+    if (person.login_level === 'technician' && b?.costPerHourCents !== undefined) this.times().setWorth(id, { showPerformance: this.times().worthOf(id).showPerformance, costPerHourCents: b.costPerHourCents });
+    this.persist(this.state);
+    return ok({ pay: view() });
   }
 
   /** The next job card number: after the highest, or the number the CEO or Accounts set. */
@@ -800,7 +828,7 @@ export class DemoTransport implements Transport {
     const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
     const all = this.does('hr') || ['hr', 'director', 'creator', 'accounts'].includes(lvl);
     const full = ['hr', 'director', 'creator'].includes(lvl);
-    const canMoney = ['director', 'creator', 'accounts'].includes(lvl), canPerformance = canMoney || lvl === 'hr';
+    const canMoney = this.does('pay'), canPerformance = canMoney || ['director', 'creator', 'accounts', 'hr'].includes(lvl);
     if (p === '/timesheets/settings') {
       const canEdit = this.does('hr') || this.does('access');
       if (req.method === 'PUT') return canEdit ? save(t.setRules(b)) : refuse(403, 'only HR or the CEO sets the normal hours');
@@ -843,7 +871,7 @@ export class DemoTransport implements Transport {
       .map(x => ({ id: x.id, department: v.deptOf(x.id)?.name ?? null }));
     if (q.get('userId') && !techs.length) return refuse(403, 'not one of your technicians');
     const dr = (this.state.docs?.rates ?? {}) as Record<string, number>;
-    const res = t.exportFor(from, to, techs, ceo, { canMoney, canPerformance, rates: { hour: dr.labour_cost_per_hour ?? 18_000, km: dr.vehicle_cost_per_km ?? 450 } });
+    const res = t.exportFor(from, to, techs, ceo, { canMoney, canPerformance, rates: { hour: dr.labour_cost_per_hour ?? 18_000, km: dr.vehicle_cost_per_km ?? 450 }, pay: id => this.payFor(id) });
     if (res.ok) {
       t.viewed({ by: this.who.name, userId: q.get('userId'), departmentId: q.get('departmentId'), from, to });
       const left = new Set(leavers.map(l => l.person.id));
@@ -1365,8 +1393,9 @@ export class DemoTransport implements Transport {
     // Each client's own rates and mark-up: the CEO and Accounts.
     if ((m = p.match(/^\/office\/clients\/([^/]+)\/rates$/))) {
       const cid = decodeURIComponent(m[1]);
-      if (get) return ok(d.clientRates(cid, books));
-      if (!books) return refuse(403, "only the CEO and Accounts set a client's rates and mark-up");
+      const rates = books || this.does('rates');
+      if (!rates) return refuse(403, "clients' rates are for the CEO and Accounts (the CEO can switch them on for someone)");
+      if (get) return ok(d.clientRates(cid, rates));
       const r = req.method === 'DELETE' ? d.clearClientRates(cid) : d.setClientRates(cid, b);
       this.persist(this.state);
       return done(r);
@@ -1717,6 +1746,8 @@ export class DemoTransport implements Transport {
     if (bdr) return bdr;
     const war = this.whatsAppRoute(p, req, b);
     if (war) return war;
+    const payr = this.payRoute(p, req, b);
+    if (payr) return payr;
     const off = this.officeRoute(p, req, b);
     if (off) return off;
 

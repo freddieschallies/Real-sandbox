@@ -639,7 +639,7 @@ function SupplierCodes({ b, suppliers, reload }: { b: Books; suppliers: any[]; r
 }
 
 /** A client's own rates (each can be switched off) and its parts mark-up in three price bands. */
-function ClientRatesEditor({ b, client, done }: { b: Books; client: { id: string; name: string }; done: () => void }) {
+export function ClientRatesEditor({ b, client, done }: { b: Pick<Books, 'ask'>; client: { id: string; name: string }; done?: () => void }) {
   const [v, setV] = useState<any>(null);
   const [r, setR] = useState<Record<CR.ClientRateKey, { on: boolean; amount: string }> | null>(null);
   const [mOn, setMOn] = useState(true);
@@ -712,7 +712,7 @@ function ClientRatesEditor({ b, client, done }: { b: Books; client: { id: string
         }} />
       ) : <Text style={st.small}>Only the CEO and Accounts change a client's rates.</Text>}
       {canEdit && v.own ? <Button label="Use the company rates again" kind="quiet" onPress={async () => { const x = await b.ask('DELETE', `/office/clients/${encodeURIComponent(client.id)}/rates`); setAns(x); if (x.ok) { setSaved('This client uses the company rates again.'); load(); } }} /> : null}
-      <Button label="Back to the customers" kind="quiet" onPress={done} />
+      {done ? <Button label="Back to the customers" kind="quiet" onPress={done} /> : null}
     </Card>
   );
 }

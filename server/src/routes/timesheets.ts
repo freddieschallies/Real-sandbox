@@ -12,6 +12,8 @@ import { kmBetween, ROAD_FACTOR } from '../core/clientRates.ts';
 import { companyRates } from './clientRates.ts';
 import { DateOnly, Iso, Refused, Uuid, parse } from '../http.ts';
 import { notify } from './field.ts';
+import { wagesOf } from '../core/pay.ts';
+import { payOf } from './pay.ts';
 
 const sast = (d: Date = new Date()) => d.toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
 const sastHour = (d: Date = new Date()) => Number(d.toLocaleString('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', hour12: false }));
@@ -409,7 +411,7 @@ export function registerTimesheetRoutes(app: FastifyInstance) {
   // Per technician, the CEO and Accounts only: show his performance on his monthly timesheet, and what an hour of him costs.
   app.put('/timesheets/worth/:userId', async (req: FastifyRequest<{ Params: { userId: string } }>) => {
     const userId = parse(Uuid, req.params.userId);
-    if (!MONEY.includes(req.actor.level)) throw new Refused(403, ['only the CEO and Accounts set this']);
+    if (!can(req.actor, 'set_pay')) throw new Refused(403, ['only the CEO and Accounts set this']);
     const b = parse(z.object({ showPerformance: z.boolean(), costPerHourCents: z.number().int().min(0).max(10_000_000).nullable().optional() }), req.body);
     return tx(req.db, async c => {
       await personFor(c, req.actor, userId);
@@ -443,7 +445,7 @@ export function registerTimesheetRoutes(app: FastifyInstance) {
       if (q.userId && !techs.length) throw new Refused(403, ['not one of your technicians']);
       const x = await ctxOf(c);
       const level = req.actor.level;
-      const canMoney = MONEY.includes(level), canPerformance = PERFORMANCE.includes(level);
+      const canMoney = can(req.actor, 'set_pay'), canPerformance = canMoney || PERFORMANCE.includes(level);
       const rates = canPerformance ? await companyRates(c) : null;
       const technicians = [];
       for (const t of techs) {
@@ -484,8 +486,10 @@ export function registerTimesheetRoutes(app: FastifyInstance) {
           performance = W.performanceLines(w);
           if (canMoney) { money = W.moneyLines(w); verdict = w.verdict; }
         }
+        // His wages for the period (from his pay on his profile): the CEO and Accounts only.
+        const wages = canMoney ? wagesOf(totals, await payOf(c, t.id)) : null;
         technicians.push({
-          id: t.id, full_name: t.full_name, department: t.department, days, left: t.status === 'left', totals, performance, money, verdict,
+          id: t.id, full_name: t.full_name, department: t.department, days, left: t.status === 'left', totals, performance, money, verdict, wages,
           settings: canMoney ? { showPerformance: settings.showPerformance, costPerHourCents: settings.costPerHourCents } : canPerformance ? { showPerformance: settings.showPerformance } : null,
         });
       }

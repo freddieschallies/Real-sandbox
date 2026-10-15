@@ -45,6 +45,7 @@ import { PurchaseOrderList } from './PurchaseOrders.tsx';
 import { AddPerson, LOGIN_PILL, LoginCard } from './Logins.tsx';
 import { ImportCustomers, StoreDetail, StoreList, pointFrom } from './Stores.tsx';
 import { VehiclesPage, type VehSection } from './Vehicles.tsx';
+import { PayCard } from './Pay.tsx';
 import { WhatsAppTab, useWhatsAppUnread } from '../whatsapp/WhatsAppTab.tsx';
 import { BreakdownAlert, BreakdownById, BreakdownList, BreakdownSettings, type Bd } from './Breakdowns.tsx';
 
@@ -216,7 +217,7 @@ export function OfficeApp() {
     if (sel.kind === 'store') return wrap(<StoreDetail key={sel.id} id={sel.id} o={o} canEdit={does('stores')} done={close} />);
     if (sel.kind === 'importcustomers') return wrap(<ImportCustomers o={o} done={close} />);
     if (sel.kind === 'debtor') return wrap(<DebtorDetail key={sel.id} id={sel.id} changed={() => { setDebTick(t => t + 1); o.load(); }} openInvoice={id => go('invoices', { kind: 'invoice', id })} openStatement={mine.includes('customers') ? () => go('customers', { kind: 'customer', id: sel.id, show: 'statement' }) : undefined} />);
-    if (sel.kind === 'customer') return wrap(<CustomerDetail key={`${sel.id}-${sel.show ?? ''}`} id={sel.id} start={sel.show ?? 'jobs'} co={books.company?.profile ?? {}} openJob={id => go('jobs', { kind: 'job', id })}
+    if (sel.kind === 'customer') return wrap(<CustomerDetail key={`${sel.id}-${sel.show ?? ''}`} id={sel.id} start={sel.show ?? 'jobs'} co={books.company?.profile ?? {}} canRates={does('rates') || does('books')} openJob={id => go('jobs', { kind: 'job', id })}
       openInvoice={id => go('invoices', { kind: 'invoice', id })} openQuote={id => go('quotes', { kind: 'quote', id })} openDebtor={id => go('debtors', { kind: 'debtor', id })} />);
     if (sel.kind === 'supplierinv') return wrap(<SupplierInvoiceDetail key={sel.id} id={sel.id} changed={() => setSupTick(t => t + 1)} />);
     if (sel.kind === 'bdlog') {
@@ -886,7 +887,9 @@ function PersonDetail({ id, o, ask, ended }: { id: string; o: OfficeHook; ask?: 
   const [saved, setSaved] = useState<string | null>(null);
   const [extra, setExtra] = useState(false);
   const prof = useProfile(id);
-  const me = useStore().session?.user.id;
+  const sess = useStore().session;
+  const me = sess?.user.id;
+  const canPay = sess?.user.level === 'creator' || !!sess?.user.work?.pay;
   if (!x || !p) return <Body quiet>Not found.</Body>;
   const manage = !!p.canManage;
   const setsPos = !!(p.canSetPositions ?? manage);
@@ -905,6 +908,7 @@ function PersonDetail({ id, o, ask, ended }: { id: string; o: OfficeHook; ask?: 
       {prof.p && isTech ? <VanCard key={`van-${x.id}-${prof.p.departmentId ?? ''}`} userId={x.id} /> : null}
       {prof.p?.kit?.read ? <KitCard userId={x.id} name={x.full_name} /> : null}
       {prof.p?.record?.read ? <StaffRecord userId={x.id} name={x.full_name} /> : null}
+      {canPay && x.login_level !== 'creator' ? <PayCard key={`pay-${x.id}`} userId={x.id} name={first} isTech={isTech} /> : null}
       <Heading>Position{isTech ? ' and trade' : ''}</Heading>
       <Card>
         <Select label="Position" value={x.login_level} disabled={!setsPos || x.login_level === 'creator' || x.id === me && !manage || !settable.includes(x.login_level)}

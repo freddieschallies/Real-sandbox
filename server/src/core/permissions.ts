@@ -48,7 +48,9 @@ export const CATALOGUE = {
   view_quotes_invoices_stock: { group: 'Office', label: 'See quotes, invoices and stock', scoped: false },
   prepare_quotes_invoices:    { group: 'Office', label: 'Prepare and send quotes and invoices', scoped: false },
   set_prices:                 { group: 'Office', label: 'Set prices and rates', scoped: false },
+  view_client_rates:          { group: 'Office', label: "See each client's rates and parts mark-up", scoped: false },
   set_client_rates:           { group: 'Office', label: "Set each client's rates and parts mark-up", scoped: false },
+  set_pay:                    { group: 'People', label: "See and set what each employee is paid (wages, overtime, cost per hour)", scoped: false },
   process_supplier_invoices:  { group: 'Office', label: 'Process supplier invoices: check, approve, send to Pastel', scoped: false },
   hold_accounts:              { group: 'Office', label: 'Put a client that is not paying on hold', scoped: false },
 
@@ -107,7 +109,8 @@ const admin: Permissions = { ...officeWork, set_phone_menu: true, assign_stock: 
 // quotes and invoices, credit notes, closing at no charge, supplier invoices, each client's rates
 // and mark-up, and the Pastel batches.
 const accounts: Permissions = {
-  view_all_job_cards: true, view_quotes_invoices_stock: true, prepare_quotes_invoices: true, process_supplier_invoices: true, set_client_rates: true, hold_accounts: true, view_company_reports: true,
+  view_all_job_cards: true, view_quotes_invoices_stock: true, prepare_quotes_invoices: true, process_supplier_invoices: true, view_client_rates: true, set_client_rates: true, hold_accounts: true, view_company_reports: true,
+  set_pay: true,
 };
 const stockroom: Permissions = { ...officeWork, manage_stockroom: true, assign_stock: true, run_stocktake: true };
 // A department manager runs his technicians: monitors them, assigns jobs, checks job cards and sets
@@ -125,7 +128,7 @@ const director: Permissions = {
   ...stockroom, ...management, ...hr, set_van_stock: ALL,
   view_live_driving_markers: ALL, view_flags: ALL, resolve_flags: ALL, view_employee_log: ALL, write_employee_log: ALL,
   edit_technician_settings: ALL, mark_technician_left: ALL, view_former_technicians: ALL,
-  set_prices: true, set_client_rates: true, process_supplier_invoices: true, hold_accounts: true, view_director_digest: true, view_company_reports: true, manage_access: true, manage_fleet: true, set_phone_menu: true,
+  set_prices: true, view_client_rates: true, set_client_rates: true, set_pay: true, process_supplier_invoices: true, hold_accounts: true, view_director_digest: true, view_company_reports: true, manage_access: true, manage_fleet: true, set_phone_menu: true,
 };
 const creator: Permissions = { ...director, manage_users: true, manage_system_settings: true, view_audit_log: true };
 
@@ -204,6 +207,8 @@ export const WORK_AREAS = {
   prices:    { label: 'Prices and rates', actions: ['set_prices'] },
   jobcards:  { label: 'See every job card (without changing them)', actions: ['view_all_job_cards'] },
   books:     { label: "Accounts: supplier invoices, client rates and mark-up, accounts on hold, profit per job", actions: ['process_supplier_invoices', 'set_client_rates', 'hold_accounts', 'view_company_reports'] },
+  rates:     { label: "Clients' rates and parts mark-up (see and change)", actions: ['view_client_rates', 'set_client_rates'] },
+  pay:       { label: "Employees' pay: wages, overtime, cost per hour (see and change)", actions: ['set_pay'] },
   access:    { label: 'Positions and access (People)', actions: ['manage_access'] },
   hr:        { label: 'HR: positions, departments, staff records and timesheets', actions: ['view_employee_log', 'write_employee_log', 'assign_departments', 'view_timesheets', 'set_positions'] },
   vanstock:  { label: 'Van stock lists (bill of quantities)', actions: ['set_van_stock'] },

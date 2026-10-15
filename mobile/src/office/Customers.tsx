@@ -2,6 +2,7 @@
 // client with every job, invoice, credit note and quote; and its statement (brought forward, every
 // invoice, credit note and payment with the running balance, and the age analysis: current, 30, 60,
 // 90 and 120 days), printed on the letterhead or emailed to the customer.
+import { ClientRatesEditor } from './Books.tsx';
 import React, { useEffect, useState } from 'react';
 import { Platform, Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
@@ -69,10 +70,10 @@ export function CustomerList({ open, selected }: { open: (id: string) => void; s
   );
 }
 
-type Section = 'jobs' | 'invoices' | 'credits' | 'quotes' | 'statement';
+type Section = 'jobs' | 'invoices' | 'credits' | 'quotes' | 'statement' | 'rates';
 
-export function CustomerDetail({ id, start = 'jobs', co, openJob, openInvoice, openQuote, openDebtor }: {
-  id: string; start?: Section; co: any; openJob: (id: string) => void; openInvoice: (id: string) => void; openQuote: (id: string) => void; openDebtor: (clientId: string) => void;
+export function CustomerDetail({ id, start = 'jobs', co, openJob, openInvoice, openQuote, openDebtor, canRates }: {
+  id: string; start?: Section; co: any; canRates?: boolean; openJob: (id: string) => void; openInvoice: (id: string) => void; openQuote: (id: string) => void; openDebtor: (clientId: string) => void;
 }) {
   const ask = useAsk();
   const [d, setD] = useState<any>(null);
@@ -105,8 +106,9 @@ export function CustomerDetail({ id, start = 'jobs', co, openJob, openInvoice, o
           <Button label="Debtors and hold" kind="secondary" onPress={() => openDebtor(c.id)} style={{ flexGrow: 1, flexBasis: 130 }} />
         </View>
       </Card>
-      <Choice options={['jobs', 'invoices', 'credits', 'quotes', 'statement'] as const} value={show} onChange={setShow}
-        labels={{ jobs: `Jobs (${d.jobs.length})`, invoices: `Invoices (${d.invoices.length})`, credits: `Credit notes (${d.credits.length})`, quotes: `Quotes (${d.quotes.length})`, statement: 'Statement' }} />
+      <Choice options={(canRates ? ['jobs', 'invoices', 'credits', 'quotes', 'statement', 'rates'] : ['jobs', 'invoices', 'credits', 'quotes', 'statement']) as Section[]} value={show} onChange={setShow}
+        labels={{ jobs: `Jobs (${d.jobs.length})`, invoices: `Invoices (${d.invoices.length})`, credits: `Credit notes (${d.credits.length})`, quotes: `Quotes (${d.quotes.length})`, statement: 'Statement', rates: 'Rates and mark-up' }} />
+      {show === 'rates' && canRates ? <ClientRatesEditor key={c.id} b={{ ask: ask as never }} client={{ id: c.id, name: c.name }} /> : null}
       {show === 'jobs' ? (
         <>
           {d.jobs.map((j: any) => (

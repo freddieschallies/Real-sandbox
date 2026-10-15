@@ -52,7 +52,7 @@ const RatesIn = z.object({
 
 export function registerClientRateRoutes(app: FastifyInstance) {
   const sees = (req: FastifyRequest) => {
-    if (!can(req.actor, 'set_client_rates') && !can(req.actor, 'prepare_quotes_invoices')) throw new Refused(403, ["clients' rates are for the CEO and Accounts"]);
+    if (!can(req.actor, 'set_client_rates') && !can(req.actor, 'view_client_rates')) throw new Refused(403, ["clients' rates are for the CEO and Accounts (the CEO can switch them on for someone)"]);
   };
   const sets = (req: FastifyRequest) => {
     if (!can(req.actor, 'set_client_rates')) throw new Refused(403, ["only the CEO and Accounts set a client's rates and mark-up"]);

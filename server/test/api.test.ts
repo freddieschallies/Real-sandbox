@@ -3149,3 +3149,37 @@ test('pastel, the easy way: Pastel\'s lists in, codes matched by the app, a prac
   assert.ok(su.setupDoneAt);
   assert.equal((await call('creator', 'GET', '/setup')).body.steps.find((s: { key: string }) => s.key === 'pastel').done, true);
 });
+
+test('pay and client rates: only Accounts and the CEO, unless the CEO switches it on for someone; wages from the timesheet', async () => {
+  // Admin does not see a client's rates or anyone's pay by default.
+  assert.equal((await call('admin', 'GET', `/office/clients/${ids.client}/rates`)).status, 403);
+  assert.equal((await call('admin', 'GET', `/people/${ids.tech3}/pay`)).status, 403);
+  assert.equal((await call('tech3', 'GET', `/people/${ids.tech3}/pay`)).status, 403, 'not even his own');
+  assert.equal((await call('hr', 'GET', `/people/${ids.tech3}/pay`)).status, 403);
+  assert.equal((await call('books', 'GET', `/office/clients/${ids.client}/rates`)).status, 200);
+  // Accounts sets his pay: R85 an hour, overtime 1.5, Sundays 2; what an hour of him costs (for profit).
+  assert.equal((await call('books', 'PUT', `/people/${ids.tech3}/pay`, { wagePerHourCents: 8500, salaryCents: 2000000, overtimeX: 1.5, doubleX: 2 })).status, 400, 'not both');
+  const set = await call('books', 'PUT', `/people/${ids.tech3}/pay`, { wagePerHourCents: 8500, salaryCents: null, overtimeX: 1.5, doubleX: 2, costPerHourCents: 14000 });
+  assert.equal(set.status, 200, JSON.stringify(set.body));
+  assert.equal(set.body.pay.costPerHourCents, 14000);
+  const log = (await db.query("SELECT details FROM audit_log WHERE action = 'pay_set' ORDER BY id DESC LIMIT 1")).rows[0];
+  assert.ok(!JSON.stringify(log).includes('8500'), 'the amounts are not in the audit log');
+  // His timesheet for the period shows his wages to Accounts and the CEO, not to HR.
+  const D = new Date(Date.now() - 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+  const acc = (await call('books', 'GET', `/timesheets?from=${D}&to=${D}&userId=${ids.tech3}`)).body.technicians[0];
+  assert.equal(acc.wages.rateCents, 8500);
+  assert.equal(acc.wages.totalCents, acc.wages.normalCents + acc.wages.overtimeCents + acc.wages.doubleCents);
+  assert.ok(acc.wages.totalCents > 0);
+  assert.equal((await call('hr', 'GET', `/timesheets?from=${D}&to=${D}&userId=${ids.tech3}`)).body.technicians[0].wages, null);
+  // The CEO switches "Employees' pay" and "Clients' rates" on for Admin.
+  const admin = (await db.query("SELECT id FROM users WHERE email = 'admin@zsp.test'")).rows[0].id;
+  assert.equal((await call('creator', 'PUT', `/access/users/${admin}/work`, { area: 'pay', on: true })).status, 200);
+  assert.equal((await call('creator', 'PUT', `/access/users/${admin}/work`, { area: 'rates', on: true })).status, 200);
+  if ((await call('admin', 'GET', '/me')).status === 401) tokens.admin = (await call('', 'POST', '/auth/login', { email: 'admin@zsp.test', password: PW })).body.token;
+  assert.equal((await call('admin', 'GET', `/people/${ids.tech3}/pay`)).status, 200);
+  assert.equal((await call('admin', 'GET', `/office/clients/${ids.client}/rates`)).status, 200);
+  await call('creator', 'PUT', `/access/users/${admin}/work`, { area: 'pay', on: false });
+  await call('creator', 'PUT', `/access/users/${admin}/work`, { area: 'rates', on: false });
+  if ((await call('admin', 'GET', '/me')).status === 401) tokens.admin = (await call('', 'POST', '/auth/login', { email: 'admin@zsp.test', password: PW })).body.token;
+  assert.equal((await call('admin', 'GET', `/people/${ids.tech3}/pay`)).status, 403, 'switched off again');
+});

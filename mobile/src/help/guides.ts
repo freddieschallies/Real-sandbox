@@ -250,6 +250,18 @@ export const GUIDES: Guide[] = [
     'Employees: type several at once, each with their role, then "Add these people".',
     'Logins: "Make setup codes", then send each person their message.',
   ] },
+  { id: 'acc-pay', title: 'Set what someone is paid', roles: ['accounts', ...CEO], steps: [
+    'People → the person → Pay: by the hour (wage per hour) or a monthly salary, the overtime and Sunday / public holiday multiples.',
+    'For a technician also what an hour of him costs the company (for profit); empty uses the company rate.',
+    'His wages are worked out on his timesheets (Timesheets → Monthly): only Accounts and the CEO see them.',
+    'Only Accounts and the CEO see pay. The CEO can switch "Employees\' pay" on for someone else (People → that person → Work).',
+  ] },
+  { id: 'acc-client-rates', title: 'A client\'s own rates and parts mark-up', roles: ['accounts', ...CEO], steps: [
+    'Customers → the client → Rates and mark-up.',
+    'Untick what this client is not charged; change the amounts.',
+    'Mark-up on parts in three price bands (cheap parts a bigger %): the example shows what a R100, R1 000 and R5 000 part sells at.',
+    'The next invoice for this client is priced with these.',
+  ] },
   { id: 'ceo-access', title: 'Decide who may do what', roles: CEO, steps: [
     'People → the person → Position: their role (technician, admin, accounts, stock controller, manager, HR, mechanic).',
     'Under the position, switch extra work on or off for that person (e.g. give Admin the stockroom when the stock controller is away).',
