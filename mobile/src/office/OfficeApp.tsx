@@ -45,10 +45,11 @@ import { PurchaseOrderList } from './PurchaseOrders.tsx';
 import { AddPerson, LOGIN_PILL, LoginCard } from './Logins.tsx';
 import { ImportCustomers, StoreDetail, StoreList, pointFrom } from './Stores.tsx';
 import { VehiclesPage, type VehSection } from './Vehicles.tsx';
+import { WhatsAppTab, useWhatsAppUnread } from '../whatsapp/WhatsAppTab.tsx';
 import { BreakdownAlert, BreakdownById, BreakdownList, BreakdownSettings, type Bd } from './Breakdowns.tsx';
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
-type Tab = 'setup' | 'today' | 'breakdowns' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'pos' | 'customers' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'vehicles' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
+type Tab = 'setup' | 'today' | 'breakdowns' | 'whatsapp' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'pos' | 'customers' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'vehicles' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
 type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | { kind: 'supplierinv'; id: string } | { kind: 'debtor'; id: string } | { kind: 'customer'; id: string; show?: 'statement' } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
@@ -67,7 +68,7 @@ const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: '
 /** On the phone, unless the CEO or an admin pinned others: the first four show and the rest go under More, most used first. */
 const PHONE_ORDER: string[] = MENU_TABS.office.map(t => t.key);
 /** Screens that use the whole width on a computer (no list and detail). */
-const FULL: Tab[] = ['setup', 'today', 'profit', 'pos', 'accounts', 'map', 'departments', 'timesheets', 'vehicles', 'settings'];
+const FULL: Tab[] = ['setup', 'today', 'profit', 'pos', 'accounts', 'map', 'departments', 'timesheets', 'vehicles', 'whatsapp', 'settings'];
 const OFFICE_LEVELS = ['admin', 'accounts', 'management', 'hr', 'director', 'creator'];
 export const isOffice = (level?: string) => OFFICE_LEVELS.includes(level ?? '');
 
@@ -111,6 +112,7 @@ export function OfficeApp() {
   const bdDone = (jobId?: string) => { setBdTick(t => t + 1); o.load(); if (jobId) go('jobs', { kind: 'job', id: jobId }); else setSel(null); };
 
   const menu = usePhoneMenu();
+  const waUnread = useWhatsAppUnread(does('jobs'));
   const setup = useSetup(['creator', 'director'].includes(s.session?.user.level ?? '') || !!work?.access);
   const [menuStart, setMenuStart] = useState<string | undefined>(undefined);
   const level = s.session?.user.level ?? '';
@@ -119,6 +121,7 @@ export function OfficeApp() {
     ...(!setup.d?.dismissed ? [{ key: 'setup' as Tab, label: 'Start-up', count: setup.d ? setup.d.total - setup.d.done || undefined : undefined }] : []),
     { key: 'today', label: 'Today' },
     { key: 'breakdowns', label: 'Breakdowns', count: bdCount || undefined },
+    { key: 'whatsapp', label: 'WhatsApp', count: waUnread || undefined },
     { key: 'jobs', label: 'Jobs', count: ov ? ov.jobs.carried_over + ov.jobs.urgent : undefined },
     { key: 'queries', label: 'Queries', count: qs.unread },
     { key: 'quotes', label: 'Quotes', count: books.quotes.filter(q => q.status === 'draft').length || undefined },
@@ -189,7 +192,8 @@ export function OfficeApp() {
     </ScrollView>
   );
 
-  const body = tab === 'vehicles' ? <VehiclesPage key={veh.n} o={o} start={veh.start} /> : list;
+  const body = tab === 'vehicles' ? <VehiclesPage key={veh.n} o={o} start={veh.start} />
+    : tab === 'whatsapp' ? <WhatsAppTab openBreakdown={id => go('breakdowns', { kind: 'breakdown', id })} /> : list;
   const close = () => setSel(null);
   const detail = (() => {
     if (!sel) return null;

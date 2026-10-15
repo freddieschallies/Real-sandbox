@@ -102,6 +102,19 @@ export const GUIDES: Guide[] = [
     'Open it and check the store and the fault. Tap "Log it as a job", or "Not a job" with the reason (already fixed, duplicate…).',
     'Choose the technician and the date, and save. He sees it on his phone at once.',
   ] },
+  { id: 'office-whatsapp', title: 'Read and answer WhatsApp in the app', roles: ['admin', 'management', ...CEO], steps: [
+    'Open WhatsApp: every chat of the app\'s number, newest first. A green number is unread.',
+    'Tap a chat to read it. Type in "Type a reply" and tap Send: it goes out with your name under it.',
+    'Messages in the breakdowns group go into Breakdowns by themselves. A message in another chat that is a breakdown: tap "Make it a breakdown".',
+    'With an official number, WhatsApp only allows a reply within 24 hours of their last message.',
+  ] },
+  { id: 'ceo-whatsapp', title: 'Connect WhatsApp', roles: CEO, steps: [
+    'Start-up → WhatsApp (or Settings). Choose: "Our own phone" (works in your existing breakdowns group) or "Official business number" (no phone; stores message the number).',
+    'Own phone: a cheap phone with its own SIM and WhatsApp, added to the breakdowns group. Tap "The phone is ready: show the code".',
+    'On that phone: WhatsApp → ⋮ → Linked devices → Link a device, and scan the code on your screen.',
+    'Choose the breakdowns group, then "Send a test" and say whether it arrived. Done.',
+    'Official number: tap "Connect with WhatsApp", follow WhatsApp\'s window, then send the number a "Hi" from your own phone.',
+  ] },
   { id: 'office-job', title: 'Open, change or cancel a job', roles: ['admin', 'management', ...CEO], steps: [
     'Jobs → "New job": the store, the fault, the technician and the date.',
     'Open a job to change anything; every change is written on the job and the technician is told.',

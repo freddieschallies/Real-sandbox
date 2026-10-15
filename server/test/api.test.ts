@@ -22,6 +22,7 @@ import { callCentreMail, fakeImap, type FakeInbox } from './fakeImap.ts';
 import { locateStores } from '../src/storePins.ts';
 import type { Geocoder } from '../src/geocoder.ts';
 import { xlsx } from './xlsx.ts';
+import { createHmac } from 'node:crypto';
 
 const ADMIN_URL = process.env.TEST_DATABASE_ADMIN_URL ?? 'postgres://postgres@localhost:5433/postgres?host=/tmp';
 const TEST_DB = 'realsandbox_test';
@@ -2964,4 +2965,131 @@ test('vehicles page: who drives what, fuel, km and trips not allowed, each part 
   await db.query("INSERT INTO phone_menus (level, pinned) VALUES ('director', ARRAY['today', 'handovers']) ON CONFLICT (company_id, level) DO UPDATE SET pinned = EXCLUDED.pinned");
   assert.deepEqual((await call('director', 'GET', '/me/phone-menu')).body.pinned, ['today', 'vehicles']);
   await db.query("DELETE FROM phone_menus WHERE level = 'director'");
+});
+
+test('whatsapp, the easy way: the phone (QR once) or an official number; the WhatsApp tab reads every chat and the office replies', async () => {
+  const bridge = (method: 'GET' | 'POST', url: string, body?: object) => app.inject({ method, url, payload: body, headers: { 'x-bridge-key': BRIDGE } }).then(r => ({ status: r.statusCode, body: r.json() }));
+  // Linked earlier (the breakdowns test): the set-up shows what is left. Only the CEO sets it up.
+  assert.equal((await call('admin', 'GET', '/whatsapp/setup')).status, 403);
+  let su = (await call('creator', 'GET', '/whatsapp/setup')).body;
+  assert.equal(su.mode, 'phone');
+  assert.equal(su.connected, true);
+  assert.equal(su.official.available, false, 'not signed up with Meta on this server');
+  assert.deepEqual(su.steps.map((s: { key: string; done: boolean }) => [s.key, s.done]), [['phone', true], ['link', true], ['group', true], ['test', false]]);
+  assert.equal((await call('creator', 'POST', '/whatsapp/mode', { mode: 'official' })).status, 409, 'disconnect first');
+  // The test: a line in the group; the CEO says it showed.
+  su = (await call('creator', 'POST', '/whatsapp/test')).body;
+  assert.ok(su.testSentAt);
+  const out = (await bridge('GET', `/internal/whatsapp/outbox?companyId=${ids.company}`)).body;
+  const testPost = out.posts.find((p: { text: string }) => /Real Sandbox is connected/.test(p.text));
+  assert.ok(testPost);
+  await bridge('POST', '/internal/whatsapp/sent', { companyId: ids.company, id: testPost.id, waId: 'WA-TEST-1' });
+  su = (await call('creator', 'POST', '/whatsapp/test/ok')).body;
+  assert.equal(su.done, true);
+  assert.equal((await call('creator', 'GET', '/setup')).body.steps.find((s: { key: string }) => s.key === 'whatsapp').done, true);
+
+  // Every chat comes in: a person writes the app's number directly.
+  const dm = await bridge('POST', '/internal/whatsapp/message', { companyId: ids.company, id: 'WA-DM-1', chatJid: '27721234567@s.whatsapp.net', chatName: 'Sipho (Spar)', isGroup: false,
+    at: new Date().toISOString(), senderName: 'Sipho (Spar)', sender: '27721234567', text: 'Hi, our walk-in freezer at the store is warm' });
+  assert.equal(dm.status, 200);
+  assert.equal(dm.body.skipped, 'not the breakdowns group', 'a direct chat is not read as a breakdown by itself');
+  assert.equal((await call('tech', 'GET', '/whatsapp/chats')).status, 403);
+  const chats = (await call('admin', 'GET', '/whatsapp/chats')).body;
+  const sipho = chats.chats.find((c: { name: string }) => c.name === 'Sipho (Spar)');
+  assert.equal(sipho.unread, 1);
+  const group = chats.chats.find((c: { breakdowns_group: boolean }) => c.breakdowns_group);
+  assert.ok(group, 'the breakdowns group is a chat too');
+  assert.ok((await call('admin', 'GET', `/whatsapp/chats/${group.id}/messages`)).body.messages.some((m: { text: string; from_me: boolean }) => m.from_me && /Real Sandbox is connected/.test(m.text)), "the app's own post shows in it");
+  const msgs = (await call('admin', 'GET', `/whatsapp/chats/${sipho.id}/messages`)).body;
+  assert.equal(msgs.messages.length, 1);
+  assert.equal((await call('admin', 'GET', '/whatsapp/chats')).body.chats.find((c: { id: string }) => c.id === sipho.id).unread, 0, 'read');
+  // The office replies; the link sends it; its echo is not kept twice.
+  assert.equal((await call('admin', 'POST', `/whatsapp/chats/${sipho.id}/messages`, { text: '' })).status, 400);
+  const reply = await call('admin', 'POST', `/whatsapp/chats/${sipho.id}/messages`, { text: 'We are sending a technician now' });
+  assert.equal(reply.status, 200);
+  const replies = (await bridge('GET', `/internal/whatsapp/outbox?companyId=${ids.company}`)).body.replies;
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].jid, '27721234567@s.whatsapp.net');
+  assert.match(replies[0].text, /We are sending a technician now\n— admin/);
+  await bridge('POST', '/internal/whatsapp/sent', { companyId: ids.company, id: replies[0].id, kind: 'reply', waId: 'WA-R-1' });
+  await bridge('POST', '/internal/whatsapp/message', { companyId: ids.company, id: 'WA-R-1', chatJid: '27721234567@s.whatsapp.net', fromMe: true, at: new Date().toISOString(), text: replies[0].text });
+  const after = (await call('admin', 'GET', `/whatsapp/chats/${sipho.id}/messages`)).body.messages;
+  assert.deepEqual(after.map((m: { from_me: boolean; status: string }) => [m.from_me, m.status]), [[false, 'received'], [true, 'sent']]);
+  assert.equal((await bridge('GET', `/internal/whatsapp/outbox?companyId=${ids.company}`)).body.replies.length, 0);
+  // It is a breakdown: one tap puts it in the queue.
+  const bd = await call('admin', 'POST', `/whatsapp/messages/${msgs.messages[0].id}/breakdown`);
+  assert.ok(bd.body.breakdownId);
+  assert.equal((await call('admin', 'POST', `/whatsapp/messages/${msgs.messages[0].id}/breakdown`)).body.breakdownId, bd.body.breakdownId, 'once');
+
+  // Disconnect, then "Show the code": the link service sees the company wants a QR code.
+  assert.equal((await app.inject({ method: 'GET', url: '/internal/whatsapp/companies', headers: { 'x-bridge-key': 'nope' } })).statusCode, 401);
+  su = (await call('creator', 'POST', '/whatsapp/disconnect')).body;
+  assert.equal(su.connected, false);
+  assert.equal((await bridge('GET', '/internal/whatsapp/companies')).body.companies.some((c: { companyId: string }) => c.companyId === ids.company), false);
+  su = (await call('creator', 'POST', '/whatsapp/link')).body;
+  assert.equal(su.state, 'starting');
+  const want = (await bridge('GET', '/internal/whatsapp/companies')).body.companies.find((c: { companyId: string }) => c.companyId === ids.company);
+  assert.ok(want.requestedAt);
+  await bridge('POST', '/internal/whatsapp/status', { companyId: ids.company, state: 'waiting_for_scan', qrSvg: '<svg>qr</svg>' });
+  assert.equal((await call('creator', 'GET', '/whatsapp/setup')).body.qrSvg, '<svg>qr</svg>');
+  // Unlinked on the phone: it stops until the CEO links again.
+  await bridge('POST', '/internal/whatsapp/status', { companyId: ids.company, state: 'logged_out' });
+  assert.equal((await call('creator', 'GET', '/whatsapp/setup')).body.wanted, false);
+  await call('creator', 'POST', '/whatsapp/disconnect');
+
+  // The official way, on a server signed up with Meta (WhatsApp's side is pretended here).
+  const META = { appId: '1111', appSecret: 's'.repeat(32), configId: '2222', verifyToken: 'verify-me', graph: 'https://graph.test/v21.0' };
+  const calls: string[] = [];
+  const fake = (async (url: string | URL, init?: RequestInit) => {
+    const u = String(url);
+    calls.push(`${init?.method ?? 'GET'} ${u.replace(META.graph, '')}`);
+    const json = (b: object) => new Response(JSON.stringify(b), { status: 200, headers: { 'content-type': 'application/json' } });
+    if (u.includes('/oauth/access_token')) return u.includes('code=GOOD-CODE-123') ? json({ access_token: 'TOKEN-1' }) : new Response(JSON.stringify({ error: { message: 'Invalid code' } }), { status: 400 });
+    if (u.endsWith('/subscribed_apps')) return json({ success: true });
+    if (u.endsWith('/register')) return json({ success: true });
+    if (u.includes('fields=display_phone_number')) return json({ display_phone_number: '+27 87 555 0101', verified_name: 'ZSP Service' });
+    if (u.endsWith('/messages')) return json({ messages: [{ id: 'wamid.OUT1' }] });
+    return new Response('{}', { status: 404 });
+  }) as typeof fetch;
+  const app2 = await buildApp(appDb, { jwtSecret: 'x'.repeat(40), mailer: async () => {}, intake: { reader: rulesReader, bridgeKey: BRIDGE }, whatsapp: { meta: META, fetch: fake } });
+  const call2 = (who: string, method: 'GET' | 'POST', url: string, body?: object) => app2.inject({ method, url, payload: body, headers: { authorization: `Bearer ${tokens[who]}` } }).then(r => ({ status: r.statusCode, body: r.json() }));
+  try {
+    assert.equal((await call2('creator', 'GET', '/whatsapp/setup')).body.official.available, true);
+    assert.equal((await call2('creator', 'POST', '/whatsapp/mode', { mode: 'official' })).status, 200);
+    const bad = await call2('creator', 'POST', '/whatsapp/official', { code: 'BAD-CODE-123', phoneNumberId: '1234567890', wabaId: '5555555' });
+    assert.equal(bad.status, 400);
+    assert.match(bad.body.reasons[0], /Invalid code/);
+    su = (await call2('creator', 'POST', '/whatsapp/official', { code: 'GOOD-CODE-123', phoneNumberId: '1234567890', wabaId: '5555555' })).body;
+    assert.equal(su.connected, true);
+    assert.equal(su.number, '27875550101');
+    assert.ok(calls.includes('POST /5555555/subscribed_apps') && calls.includes('POST /1234567890/register'));
+    assert.ok(!JSON.stringify((await db.query('SELECT official_token_enc FROM whatsapp_link')).rows).includes('TOKEN-1'), 'the key is kept scrambled');
+    // WhatsApp checks the webhook, then sends a message: only when it is really from WhatsApp.
+    assert.equal((await app2.inject({ method: 'GET', url: '/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=verify-me&hub.challenge=42' })).body, '42');
+    assert.equal((await app2.inject({ method: 'GET', url: '/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=nope&hub.challenge=42' })).statusCode, 403);
+    const hook = { object: 'whatsapp_business_account', entry: [{ id: '5555555', changes: [{ field: 'messages', value: { messaging_product: 'whatsapp', metadata: { phone_number_id: '1234567890' },
+      contacts: [{ wa_id: '27831112222', profile: { name: 'Thandi (Pick n Pay)' } }], messages: [{ from: '27831112222', id: 'wamid.IN1', timestamp: String(Math.floor(Date.now() / 1000)), type: 'text', text: { body: 'FreshMart Meerensee ice machine not working' } }] } }] }] };
+    const raw = JSON.stringify(hook);
+    const sig = `sha256=${createHmac('sha256', META.appSecret).update(raw).digest('hex')}`;
+    assert.equal((await app2.inject({ method: 'POST', url: '/webhooks/whatsapp', payload: raw, headers: { 'content-type': 'application/json', 'x-hub-signature-256': 'sha256=00' } })).statusCode, 401);
+    assert.equal((await app2.inject({ method: 'POST', url: '/webhooks/whatsapp', payload: raw, headers: { 'content-type': 'application/json', 'x-hub-signature-256': sig } })).statusCode, 200);
+    assert.equal((await app2.inject({ method: 'POST', url: '/webhooks/whatsapp', payload: raw, headers: { 'content-type': 'application/json', 'x-hub-signature-256': sig } })).statusCode, 200, 'the same message twice is kept once');
+    const thandi = (await call2('admin', 'GET', '/whatsapp/chats')).body.chats.find((c: { name: string }) => c.name === 'Thandi (Pick n Pay)');
+    assert.equal(thandi.unread, 1);
+    assert.equal(thandi.mayWrite, true);
+    const tm = (await call2('admin', 'GET', `/whatsapp/chats/${thandi.id}/messages`)).body.messages;
+    assert.equal(tm.length, 1);
+    assert.ok(tm[0].breakdown_id, 'messages to the official number come into Breakdowns');
+    assert.equal((await call2('creator', 'GET', '/whatsapp/setup')).body.done, true, 'the first message in is the test');
+    // A reply goes straight out through WhatsApp; after 24 hours WhatsApp does not allow free text.
+    assert.equal((await call2('admin', 'POST', `/whatsapp/chats/${thandi.id}/messages`, { text: 'On our way' })).status, 200);
+    assert.ok(calls.includes('POST /1234567890/messages'));
+    assert.equal((await db.query("SELECT status, wa_id FROM wa_messages WHERE text LIKE 'On our way%'")).rows[0].wa_id, 'wamid.OUT1');
+    await db.query("UPDATE wa_chats SET last_in_at = now() - interval '2 days' WHERE id = $1", [thandi.id]);
+    const late = await call2('admin', 'POST', `/whatsapp/chats/${thandi.id}/messages`, { text: 'Are you there?' });
+    assert.equal(late.status, 409);
+    assert.match(late.body.reasons[0], /24 hours/);
+    await call2('creator', 'POST', '/whatsapp/disconnect');
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM wa_official_numbers WHERE phone_number_id = '1234567890'")).rows[0].n, 0);
+  } finally { await app2.close(); }
 });

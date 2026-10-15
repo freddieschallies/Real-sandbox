@@ -153,6 +153,16 @@ export class DemoBreakdowns {
     return good({ id, status: 'new' });
   }
 
+  /** A message from a WhatsApp chat (not the group) made into a breakdown in the WhatsApp tab. */
+  fromChat(body: string, senderName: string | null, sender: string | null, at: string): string {
+    const stores = this.src.stores();
+    const r = readByRules('', body, stores);
+    const id = `bd-${++this.s.seq}`;
+    this.s.items.push({ id, channel: 'whatsapp', received_at: at, sender_name: senderName, sender, subject: null, body, photo_ids: [], attachments: [], kind: r.kind === 'other' ? 'breakdown' : r.kind,
+      read_by: 'rules', store_id: r.storeId, store_text: r.storeText, fault: r.fault ?? body.slice(0, 120), call_ref: r.callRef, urgent: r.urgent, status: 'new', job_id: null, handled_by: null, handled_at: null, note: null });
+    return id;
+  }
+
   /** The test drive's "a breakdown comes in" buttons. */
   simulate(channel: 'email' | 'whatsapp'): Res {
     const stores = this.src.stores();

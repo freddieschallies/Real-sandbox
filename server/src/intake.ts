@@ -41,7 +41,7 @@ export async function storesOf(c: Q): Promise<StoreRef[]> {
 }
 
 /** Queues a line for the app's WhatsApp number to post in the breakdowns group (only once a group is chosen). */
-export async function queuePost(c: Q, reason: 'new' | 'logged' | 'merged' | 'on_site' | 'done', text: string, ids: { breakdownId?: string | null; jobId?: string | null } = {}) {
+export async function queuePost(c: Q, reason: 'new' | 'logged' | 'merged' | 'on_site' | 'done' | 'test', text: string, ids: { breakdownId?: string | null; jobId?: string | null } = {}) {
   const link = (await c.query('SELECT group_jid FROM whatsapp_link')).rows[0];
   if (!link?.group_jid) return false;
   await c.query('INSERT INTO group_posts (text, reason, breakdown_id, job_id) VALUES ($1, $2, $3, $4)', [text, reason, ids.breakdownId ?? null, ids.jobId ?? null]);

@@ -37,7 +37,13 @@ services:
       GOOGLE_MAPS_KEY: ${GOOGLE_MAPS_KEY:-}
       NOMINATIM_EMAIL: ${NOMINATIM_EMAIL:-}
       # The WhatsApp link (below) signs in to the server with this key.
-      WA_BRIDGE_KEY: ${WA_BRIDGE_KEY:-}
+      WA_BRIDGE_KEY: ${WA_BRIDGE_KEY:?set WA_BRIDGE_KEY in .env (openssl rand -hex 24)}
+      # The official WhatsApp number option: Real Sandbox's own sign-up with Meta (see OFFICE-SERVER.md).
+      # Empty: companies use their own phone (scan a QR code), which always works.
+      META_APP_ID: ${META_APP_ID:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      META_CONFIG_ID: ${META_CONFIG_ID:-}
+      WA_VERIFY_TOKEN: ${WA_VERIFY_TOKEN:-}
     volumes:
       - uploads:/data/uploads
     ports:
@@ -70,9 +76,8 @@ services:
           sleep 30
         done
 
-  # The company's own WhatsApp number in the breakdowns group (see whatsapp-bridge/bridge.mjs).
-  # Start with:  docker compose --env-file .env --profile whatsapp up -d
-  # then scan the QR code under Settings → Breakdowns with the ZSP phone.
+  # The WhatsApp link for every company that chose "our own phone" (see whatsapp-bridge/bridge.mjs).
+  # Always running; nothing to do per company: the CEO presses "Show the code" in the app and scans it.
   whatsapp:
     build: ../whatsapp-bridge
     restart: unless-stopped
@@ -80,11 +85,9 @@ services:
       - api
     environment:
       API_URL: http://api:8080
-      WA_BRIDGE_KEY: ${WA_BRIDGE_KEY:?set WA_BRIDGE_KEY in .env}
-      COMPANY_ID: ${WA_COMPANY_ID:?set WA_COMPANY_ID in .env (Settings → Breakdowns shows it)}
+      WA_BRIDGE_KEY: ${WA_BRIDGE_KEY:?set WA_BRIDGE_KEY in .env (openssl rand -hex 24)}
     volumes:
       - wa-auth:/data
-    profiles: ["whatsapp"]
 
   # Secure link so phones can reach the server from anywhere, with no open ports on the office router.
   tunnel:

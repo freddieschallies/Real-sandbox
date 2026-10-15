@@ -15,6 +15,8 @@ export const SETUP_STEPS = [
   { key: 'customers', title: 'Customers and stores', why: 'Who you work for and where: from a spreadsheet or one by one.', optional: false },
   { key: 'stock', title: 'Stock list', why: 'The parts you keep, so technicians book them out and invoices price them.', optional: true },
   { key: 'vehicles', title: 'Vehicles', why: 'Your vehicles with their QR codes, for the fleet, fuel and travel.', optional: true },
+  { key: 'whatsapp', title: 'WhatsApp', why: 'Breakdowns from your WhatsApp group (or to your WhatsApp number) come into the app, and the office chats from the app.', optional: true },
+  { key: 'pastel', title: 'Sage Pastel', why: 'Invoices, credit notes and supplier invoices go to Pastel without typing them again.', optional: true },
 ] as const;
 export type SetupKey = (typeof SETUP_STEPS)[number]['key'];
 export interface SetupStep { key: SetupKey; title: string; why: string; optional: boolean; done: boolean; detail: string }
@@ -74,6 +76,7 @@ export interface SetupCounts {
   logo: boolean; letterhead: boolean; departments: number; departmentsChecked: boolean;
   people: number; byRole: Record<string, number>; withEmail: number; withLogin: number; noEmail: number;
   rates: Record<string, number>; clients: number; stores: number; stock: number; vehicles: number; skipped: string[];
+  whatsapp?: { done: boolean; detail: string }; pastel?: { done: boolean; detail: string };
 }
 
 /** Each step, done or not, with what there is so far. */
@@ -92,6 +95,8 @@ export function setupSteps(n: SetupCounts): SetupStep[] {
     customers: { done: n.clients > 0 && n.stores > 0, detail: `${n.clients} customer${n.clients === 1 ? '' : 's'}, ${n.stores} store${n.stores === 1 ? '' : 's'}` },
     stock: { done: n.stock > 0 || n.skipped.includes('stock'), detail: n.stock ? `${n.stock} items` : n.skipped.includes('stock') ? 'Skipped' : 'No items yet' },
     vehicles: { done: n.vehicles > 0 || n.skipped.includes('vehicles'), detail: n.vehicles ? `${n.vehicles} vehicles` : n.skipped.includes('vehicles') ? 'Skipped' : 'No vehicles yet' },
+    whatsapp: n.whatsapp?.done ? n.whatsapp : n.skipped.includes('whatsapp') ? { done: true, detail: 'Skipped' } : n.whatsapp ?? { done: false, detail: 'Not connected yet' },
+    pastel: n.pastel?.done ? n.pastel : n.skipped.includes('pastel') ? { done: true, detail: 'Skipped' } : n.pastel ?? { done: false, detail: 'Not set up yet' },
   };
   return SETUP_STEPS.map(s => ({ ...s, ...state[s.key] }));
 }

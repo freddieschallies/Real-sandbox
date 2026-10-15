@@ -43,11 +43,13 @@ import { registerReportRoutes } from './routes/reports.ts';
 import { registerRepairRoutes } from './routes/repairs.ts';
 import { registerToolStoreRoutes } from './routes/toolStore.ts';
 import { registerBreakdownRoutes, type IntakeOptions } from './routes/breakdowns.ts';
+import { registerWhatsAppRoutes } from './routes/whatsapp.ts';
+import type { Fetch, MetaConfig } from './whatsapp.ts';
 import { registerCustomerImportRoutes } from './routes/customers.ts';
 import { breakdownReaderFromEnv } from './breakdownReader.ts';
 
 /** db must connect as the app's own database role (no superuser, no row-level-security bypass). */
-export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boolean; corsOrigins?: string[]; invoiceReader?: InvoiceReader | null; mailer?: Mailer | null; intake?: Partial<IntakeOptions> }) {
+export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boolean; corsOrigins?: string[]; invoiceReader?: InvoiceReader | null; mailer?: Mailer | null; intake?: Partial<IntakeOptions>; whatsapp?: { fetch?: Fetch; meta?: MetaConfig | null } }) {
   if (!opts.jwtSecret || opts.jwtSecret.length < 32) throw new Error('JWT secret must be at least 32 characters');
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 1_000_000, trustProxy: true });
   registerErrors(app);
@@ -80,6 +82,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerLoginRoutes(app);
   registerCustomerImportRoutes(app);
   registerBreakdownRoutes(app, db, { reader: breakdownReaderFromEnv(), ...opts.intake });
+  registerWhatsAppRoutes(app, db, { reader: opts.intake?.reader ?? breakdownReaderFromEnv(), bridgeKey: opts.intake?.bridgeKey, ...opts.whatsapp });
   registerStaffRoutes(app);
   registerDepartmentRoutes(app);
   registerTimesheetRoutes(app);

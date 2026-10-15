@@ -3,6 +3,7 @@
 // the call log number. One tap opens the job already filled in: check it, pick the technician. The
 // same call from email and WhatsApp becomes one job. Nothing leaves the queue until someone logs it,
 // adds it to a job already open, or marks it "not a job".
+import { WhatsAppSetup } from '../whatsapp/WhatsAppSetup.tsx';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Image, Platform, Pressable, Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
@@ -284,10 +285,6 @@ export function BreakdownSettings() {
     if (r?.status === 200) { setOk(`${address.trim()} is connected: new emails come in within a minute.`); setAddress(''); setPass(''); setAdding(false); load(); } else setErr(reasons(r));
   };
   const remove = async (id: string) => { const r = await s.ask({ method: 'DELETE', path: `/breakdowns/inboxes/${id}` }); if (r && r.status < 300) load(); else setErr(reasons(r)); };
-  const group = async (jid: string) => { const r = await s.ask({ method: 'PUT', path: '/breakdowns/whatsapp/group', json: { jid } }); if (r?.status === 200) load(); else setErr(reasons(r)); };
-  const poGroup = async (jid: string | null) => { const r = await s.ask({ method: 'PUT', path: '/breakdowns/whatsapp/group', json: { kind: 'pos', jid } }); if (r?.status === 200) load(); else setErr(reasons(r)); };
-  const w = d.whatsapp;
-  const qrUri = w.qr_svg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(w.qr_svg)}` : null;
   return (
     <>
       <Heading>Breakdowns: email and WhatsApp</Heading>
@@ -320,29 +317,7 @@ export function BreakdownSettings() {
         )}
       </Card>
 
-      <Card>
-        <Label>The app's WhatsApp number</Label>
-        {w.state === 'connected' ? (
-          <>
-            <Text style={st.body}>Linked{w.number ? ` as +${w.number}` : ''}{w.running === false ? ': but the link has not reported in for a while (is it running on the server?)' : '.'}</Text>
-            <Select label="The breakdowns group" value={w.group_jid ?? null} placeholder="Choose the group" options={w.groups.map(g => ({ value: g.jid, label: g.name }))} onChange={group} />
-            {!w.groups.length ? <Text style={st.small}>The number is in no groups yet: add it to the breakdowns group on a phone.</Text> : null}
-            <Select label="The purchase orders group (optional)" value={w.po_group_jid ?? null} placeholder="None" options={[{ value: '', label: 'None' }, ...w.groups.filter(g => g.jid !== w.group_jid).map(g => ({ value: g.jid, label: g.name }))]} onChange={v => poGroup(v || null)} />
-            <Text style={st.small}>A PO made outside the app (in Pastel) and posted in this group is read and added by itself: on its job, for the job's technician, with the stock items, like the app's own.</Text>
-          </>
-        ) : w.state === 'waiting_for_scan' && qrUri ? (
-          <>
-            <Text style={st.body}>On the ZSP phone: WhatsApp → ⋮ → Linked devices → Link a device, and scan this code.</Text>
-            {Platform.OS === 'web' ? <Image source={{ uri: qrUri }} style={{ width: 264, height: 264, backgroundColor: '#FFF', borderRadius: 8 }} accessibilityLabel="QR code to link the WhatsApp number" /> : <Text style={st.small}>Open this screen on a computer to scan the code.</Text>}
-          </>
-        ) : (
-          <>
-            <Text style={st.body}>{w.state === 'logged_out' ? 'The number was unlinked on the phone.' : 'Not linked yet.'}</Text>
-            <Text style={st.small}>The WhatsApp link runs next to the server ("whatsapp" in the server set-up). Once it runs, a QR code shows here to scan with the ZSP phone.{d.companyId ? ` Its company id: ${d.companyId}` : ''}</Text>
-          </>
-        )}
-        <Text style={st.small}>Use a phone and SIM only for this. It is not WhatsApp's official business system (that one cannot join an existing group), so WhatsApp could block the number: if that happens, the group and the email side keep working.</Text>
-      </Card>
+      <WhatsAppSetup changed={load} />
 
       <Card>
         <Label>What the app posts in the group</Label>

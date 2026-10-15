@@ -42,6 +42,7 @@ export const PLACE_WORDS: Record<string, string> = {
   profit: 'margin money made cost profit per job',
   accounts: 'pastel rates prices price list labour rate call-out mark-up markup company details codes customer codes line codes batches who did what',
   flags: 'alerts warnings problems',
+  whatsapp: 'whatsapp chats chat messages reply group groups',
   map: 'team map live tracking where gps location',
   vans: 'van stock vans bill of quantities',
   departments: 'teams department managers',

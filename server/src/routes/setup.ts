@@ -34,6 +34,20 @@ export async function numbersOf(c: Q) {
   return out;
 }
 
+/** WhatsApp on the checklist: connected, the group chosen (the phone way) and the test done. */
+async function whatsappStep(c: Q) {
+  const l = (await c.query('SELECT mode, state, group_name, number, test_ok_at FROM whatsapp_link')).rows[0];
+  if (!l || l.state !== 'connected') return { done: false, detail: l?.state === 'waiting_for_scan' ? 'Waiting for the QR code to be scanned' : 'Not connected yet' };
+  const how = l.mode === 'official' ? `Official number +${l.number ?? ''}` : `Linked${l.number ? ` as +${l.number}` : ''}${l.group_name ? ` · ${l.group_name}` : ''}`;
+  if (l.mode === 'phone' && !l.group_name) return { done: false, detail: `${how}: choose the breakdowns group` };
+  return { done: !!l.test_ok_at, detail: l.test_ok_at ? how : `${how}: send the test` };
+}
+/** Pastel on the checklist (filled in by the Pastel set-up). */
+async function pastelStep(c: Q) {
+  const r = (await c.query('SELECT setup_done_at FROM pastel_settings')).rows[0];
+  return r?.setup_done_at ? { done: true, detail: 'Set up and tried' } : { done: false, detail: 'Not set up yet' };
+}
+
 /** The checklist, with what there is so far. */
 export async function setupOf(c: Q, companyId: string) {
   const st = await stateOf(c);
@@ -54,6 +68,7 @@ export async function setupOf(c: Q, companyId: string) {
     withEmail: people.filter(p => p.email).length, withLogin: people.filter(p => ['on', 'code', 'locked'].includes(p.login)).length, noEmail: people.filter(p => !p.email).length,
     rates: await companyRates(c), clients: await one('SELECT count(*)::int AS n FROM clients'), stores: await one('SELECT count(*)::int AS n FROM stores'),
     stock: await one('SELECT count(*)::int AS n FROM stock_items WHERE active'), vehicles: await one('SELECT count(*)::int AS n FROM vehicles WHERE active'), skipped: st.skipped ?? [],
+    whatsapp: await whatsappStep(c), pastel: await pastelStep(c),
   });
   const company = (await c.query('SELECT name FROM companies WHERE id = $1', [companyId])).rows[0]?.name ?? '';
   return { company, steps, done: steps.filter(s => s.done).length, total: steps.length, dismissed: !!st.dismissed_at, people };
@@ -73,7 +88,7 @@ export function registerSetupRoutes(app: FastifyInstance) {
   // Tick the departments as right; skip (or un-skip) the stock list or the vehicles; put the page away.
   app.put('/setup', async req => {
     ceo(req);
-    const b = parse(z.object({ departmentsChecked: z.boolean().optional(), skip: z.enum(['stock', 'vehicles']).optional(), unskip: z.enum(['stock', 'vehicles']).optional(), dismissed: z.boolean().optional() }), req.body);
+    const b = parse(z.object({ departmentsChecked: z.boolean().optional(), skip: z.enum(['stock', 'vehicles', 'whatsapp', 'pastel']).optional(), unskip: z.enum(['stock', 'vehicles', 'whatsapp', 'pastel']).optional(), dismissed: z.boolean().optional() }), req.body);
     return tx(req.db, async c => {
       const cur = await stateOf(c);
       const skipped = new Set<string>(cur.skipped ?? []);

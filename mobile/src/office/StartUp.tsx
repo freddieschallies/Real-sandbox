@@ -10,6 +10,7 @@ import { CompanyForm, LogoPicker, useBooks } from './Books.tsx';
 import { LetterheadSettings } from '../letterhead.tsx';
 import { waNumber } from './Logins.tsx';
 import { NumbersForm } from './Numbers.tsx';
+import { WhatsAppSetup } from '../whatsapp/WhatsAppSetup.tsx';
 
 type Go = 'departments' | 'accounts' | 'stores' | 'importcustomers' | 'newstore' | 'people';
 interface Step { key: string; title: string; why: string; optional: boolean; done: boolean; detail: string }
@@ -85,6 +86,11 @@ export function StartUp({ go, setup }: { go: (where: Go) => void; setup: ReturnT
                   <Button label="Bring them in from a spreadsheet" onPress={() => go('importcustomers')} style={{ flexGrow: 1 }} />
                   <Button label="Add one store" kind="secondary" onPress={() => go('newstore')} style={{ flexGrow: 1 }} />
                 </View>
+              ) : null}
+              {x.key === 'whatsapp' ? <WhatsAppSetup changed={load} /> : null}
+              {x.key === 'pastel' ? <Button label="Set up Pastel (Accounts → Pastel)" onPress={() => go('accounts')} /> : null}
+              {(x.key === 'whatsapp' || x.key === 'pastel') && !(x.done && x.detail !== 'Skipped') ? (
+                <Button label={x.detail === 'Skipped' ? 'Don\'t skip it' : 'Skip this for now'} kind="quiet" onPress={() => put(x.detail === 'Skipped' ? { unskip: x.key } : { skip: x.key })} />
               ) : null}
               {x.key === 'stock' || x.key === 'vehicles' ? (
                 <>

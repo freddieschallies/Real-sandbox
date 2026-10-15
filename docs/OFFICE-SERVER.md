@@ -180,14 +180,35 @@ Breakdown emails and messages in the WhatsApp breakdowns group come into the off
 3. The server reads new emails every minute. It never deletes, moves or marks emails as read. To stop it, delete the app password in Google (or Disconnect in Settings).
 4. Optional: `ANTHROPIC_API_KEY` in `.env` lets AI read the store, fault and call log number; without it simple rules do (the office checks either way).
 
-**WhatsApp (the company's own number)**
-1. A cheap Android phone with its own SIM, used only for this. Install WhatsApp on it and add that number to the breakdowns group.
-2. In `.env`: `WA_BRIDGE_KEY` (make one with `openssl rand -hex 24`) and `WA_COMPANY_ID` (Settings → Breakdowns shows the company id).
-3. Start it: `docker compose --env-file .env --profile whatsapp up -d --build`
-4. Settings → Breakdowns shows a QR code: on the ZSP phone, WhatsApp → ⋮ → Linked devices → Link a device → scan it.
-5. Choose the breakdowns group in Settings, and what the app posts there.
+**WhatsApp: each company chooses when it sets up (nothing to do on the server per company)**
 
-This is not WhatsApp's official business system (that one cannot join an existing group), so WhatsApp could block the number. If that happens, the group itself keeps working, email keeps coming in, and you link a new number the same way.
+The CEO opens Start-up → WhatsApp (or Settings → WhatsApp) and picks one:
+
+- **Our own phone** (works in the existing breakdowns group): a cheap Android phone with its own SIM, used only
+  for this, with WhatsApp on it and the number added to the breakdowns group. In the app: "Show the code", then on
+  that phone WhatsApp → ⋮ → Linked devices → Link a device → scan. Choose the group, "Send a test", done.
+  The link service (`whatsapp` in docker-compose) runs for every company on this server; it only needs
+  `WA_BRIDGE_KEY` in `.env` once, at install. This is not WhatsApp's official system (that one cannot join an
+  existing group), so WhatsApp could block a number: the group itself keeps working, email keeps coming in, and
+  the company links a new number the same way.
+- **Official WhatsApp Business number** (no phone; stores message the number directly, no groups): the CEO taps
+  "Connect with WhatsApp", Meta's own window opens, they choose or add a number and confirm it with a code by SMS
+  or a call. It only shows once Real Sandbox is signed up with Meta (below); until then it says "coming soon".
+
+Either way every chat shows in the office's **WhatsApp** tab (read and reply in the app).
+
+**Once, for the official option: Real Sandbox signs up with Meta as a "tech provider"**
+1. A Meta (Facebook) business account for Real Sandbox, and **business verification** (company documents; takes days).
+2. developers.facebook.com → Create app → type **Business** → add the **WhatsApp** product.
+3. WhatsApp → Configuration → Webhook: URL `https://<your server address>/webhooks/whatsapp`, a verify token you
+   make up (put the same in `WA_VERIFY_TOKEN`), and subscribe to **messages**.
+4. Facebook Login for Business → Configurations → create one for **WhatsApp Embedded Signup**; copy its id into
+   `META_CONFIG_ID`. Add your server's web address under the app's allowed domains.
+5. App settings → Basic: copy the App ID and App Secret into `META_APP_ID` and `META_APP_SECRET`.
+6. App Review: ask for `whatsapp_business_management` and `whatsapp_business_messaging` (advanced access), then
+   switch the app to Live. Restart: `docker compose --env-file .env up -d`.
+Meta charges per message the business starts (templates); replies within 24 hours of the customer's message are
+free. An official number can only write freely within 24 hours of the person's last message.
 
 ## Customers and store pins
 

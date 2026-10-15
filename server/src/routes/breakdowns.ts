@@ -4,6 +4,7 @@
 // job". The CEO connects the Gmail inboxes and the app's WhatsApp number, and chooses what the app
 // posts in the group. The WhatsApp link (a separate service) talks to /internal/whatsapp/*.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { keepChatMessage, keepOwnLine } from '../whatsapp.ts';
 import { z } from 'zod';
 import { timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db.ts';
@@ -223,7 +224,7 @@ export function registerBreakdownRoutes(app: FastifyInstance, db: Db, o: IntakeO
   app.post('/internal/whatsapp/status', async req => {
     await bridge(req);
     const b = parse(z.object({
-      companyId: Uuid, state: z.enum(['waiting_for_scan', 'connected', 'logged_out']), qrSvg: z.string().max(200_000).nullish(), number: z.string().max(40).nullish(),
+      companyId: Uuid, state: z.enum(['waiting_for_scan', 'qr_expired', 'connected', 'logged_out']), qrSvg: z.string().max(200_000).nullish(), number: z.string().max(40).nullish(),
       groups: z.array(z.object({ jid: z.string(), name: z.string() })).max(500).optional(),
     }), req.body);
     await req.db.query(
@@ -231,6 +232,8 @@ export function registerBreakdownRoutes(app: FastifyInstance, db: Db, o: IntakeO
        ON CONFLICT (company_id) DO UPDATE SET state = $1, qr_svg = $2, number = COALESCE($3, whatsapp_link.number),
          groups = COALESCE($4::jsonb, whatsapp_link.groups), seen_at = now(), updated_at = now()`,
       [b.state, b.state === 'waiting_for_scan' ? b.qrSvg ?? null : null, b.number ?? null, b.groups ? JSON.stringify(b.groups) : null]);
+    // Unlinked on the phone: the company links again from Settings when it wants to (a fresh QR code then).
+    if (b.state === 'logged_out') await req.db.query("UPDATE whatsapp_link SET wanted = false, number = NULL, groups = '[]'");
     const link = (await req.db.query('SELECT group_jid, po_group_jid FROM whatsapp_link')).rows[0];
     return { groupJid: link?.group_jid ?? null, poGroupJid: link?.po_group_jid ?? null };
   });
@@ -238,11 +241,23 @@ export function registerBreakdownRoutes(app: FastifyInstance, db: Db, o: IntakeO
   app.post('/internal/whatsapp/message', { bodyLimit: 40_000_000 }, async req => {
     const companyId = await bridge(req);
     const b = parse(z.object({
-      companyId: Uuid, id: z.string().min(3).max(200), groupJid: z.string(), at: Iso, senderName: z.string().max(200).nullish(), sender: z.string().max(60).nullish(),
+      companyId: Uuid, id: z.string().min(3).max(200), groupJid: z.string().optional(), chatJid: z.string().max(200).optional(), chatName: z.string().max(200).nullish(),
+      isGroup: z.boolean().optional(), fromMe: z.boolean().default(false), at: Iso, senderName: z.string().max(200).nullish(), sender: z.string().max(60).nullish(),
       text: z.string().max(20_000).default(''), images: z.array(z.object({ mime: z.string(), base64: z.string().max(6_000_000) })).max(6).default([]),
       documents: z.array(z.object({ mime: z.string(), base64: z.string().max(14_000_000), name: z.string().max(300).nullish() })).max(3).default([]),
+      other: z.string().max(200).nullish(),
     }), req.body);
+    const chatJid = b.chatJid ?? b.groupJid;
+    if (!chatJid) throw new Refused(400, ['which chat']);
+    b.groupJid = chatJid;
     const link = (await req.db.query('SELECT group_jid, po_group_jid FROM whatsapp_link')).rows[0];
+    // Every chat is kept for the WhatsApp tab.
+    const kept = await keepChatMessage(req.db, companyId, {
+      chatJid, chatName: b.chatName ?? null, isGroup: b.isGroup ?? chatJid.endsWith('@g.us'), waId: b.id, fromMe: b.fromMe, sender: b.sender ?? null, senderName: b.senderName ?? null,
+      at: new Date(b.at), text: b.text, images: b.images.map(i => ({ mime: i.mime, data: Buffer.from(i.base64, 'base64') })),
+      attachments: [...b.documents.map(d => `a document${d.name ? ` (${d.name})` : ''}`), ...(b.other ? [b.other] : [])],
+    });
+    if (b.fromMe) return { ok: true, kept: !!kept, skipped: 'sent by the app\'s number' };
     // The purchase orders group: a PO made outside the app is added like the app's own.
     if (link?.po_group_jid && link.po_group_jid === b.groupJid) {
       const files = [...b.documents.filter(d => d.mime === 'application/pdf'), ...b.images].map(f => ({ mime: f.mime, data: Buffer.from(f.base64, 'base64') }));
@@ -255,22 +270,35 @@ export function registerBreakdownRoutes(app: FastifyInstance, db: Db, o: IntakeO
       channel: 'whatsapp', externalId: b.id, receivedAt: new Date(b.at), senderName: b.senderName ?? null, sender: b.sender ?? null, subject: null,
       body: b.text, images: b.images.map(i => ({ mime: i.mime, data: Buffer.from(i.base64, 'base64') })), otherAttachments: [],
     }, o.reader);
+    if (id && kept) await req.db.query('UPDATE wa_messages SET breakdown_id = $1 WHERE id = $2', [id, kept.id]);
     return { ok: true, breakdownId: id };
   });
 
   app.get('/internal/whatsapp/outbox', async req => {
     await bridge(req);
     const link = (await req.db.query('SELECT group_jid, po_group_jid FROM whatsapp_link')).rows[0];
-    if (!link?.group_jid) return { groupJid: null, poGroupJid: link?.po_group_jid ?? null, posts: [] };
+    // Replies typed in the app's WhatsApp tab, for any chat.
+    const replies = (await req.db.query(
+      `SELECT m.id, m.text, ch.jid FROM wa_messages m JOIN wa_chats ch ON ch.id = m.chat_id
+        WHERE m.status = 'queued' AND m.tries < 5 ORDER BY m.at LIMIT 10`)).rows;
+    if (!link?.group_jid) return { groupJid: null, poGroupJid: link?.po_group_jid ?? null, posts: [], replies };
     const posts = (await req.db.query('SELECT id, text FROM group_posts WHERE sent_at IS NULL AND tries < 5 ORDER BY created_at LIMIT 10')).rows;
-    return { groupJid: link.group_jid, poGroupJid: link.po_group_jid ?? null, posts };
+    return { groupJid: link.group_jid, poGroupJid: link.po_group_jid ?? null, posts, replies };
   });
 
   app.post('/internal/whatsapp/sent', async req => {
     await bridge(req);
-    const b = parse(z.object({ companyId: Uuid, id: Uuid, waId: z.string().max(200).nullish(), error: z.string().max(500).nullish() }), req.body);
-    if (b.error) await req.db.query('UPDATE group_posts SET tries = tries + 1, error = $2 WHERE id = $1', [b.id, b.error]);
-    else await req.db.query('UPDATE group_posts SET sent_at = now(), wa_id = $2, error = NULL WHERE id = $1', [b.id, b.waId ?? null]);
+    const b = parse(z.object({ companyId: Uuid, id: Uuid, kind: z.enum(['post', 'reply']).default('post'), waId: z.string().max(200).nullish(), error: z.string().max(500).nullish() }), req.body);
+    if (b.kind === 'reply') {
+      if (b.error) await req.db.query("UPDATE wa_messages SET tries = tries + 1, error = $2, status = CASE WHEN tries + 1 >= 5 THEN 'failed' ELSE status END WHERE id = $1", [b.id, b.error]);
+      else await req.db.query("UPDATE wa_messages SET status = 'sent', wa_id = $2, error = NULL WHERE id = $1", [b.id, b.waId ?? null]);
+      return { ok: true };
+    }
+    if (b.error) { await req.db.query('UPDATE group_posts SET tries = tries + 1, error = $2 WHERE id = $1', [b.id, b.error]); return { ok: true }; }
+    const post = (await req.db.query('UPDATE group_posts SET sent_at = now(), wa_id = $2, error = NULL WHERE id = $1 RETURNING text', [b.id, b.waId ?? null])).rows[0];
+    // The app's own line shows in the group's chat too.
+    const link = (await req.db.query('SELECT group_jid, group_name FROM whatsapp_link')).rows[0];
+    if (post && link?.group_jid) await keepOwnLine(req.db, link.group_jid, link.group_name, true, post.text, b.waId ?? `post-${b.id}`, null);
     return { ok: true };
   });
 

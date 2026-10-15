@@ -26,6 +26,7 @@ import { DemoSuppliers, seedSuppliers, type DemoSupplierState } from './demoSupp
 import { DemoPOs, type DemoPOState } from './demoPOs.ts';
 import * as CR from '../../server/src/core/clientRates.ts';
 import { DemoFleet, seedFleet, type DemoFleetState } from './demoFleet.ts';
+import { DemoWhatsApp, seedWhatsApp, type DemoWaState } from './demoWhatsApp.ts';
 import { demoFuel, demoVehiclesPage, type DemoTrip } from './demoVehicles.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
 import type { CardView, Flag, LoanMachine, MachineMove, StockLine, Today, TodayJob, Workshop } from './types.ts';
@@ -694,6 +695,37 @@ export class DemoTransport implements Transport {
       this.persist(this.state);
       return ok({ ...r, skipped });
     }
+    return refuse(404, 'demo: not available');
+  }
+
+  /** WhatsApp: the guided set-up (the CEO) and the WhatsApp tab (whoever opens jobs). */
+  private wa(): DemoWhatsApp {
+    const bd = this.bds();
+    const company = REAL ? REAL.company.name : 'ZSP';
+    const st = ((this.state as { whatsapp2?: DemoWaState }).whatsapp2 ??= seedWhatsApp(bd.s, company));
+    return new DemoWhatsApp(st, bd, company, this.who.name);
+  }
+  private whatsAppRoute(p: string, req: Request, b: any): Response | null {
+    let m: RegExpMatchArray | null;
+    if (!p.startsWith('/whatsapp/')) return null;
+    const res = (r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }) => { this.persist(this.state); return r.ok ? ok(r.body) : refuse(r.status, ...r.reasons); };
+    const w = this.wa();
+    const ceo = this.does('access');
+    if (p === '/whatsapp/setup' || p === '/whatsapp/mode' || p === '/whatsapp/link' || p === '/whatsapp/disconnect' || p === '/whatsapp/official' || p.startsWith('/whatsapp/test') || p === '/whatsapp/settings') {
+      if (!ceo) return refuse(403, 'only the CEO sets up WhatsApp');
+      if (p === '/whatsapp/setup') { const r = w.setup(); this.persist(this.state); return ok(r); }
+      if (p === '/whatsapp/mode') return res(w.mode(b?.mode === 'official' ? 'official' : 'phone'));
+      if (p === '/whatsapp/link') return res(w.link());
+      if (p === '/whatsapp/disconnect') return res(w.disconnect());
+      if (p === '/whatsapp/official') return res(w.official());
+      if (p === '/whatsapp/test') return res(w.test());
+      if (p === '/whatsapp/test/ok') return res(w.testOk());
+      return res(w.settings(b ?? {}));
+    }
+    if (!this.does('jobs')) return refuse(403, 'WhatsApp in the app is for whoever opens jobs');
+    if (p === '/whatsapp/chats') { const r = w.chats(ceo); this.persist(this.state); return ok(r); }
+    if ((m = p.match(/^\/whatsapp\/chats\/([^/]+)\/messages$/))) return res(req.method === 'POST' ? w.reply(m[1], String(b?.text ?? '')) : w.messages(m[1]));
+    if ((m = p.match(/^\/whatsapp\/messages\/([^/]+)\/breakdown$/))) return res(w.toBreakdown(m[1]));
     return refuse(404, 'demo: not available');
   }
 
@@ -1645,6 +1677,8 @@ export class DemoTransport implements Transport {
     if (cust) return cust;
     const bdr = this.breakdownRoute(p, req, b);
     if (bdr) return bdr;
+    const war = this.whatsAppRoute(p, req, b);
+    if (war) return war;
     const off = this.officeRoute(p, req, b);
     if (off) return off;
 
