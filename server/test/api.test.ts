@@ -3093,3 +3093,59 @@ test('whatsapp, the easy way: the phone (QR once) or an official number; the Wha
     assert.equal((await db.query("SELECT count(*)::int AS n FROM wa_official_numbers WHERE phone_number_id = '1234567890'")).rows[0].n, 0);
   } finally { await app2.close(); }
 });
+
+test('pastel, the easy way: Pastel\'s lists in, codes matched by the app, a practice file, done', async () => {
+  const sendList = async (who: string, kind: string, text: string, name = 'export.txt') => {
+    const boundary = '----rs' + Math.random().toString(16).slice(2);
+    const payload = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: text/plain\r\n\r\n`), Buffer.from(text), Buffer.from(`\r\n--${boundary}--\r\n`)]);
+    const r = await app.inject({ method: 'POST', url: `/pastel/lists?kind=${kind}`, payload, headers: { authorization: `Bearer ${tokens[who]}`, 'content-type': `multipart/form-data; boundary=${boundary}` } });
+    return { status: r.statusCode, body: r.json() };
+  };
+  assert.equal((await call('tech', 'GET', '/pastel/setup')).status, 403);
+  let su = (await call('books', 'GET', '/pastel/setup')).body;
+  assert.deepEqual(su.steps.map((s: { key: string }) => s.key), ['customers', 'suppliers', 'lines', 'year', 'items', 'practice']);
+  assert.equal(su.lists.customers, null);
+  // Pastel's own customer export (no headings): FreshMart is found by its name.
+  assert.equal((await sendList('books', 'customers', 'nothing useful here')).status, 400);
+  const up = await sendList('books', 'customers', '"FRE001","FreshMart (Pty) Ltd","0","Y"\r\n"SPA002","Spar Central","0","Y"\r\n');
+  assert.equal(up.status, 200, JSON.stringify(up.body));
+  assert.equal(up.body.lists.customers.count, 2);
+  const fm = up.body.customers.find((m: { id: string }) => m.id === ids.client);
+  assert.equal(fm.code, 'FRE001');
+  assert.ok(['has', 'sure', 'check'].includes(fm.how));
+  assert.equal((await sendList('admin', 'suppliers', 'VOL001,Voltex\r\n')).status, 403, 'suppliers are for Accounts');
+  // Confirm: the codes are saved in one go; one code for two customers is refused.
+  const other = (await db.query("INSERT INTO clients (name) VALUES ('Spar Central') RETURNING id")).rows[0].id;
+  assert.equal((await call('books', 'POST', '/pastel/codes', { clients: [{ id: ids.client, code: 'FRE001' }, { id: other, code: 'FRE001' }] })).status, 409);
+  su = (await call('books', 'POST', '/pastel/codes', { clients: [{ id: ids.client, code: 'FRE001' }, { id: other, code: 'SPA002' }] })).body;
+  assert.equal((await db.query('SELECT pastel_code FROM clients WHERE id = $1', [ids.client])).rows[0].pastel_code, 'FRE001');
+  assert.equal(su.customers.find((m: { id: string }) => m.id === other).how, 'has');
+  // GL accounts and items: where labour, call-outs and travel go is suggested; an item's Pastel code differs from the stockroom's.
+  su = (await sendList('books', 'accounts', 'Account,Description\r\n1000000,Sales\r\n1050000,Sales Returns\r\n2000000,Purchases\r\n1100000,Travel Recovered\r\n')).body;
+  su = (await sendList('books', 'items', 'Code,Description\r\nLABOUR,Labour per hour\r\nCALLOUT,Call-out fee\r\nVAL001,Water Inlet Valve\r\n')).body;
+  assert.deepEqual(su.suggest.labour, { code: 'LABOUR', lineType: 4, name: 'Labour per hour' });
+  assert.equal(su.suggest.purchases.code, '2000000');
+  const valve = su.items.find((m: { id: string }) => m.id === ids.seal);
+  assert.deepEqual([valve.how, valve.code], ['sure', 'VAL001']);
+  su = (await call('books', 'POST', '/pastel/codes', { items: [{ id: ids.seal, code: 'VAL001' }] })).body;
+  assert.equal(su.items.find((m: { id: string }) => m.id === ids.seal).how, 'has');
+  assert.equal((await db.query('SELECT code, pastel_code FROM stock_items WHERE id = $1', [ids.seal])).rows[0].pastel_code, 'VAL001', 'the stockroom code stays');
+  // The suggestions saved as the line codes, the year and VAT.
+  const codes = Object.fromEntries(Object.entries(su.suggest).map(([k, v]) => [k, { code: (v as { code: string }).code, lineType: (v as { lineType: number }).lineType }]));
+  assert.equal((await call('books', 'PUT', '/pastel/settings', { yearStartMonth: 3, taxType: '01', codes: { ...codes, other: codes.bought_out } })).status, 200);
+  su = (await call('books', 'GET', '/pastel/setup')).body;
+  assert.equal(su.steps.find((s: { key: string }) => s.key === 'lines').done, true);
+  // The practice file: one invoice for Pastel; nothing is marked as sent to Pastel.
+  const before = (await db.query('SELECT count(*)::int AS n FROM pastel_batches')).rows[0].n;
+  const pr = await call('books', 'POST', '/pastel/practice');
+  assert.equal(pr.status, 200, JSON.stringify(pr.body));
+  assert.match(pr.body.file, /^Header,/);
+  assert.match(pr.body.where, /Invoices/);
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM pastel_batches')).rows[0].n, before);
+  // It worked: done, and the start-up checklist ticks it.
+  su = (await call('books', 'POST', '/pastel/setup/done', { worked: false, note: 'Pastel said: invalid customer' })).body;
+  assert.equal(su.practiceNote, 'Pastel said: invalid customer');
+  su = (await call('books', 'POST', '/pastel/setup/done', { worked: true })).body;
+  assert.ok(su.setupDoneAt);
+  assert.equal((await call('creator', 'GET', '/setup')).body.steps.find((s: { key: string }) => s.key === 'pastel').done, true);
+});

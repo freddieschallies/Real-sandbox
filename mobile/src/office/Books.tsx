@@ -1,6 +1,7 @@
 // Quotes, invoices and the link to Sage Pastel Partner, for whoever the CEO gave quotes and invoices.
 // A quote or invoice is made here on the company letterhead, sent, and then exported in an import
 // batch for Pastel, so the books stay in Pastel.
+import { PastelSetup } from './PastelSetup.tsx';
 import { letterheadBottom, letterheadTop } from '../letterhead.tsx';
 import { BrandLogo, brandChanged, currentLogo, useBrand } from '../brand.tsx';
 import React, { useCallback, useEffect, useState } from 'react';
@@ -562,6 +563,7 @@ function PastelScreen({ b, canPrices, canBooks = false }: { b: Books; canPrices:
   };
   return (
     <>
+      <PastelSetup />
       <Notice tone="info" title="Sage Pastel Partner" lines={[
         `Make the batch here, then in Pastel: ${P.PASTEL_WHERE[kind]}.`,
         'Each document goes into one batch only, so nothing is imported twice.',

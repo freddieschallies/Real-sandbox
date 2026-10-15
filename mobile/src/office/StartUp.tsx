@@ -11,6 +11,7 @@ import { LetterheadSettings } from '../letterhead.tsx';
 import { waNumber } from './Logins.tsx';
 import { NumbersForm } from './Numbers.tsx';
 import { WhatsAppSetup } from '../whatsapp/WhatsAppSetup.tsx';
+import { PastelSetup } from './PastelSetup.tsx';
 
 type Go = 'departments' | 'accounts' | 'stores' | 'importcustomers' | 'newstore' | 'people';
 interface Step { key: string; title: string; why: string; optional: boolean; done: boolean; detail: string }
@@ -88,7 +89,7 @@ export function StartUp({ go, setup }: { go: (where: Go) => void; setup: ReturnT
                 </View>
               ) : null}
               {x.key === 'whatsapp' ? <WhatsAppSetup changed={load} /> : null}
-              {x.key === 'pastel' ? <Button label="Set up Pastel (Accounts → Pastel)" onPress={() => go('accounts')} /> : null}
+              {x.key === 'pastel' ? <PastelSetup changed={load} startOpen /> : null}
               {(x.key === 'whatsapp' || x.key === 'pastel') && !(x.done && x.detail !== 'Skipped') ? (
                 <Button label={x.detail === 'Skipped' ? 'Don\'t skip it' : 'Skip this for now'} kind="quiet" onPress={() => put(x.detail === 'Skipped' ? { unskip: x.key } : { skip: x.key })} />
               ) : null}

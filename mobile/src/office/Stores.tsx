@@ -140,12 +140,12 @@ interface Preview { customers: number; newCustomers: number; sites: number; newS
 interface Result { customersNew: number; customersUpdated: number; sitesNew: number; sitesUpdated: number; toFind: number; pinnedFromFile: number; skipped: { line: number; reason: string }[] }
 
 /** A file chosen on a computer (the office does this on a computer, not a phone). */
-function chooseFile(): Promise<File | null> {
+export function chooseFile(accept = '.csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'): Promise<File | null> {
   return new Promise(resolve => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') { resolve(null); return; }
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    input.accept = accept;
     input.onchange = () => resolve(input.files?.[0] ?? null);
     input.click();
   });

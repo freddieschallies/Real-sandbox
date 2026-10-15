@@ -27,6 +27,7 @@ import { DemoPOs, type DemoPOState } from './demoPOs.ts';
 import * as CR from '../../server/src/core/clientRates.ts';
 import { DemoFleet, seedFleet, type DemoFleetState } from './demoFleet.ts';
 import { DemoWhatsApp, seedWhatsApp, type DemoWaState } from './demoWhatsApp.ts';
+import { DemoPastelSetup, seedPastelSetup, type DemoPastelState } from './demoPastel.ts';
 import { demoFuel, demoVehiclesPage, type DemoTrip } from './demoVehicles.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
 import type { CardView, Flag, LoanMachine, MachineMove, StockLine, Today, TodayJob, Workshop } from './types.ts';
@@ -1266,6 +1267,41 @@ export class DemoTransport implements Transport {
     return dd;
   }
 
+  /** Pastel's guided set-up (Accounts and the CEO). */
+  private async pastelSetupRoute(p: string, req: Request, b: any): Promise<Response | null> {
+    if (!(p === '/pastel/setup' || p === '/pastel/lists' || p === '/pastel/codes' || p === '/pastel/practice' || p === '/pastel/setup/done' || (p === '/pastel/settings' && req.method === 'PUT'))) return null;
+    if (!['admin', 'accounts', 'management', 'director', 'creator', 'stockroom'].includes(this.who.level) || !this.does('documents')) return refuse(403, 'Pastel is set up by Accounts or the CEO');
+    const d = this.docs();
+    const sup = () => new DemoSuppliers((this.state.suppliers ??= seedSuppliers()), this.stock().s, this.who.name);
+    const st = ((this.state as { pastelSetup?: DemoPastelState }).pastelSetup ??= seedPastelSetup());
+    const ps = new DemoPastelSetup(st, {
+      clients: () => d.clients(), setClient: (id, code) => { d.setClientCode(id, code); },
+      suppliers: () => sup().suppliers(), setSupplier: (id, code) => { sup().setCode(id, code); },
+      items: () => this.stock().s.items.filter(i => !i.needsReview && (i.category ?? 'stock') === 'stock').map(i => ({ id: i.id, code: i.code, description: i.description })),
+      settings: () => d.pastelSettings().settings, vatNo: () => (this.state.docs?.profile as { vat_no?: string | null } | null)?.vat_no ?? null,
+      vatPct: () => Number((this.state.docs?.profile as { vat_pct?: number } | null)?.vat_pct ?? 15),
+    }, this.does('books'));
+    const res = (r: { ok: true; body: unknown } | { ok: false; status: number; reasons: string[] }) => { this.persist(this.state); return r.ok ? ok(r.body) : refuse(r.status, ...r.reasons); };
+    if (p === '/pastel/settings') { ps.saved(); this.persist(this.state); return null; }
+    if (p === '/pastel/setup') return ok(ps.setup());
+    if (p === '/pastel/lists') {
+      const kind = new URLSearchParams(req.path.split('?')[1] ?? '').get('kind') as 'customers' | 'suppliers' | 'accounts' | 'items';
+      if (!['customers', 'suppliers', 'accounts', 'items'].includes(kind)) return refuse(400, 'which list');
+      if (!req.upload) return res(ps.list(kind, null, null));
+      let text: string;
+      try {
+        const blob = await (await fetch(req.upload.fileUri)).blob();
+        const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
+        if (head[0] === 0x50 && head[1] === 0x4b) return refuse(400, 'In the test drive, save the list as CSV (the real app also reads Excel), or use the sample file.');
+        text = await blob.text();
+      } catch { return refuse(400, 'could not read the file'); }
+      return res(ps.list(kind, parseCsv(text), req.upload.name ?? null));
+    }
+    if (p === '/pastel/codes') return res(ps.codes(b ?? {}));
+    if (p === '/pastel/practice') return res(ps.practice());
+    return res(ps.done(b ?? {}));
+  }
+
   private docRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
     const isDoc = /^\/jobs\/[^/]+\/no-charge$/.test(p) || p.startsWith('/quotes') || p.startsWith('/invoices') || p.startsWith('/pastel') || p.startsWith('/office/supplier-invoices')
@@ -1646,6 +1682,8 @@ export class DemoTransport implements Transport {
     if (!this.state.vanStock) this.vans();
     if (p === '/search') return ok(this.search(new URLSearchParams(req.path.split('?')[1] ?? '').get('q') ?? ''));
     if (p === '/setup' || p.startsWith('/setup/')) return this.setupRoute(p, req, b);
+    const pst = await this.pastelSetupRoute(p, req, b);
+    if (pst) return pst;
     const dr = this.docRoute(p, req, b);
     if (dr) return dr;
     const qr = this.queryRoute(p, req, b);

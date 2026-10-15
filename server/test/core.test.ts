@@ -674,3 +674,35 @@ test('office time on a day, overlaps, unauthorised trips, and a technician\'s wo
   assert.equal(worth.verdict.tone, 'good');
   assert.equal(W.moneyLines(worth).find(l => l.label.startsWith('Of that'))!.value, 'R 80,00');
 });
+
+test('pastel set-up: reads Pastel\'s lists with or without headings, matches names, suggests where lines go', async () => {
+  const PS = await import('../src/core/pastelSetup.ts');
+  // Pastel's own export: no headings; the code is the column of unique codes, the name the column with words.
+  const raw = [['FRE001', 'FreshMart Group (Pty) Ltd', '0', 'Y'], ['SPA002', 'Spar Central', '0', 'Y'], ['TSE003', 'Tsebo Call Centre CC', '0', 'N']];
+  assert.deepEqual(PS.readPastelList(raw), [{ code: 'FRE001', name: 'FreshMart Group (Pty) Ltd' }, { code: 'SPA002', name: 'Spar Central' }, { code: 'TSE003', name: 'Tsebo Call Centre CC' }]);
+  // A listing report with headings.
+  const report = [['Customer listing', ''], ['Account', 'Name', 'Balance'], ['FRE001', 'FreshMart Group', '1200.00'], ['', 'Total', '1200.00']];
+  assert.deepEqual(PS.readPastelList(report), [{ code: 'FRE001', name: 'FreshMart Group' }]);
+  assert.deepEqual(PS.readPastelList([['just words here', 'and more words']]), []);
+  // Names: (Pty) Ltd, CC and punctuation don't matter; a close name is "check", none is "none"; a known code is "has".
+  const theirs = PS.readPastelList(raw);
+  const m = PS.matchNames([
+    { id: '1', name: 'FreshMart Group', code: null }, { id: '2', name: 'SPAR - Central', code: null }, { id: '3', name: 'Tsebo', code: null },
+    { id: '4', name: 'Woolworths', code: null }, { id: '5', name: 'Anything', code: 'TSE003' },
+  ], theirs);
+  assert.deepEqual(m.map(x => [x.id, x.how, x.code]), [['1', 'sure', 'FRE001'], ['2', 'sure', 'SPA002'], ['3', 'sure', 'TSE003'], ['4', 'none', null], ['5', 'has', 'TSE003']]);
+  // Stock: the stockroom code is Pastel's, or a match by description.
+  const items = PS.matchItems([{ id: 'a', code: 'FUSE-10A', description: 'Fuse 10A', pastelCode: null }, { id: 'b', code: 'V1', description: 'Water inlet valve', pastelCode: null }],
+    [{ code: 'FUSE-10A', name: 'Fuse 10 amp' }, { code: 'VAL001', name: 'Water Inlet Valve' }]);
+  assert.deepEqual(items.map(x => [x.how, x.code]), [['has', 'FUSE-10A'], ['sure', 'VAL001']]);
+  // Lines: labour as a service item when there is one, sales and purchases GL accounts, returns for credit notes.
+  const s = PS.suggestLineCodes(
+    [{ code: '1000000', name: 'Sales' }, { code: '1050000', name: 'Sales Returns' }, { code: '2000000', name: 'Purchases' }, { code: '1100000', name: 'Travel Recovered' }],
+    [{ code: 'LABOUR', name: 'Labour per hour' }, { code: 'CALLOUT', name: 'Call-out fee' }]);
+  assert.deepEqual(s.labour, { code: 'LABOUR', lineType: 4, name: 'Labour per hour' });
+  assert.deepEqual(s.call_out, { code: 'CALLOUT', lineType: 4, name: 'Call-out fee' });
+  assert.equal(s.travel?.code, '1100000');
+  assert.equal(s.bought_out?.code, '1000000');
+  assert.equal(s.credit?.code, '1050000');
+  assert.equal(s.purchases?.code, '2000000');
+});

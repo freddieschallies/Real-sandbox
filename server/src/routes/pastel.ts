@@ -58,7 +58,7 @@ async function supplierDocs(c: Q, ids?: string[]): Promise<Doc[]> {
 }
 
 /** Documents of one kind waiting for Pastel (or the chosen ones). */
-async function waiting(c: Q, kind: Kind, ids?: string[]): Promise<Doc[]> {
+export async function waiting(c: Q, kind: Kind, ids?: string[]): Promise<Doc[]> {
   if (kind === 'credit') return creditDocs(c, ids);
   if (kind === 'supplier_invoice') return supplierDocs(c, ids);
   return docs(c, kind, `d.status IN ${T[kind].ready} AND d.pastel_batch_id IS NULL${ids ? ' AND d.id = ANY($1)' : ''}`, ids ? [ids] : []);
@@ -77,7 +77,7 @@ async function docs(c: Q, kind: 'invoice' | 'quote', where: string, params: unkn
   const out = [];
   for (const r of rows) {
     const lines = (await c.query(
-      `SELECT l.kind, l.description, l.qty::float AS qty, l.unit_price_cents AS "unitPriceCents", i.code AS "stockCode", i.unit
+      `SELECT l.kind, l.description, l.qty::float AS qty, l.unit_price_cents AS "unitPriceCents", coalesce(i.pastel_code, i.code) AS "stockCode", i.unit
          FROM document_lines l LEFT JOIN stock_items i ON i.id = l.stock_item_id WHERE l.${t.col} = $1 ORDER BY l.position, l.id`, [r.id])).rows;
     out.push({
       id: r.id, batchId: r.pastel_batch_id, status: r.status, kind, number: r.number, customerCode: r.pastel_code, date: r.date, dueDate: r.due,
