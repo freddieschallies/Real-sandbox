@@ -75,7 +75,7 @@ export function PurchaseOrderList() {
                 <Select label="Job" value={null} placeholder="Choose the job" options={jobs.map(j => ({ value: j.id, label: j.label }))} onChange={v => link(p.id, v)} />
               </View>
             ) : null}
-            {p.photo_id ? (showDoc === p.id ? <Picture id={p.photo_id} mime={p.photo_mime ?? null} /> : <Button label="See the PO as posted" kind="quiet" onPress={() => setShowDoc(p.id)} />) : null}
+            {p.photo_id ? (showDoc === p.id ? <Picture id={p.photo_id} mime={p.photo_mime ?? null} /> : <Button label={p.source === "group" ? "See the PO as posted" : "See the photo he sent"} kind="quiet" onPress={() => setShowDoc(p.id)} />) : null}
             {(p.lines ?? []).map((l: any) => <Text key={l.lineNo} style={st.body}>{l.qty} × {l.description}{l.code ? ` (${l.code})` : ''}</Text>)}
             {p.note ? <Text style={st.small}>Note: {p.note}</Text> : null}
             {p.decided_by ? <Text style={st.small}>{p.status === 'rejected' ? 'Not approved' : 'Approved'} by {p.decided_by}{p.decision_note ? `: ${p.decision_note}` : ''}</Text> : null}

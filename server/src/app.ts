@@ -74,7 +74,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerClientRateRoutes(app);
   registerDebtorRoutes(app);
   registerProfitRoutes(app);
-  registerPurchaseOrderRoutes(app);
+  registerPurchaseOrderRoutes(app, opts.intake?.poReader);
   registerWhoRoutes(app);
   registerClientRoutes(app, opts.mailer === undefined ? mailerFromEnv() : opts.mailer);
   registerSearchRoutes(app);

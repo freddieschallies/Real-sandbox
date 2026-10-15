@@ -13,7 +13,7 @@ export type Route =
   | { name: 'flags' }
   | { name: 'sync' }
   | { name: 'stock' }
-  | { name: 'pos' }
+  | { name: 'pos'; jobId?: string; ask?: boolean }
   | { name: 'invoice'; invoiceId?: string; jobId?: string }
   | { name: 'bookout'; jobId: string }
   | { name: 'return' }

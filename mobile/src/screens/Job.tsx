@@ -1,5 +1,6 @@
 // The job card. What the technician sees depends only on where the job is in the forced path:
 // Go → Arrived (manager + safety) → Start → work items → Done → sign-off, or Continue later.
+import { JobPOs } from './PurchaseOrders.tsx';
 import { JobReports } from '../reports/PartsReport.tsx';
 import { MachineMoves, WorkshopStartForm } from './Workshop.tsx';
 import React, { useEffect, useState } from 'react';
@@ -165,6 +166,7 @@ export function Job({ jobId }: { jobId: string }) {
       ) : null}
 
       {state !== 'closed' && v.status !== 'closed' ? <Button label="Submit a quote for this job" kind="quiet" onPress={() => nav.push({ name: 'quote', jobId })} /> : null}
+      <JobPOs jobId={jobId} closed={state === 'closed' || v.status === 'closed'} />
       {(v.parts_reports ?? []).length ? <JobReports key={(v.parts_reports ?? []).length} jobId={jobId} open={id => nav.push({ name: 'report', id })} /> : null}
 
       {state === 'closed' ? <Notice tone="good" title="Job closed and locked" lines={[v.manager_name ? `Signed by ${v.manager_name}` : 'Closed without signature – the office has been told.']} /> : null}

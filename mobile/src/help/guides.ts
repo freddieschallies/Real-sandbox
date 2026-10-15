@@ -63,10 +63,10 @@ export const GUIDES: Guide[] = [
     'Tap "Confirm – put it on my name". The parts are on the job or your van; Accounts checks the slip.',
   ] },
   { id: 'tech-po', title: 'Ask for a purchase order', roles: ['technician'], steps: [
-    'My day → Purchase orders → "Ask for a purchase order".',
-    'Type the supplier, the parts and how many, and choose the job (or van stock).',
-    'Tap "Send for approval". When it is approved the PO number shows big on your phone: show it at the counter.',
-    'Then scan the supplier\'s slip for that PO.',
+    'For a job: open the job card → Purchase orders for this job → Ask for a PO. For sundries or van stock: on your main page → Purchase orders: sundries.',
+    'Tap "Take a photo of the list or quote": the app reads it and fills in the supplier and the parts.',
+    'Check what it read, fix anything wrong (or type the parts yourself), then Send for approval.',
+    'Once approved, show the PO number at the supplier and scan their slip against it.',
   ] },
   { id: 'tech-timesheet', title: 'Submit my timesheet, and add office time', roles: ['technician'], steps: [
     'My day → Timesheet. The app made yesterday\'s sheet from your jobs: travel, work, pauses.',

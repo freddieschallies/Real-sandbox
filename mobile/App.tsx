@@ -51,7 +51,7 @@ function Current() {
     case 'flags': return <Flags />;
     case 'sync': return <Sync />;
     case 'stock': return <MyStock />;
-    case 'pos': return <PurchaseOrdersScreen />;
+    case 'pos': return <PurchaseOrdersScreen key={`${route.jobId ?? 'sundries'}-${route.ask ? 1 : 0}`} jobId={route.jobId} ask={route.ask} />;
     case 'invoice': return <Invoice key={route.invoiceId ?? 'new'} invoiceId={route.invoiceId} jobId={route.jobId} />;
     case 'bookout': return <BookOut jobId={route.jobId} />;
     case 'return': return <Return />;

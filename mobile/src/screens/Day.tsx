@@ -117,8 +117,8 @@ export function Day() {
         </Card>
 
         <Card onPress={() => nav.push({ name: 'pos' })} accessibilityLabel="Purchase orders">
-          <Text style={[st.body, { fontWeight: '800' }]}>Purchase orders</Text>
-          <Text style={st.small}>Going to a supplier for parts? Ask for a PO first; show the number at the counter.</Text>
+          <Text style={[st.body, { fontWeight: '800' }]}>Purchase orders: sundries</Text>
+          <Text style={st.small}>Sundries and van stock. A PO for a job: ask on that job card. Take a photo of the list and the app fills it in.</Text>
         </Card>
 
         <Card onPress={() => nav.push({ name: 'quotes' })} accessibilityLabel="Quotes">

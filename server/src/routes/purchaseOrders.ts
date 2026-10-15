@@ -13,8 +13,9 @@ import { isOnJob } from '../jobsRepo.ts';
 import { managerOf, notify } from './field.ts';
 import { randomUUID } from 'node:crypto';
 import * as S from '../core/stock.ts';
-import type { POReader } from '../poReader.ts';
-import { saveDocument } from '../uploads.ts';
+import { poReaderFromEnv, type POReader } from '../poReader.ts';
+import { nameScore } from '../core/pastelSetup.ts';
+import { openFile, saveDocument } from '../uploads.ts';
 
 const APPROVERS = ['stockroom', 'admin', 'management', 'director', 'creator'];
 /** Who sees the purchase orders in the office: the approvers and Accounts. */
@@ -37,12 +38,43 @@ const PO_SQL = `
     FROM purchase_orders p LEFT JOIN users t ON t.id = p.technician_id LEFT JOIN users d ON d.id = p.decided_by
     LEFT JOIN jobs j ON j.id = p.job_id LEFT JOIN stores s ON s.id = j.store_id`;
 
-export function registerPurchaseOrderRoutes(app: FastifyInstance) {
+/** A line read from a photo, matched to a stock item: the same code, or a clear match by its description. */
+async function matchStock(c: Q, lines: { description: string; code: string | null; qty: number; unitPriceCents: number | null }[]) {
+  const items = (await c.query('SELECT id, code, description, pastel_code FROM stock_items WHERE active')).rows as { id: string; code: string; description: string; pastel_code: string | null }[];
+  return lines.map(l => {
+    const code = (l.code ?? '').trim().toUpperCase();
+    let hit = code ? items.find(i => i.code.toUpperCase() === code || (i.pastel_code ?? '').toUpperCase() === code) : undefined;
+    if (!hit) {
+      const ranked = items.map(i => ({ i, s: nameScore(l.description, i.description) })).sort((a, b) => b.s - a.s);
+      if (ranked[0] && ranked[0].s >= 0.85 && (!ranked[1] || ranked[1].s < ranked[0].s - 0.1)) hit = ranked[0].i;
+    }
+    return { description: hit ? hit.description : l.description, qty: l.qty > 0 ? l.qty : 1, code: hit?.code ?? l.code, stockItemId: hit?.id ?? null, unitPriceCents: l.unitPriceCents };
+  });
+}
+
+export function registerPurchaseOrderRoutes(app: FastifyInstance, reader: POReader = poReaderFromEnv()) {
+  // ---- The technician: a photo of what he needs, read into the request ----------------------------
+  app.post('/purchase-orders/read', async req => {
+    const b = parse(z.object({ photoId: Uuid, note: z.string().max(1000).optional() }), req.body);
+    const p = (await req.db.query("SELECT file_path, content_type, kind::text AS kind, taken_by FROM photos WHERE id = $1", [b.photoId])).rows[0];
+    if (!p || p.taken_by !== req.actor.id || p.kind !== 'po_request') throw new Refused(404, ['no such photo']);
+    const chunks: Buffer[] = [];
+    for await (const ch of openFile(p.file_path)) chunks.push(ch as Buffer);
+    const read = await reader({ text: b.note ?? '', files: [{ mime: p.content_type ?? 'image/jpeg', data: Buffer.concat(chunks) }], purpose: 'request' }).catch(() => null);
+    if (!read) return { photoId: b.photoId, supplierName: null, lines: [], readBy: 'none' };
+    let supplierName = read.supplierName;
+    if (supplierName) {
+      const known = (await req.db.query("SELECT name FROM suppliers WHERE status <> 'rejected'")).rows.map(r => r.name as string);
+      supplierName = known.find(n => nameScore(n, supplierName!) >= 0.85) ?? supplierName;
+    }
+    return { photoId: b.photoId, supplierName, lines: await matchStock(req.db, read.lines.slice(0, 60)), readBy: read.readBy };
+  });
+
   // ---- The technician ---------------------------------------------------------------------------
   app.post('/purchase-orders', async (req, reply) => {
     const b = parse(z.object({
       supplierId: Uuid.optional(), supplierName: z.string().trim().min(2).max(200).optional(),
-      jobId: Uuid.nullish(), note: z.string().trim().max(500).optional(),
+      jobId: Uuid.nullish(), note: z.string().trim().max(500).optional(), photoId: Uuid.nullish(),
       lines: z.array(z.object({ stockItemId: Uuid.nullish(), description: z.string().trim().min(2).max(300), qty: z.number().positive().max(100000) })).min(1).max(100),
     }).refine(x => !!x.supplierId || !!x.supplierName, 'which supplier'), req.body);
     const me = req.actor.id;
@@ -62,8 +94,11 @@ export function registerPurchaseOrderRoutes(app: FastifyInstance) {
       for (const l of b.lines) {
         if (l.stockItemId && !(await c.query('SELECT 1 FROM stock_items WHERE id = $1', [l.stockItemId])).rowCount) throw new Refused(404, ['unknown stock item']);
       }
-      const po = (await c.query('INSERT INTO purchase_orders (technician_id, supplier_id, supplier_name, job_id, note) VALUES ($1, $2, $3, $4, $5) RETURNING id, po_number',
-        [me, supplierId, name, b.jobId ?? null, b.note || null])).rows[0];
+      // The photo it was read from goes with it, for whoever approves it.
+      if (b.photoId && !(await c.query("SELECT 1 FROM photos WHERE id = $1 AND taken_by = $2 AND kind = 'po_request'", [b.photoId, me])).rowCount) throw new Refused(404, ['no such photo']);
+      if (b.photoId && b.jobId) await c.query('UPDATE photos SET job_id = $2 WHERE id = $1', [b.photoId, b.jobId]);
+      const po = (await c.query('INSERT INTO purchase_orders (technician_id, supplier_id, supplier_name, job_id, note, photo_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, po_number',
+        [me, supplierId, name, b.jobId ?? null, b.note || null, b.photoId ?? null])).rows[0];
       let n = 0;
       for (const l of b.lines) await c.query('INSERT INTO purchase_order_lines (po_id, line_no, stock_item_id, description, qty) VALUES ($1, $2, $3, $4, $5)', [po.id, ++n, l.stockItemId ?? null, l.description, l.qty]);
       const who = (await c.query('SELECT full_name FROM users WHERE id = $1', [me])).rows[0].full_name;

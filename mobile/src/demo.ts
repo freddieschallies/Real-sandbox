@@ -1827,6 +1827,14 @@ export class DemoTransport implements Transport {
       const names = [...new Set([...this.stock().s.items.map(i => i.supplierName).filter((n): n is string => !!n), ...(this.state.suppliers?.slips ?? []).map(x => x.supplier_name)])].sort();
       return ok(names.map(n => ({ id: n, name: n })));
     }
+    // The test drive pretends to read the photo: a supplier's quote for two of the stock items.
+    if (p === '/purchase-orders/read') {
+      const items = this.stock().s.items.filter(i => !i.needsReview && (i.category ?? 'stock') === 'stock');
+      const pick = [items.find(i => /valve/i.test(i.description)) ?? items[0], items.find(i => /fuse|contactor/i.test(i.description)) ?? items[1]].filter(Boolean);
+      return ok({ photoId: b?.photoId ?? null, supplierName: 'Voltex Richards Bay', readBy: 'ai',
+        lines: [...pick.map((i, n) => ({ description: i!.description, qty: n === 0 ? 2 : 1, code: i!.code, stockItemId: i!.id, unitPriceCents: null })),
+          { description: 'Cable ties 300 mm (pack of 100)', qty: 1, code: null, stockItemId: null, unitPriceCents: null }] });
+    }
     if (p === '/purchase-orders' && req.method === 'POST') {
       const j = b.jobId ? this.findJob(b.jobId) : null;
       if (b.jobId && !j) return refuse(404, 'no such job');

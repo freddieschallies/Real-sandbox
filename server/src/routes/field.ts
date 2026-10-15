@@ -183,7 +183,7 @@ export function registerFieldRoutes(app: FastifyInstance, db: Db) {
       kind: z.enum(['signature', 'fuel_slip', 'supplier_slip', 'bought_out_slip', 'vehicle_front', 'vehicle_back', 'vehicle_left',
         'vehicle_right', 'vehicle_dashboard', 'vehicle_damage', 'handover_signature', 'stock_item', 'delivery_note', 'profile',
         'fleet_before', 'fleet_after', 'fleet_fault', 'fleet_slip', 'logo', 'letterhead', 'report_machine', 'report_serial', 'report_part', 'report_extra',
-        'uplift', 'loan', 'delivery', 'tool_signature', 'vehicle_profile', 'tool']),
+        'uplift', 'loan', 'delivery', 'tool_signature', 'vehicle_profile', 'tool', 'po_request']),
       takenAt: Iso, id: Uuid.optional(), jobId: Uuid.optional(),
     }), up.fields);
     if (['signature', 'uplift', 'loan', 'delivery'].includes(f.kind) && !f.jobId) throw new Refused(400, ['this photo belongs to a job: send jobId']);

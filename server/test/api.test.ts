@@ -3183,3 +3183,24 @@ test('pay and client rates: only Accounts and the CEO, unless the CEO switches i
   if ((await call('admin', 'GET', '/me')).status === 401) tokens.admin = (await call('', 'POST', '/auth/login', { email: 'admin@zsp.test', password: PW })).body.token;
   assert.equal((await call('admin', 'GET', `/people/${ids.tech3}/pay`)).status, 403, 'switched off again');
 });
+
+test('purchase orders: the technician photographs what he needs; the app reads it into the request, with the photo, on his job', async () => {
+  const pic = await upload('tech', '/photos', { kind: 'po_request', takenAt: '2026-10-15T08:00:00+02:00' });
+  assert.equal(pic.status, 201, JSON.stringify(pic.body));
+  // Read (here by rules from what he typed; with the AI key, from the photo itself), matched to the stock list.
+  const read = await call('tech', 'POST', '/purchase-orders/read', { photoId: pic.body.id, note: '2 x Water inlet valve\n1 x Door gasket 600mm' });
+  assert.equal(read.status, 200, JSON.stringify(read.body));
+  assert.deepEqual(read.body.lines.map((l: { qty: number; stockItemId: string | null }) => [l.qty, !!l.stockItemId]), [[2, true], [1, false]]);
+  assert.equal(read.body.lines[0].stockItemId, ids.seal);
+  assert.equal((await call('tech3', 'POST', '/purchase-orders/read', { photoId: pic.body.id })).status, 404, "another technician's photo");
+  // He checks it and sends it for his job: the photo goes with it for whoever approves it.
+  const job = (await db.query('SELECT j.id FROM jobs j WHERE j.lead_technician_id = $1 ORDER BY j.created_at DESC LIMIT 1', [ids.tech])).rows[0].id;
+  const po = await call('tech', 'POST', '/purchase-orders', { supplierName: 'Voltex Richards Bay', jobId: job, photoId: pic.body.id,
+    lines: read.body.lines.map((l: { stockItemId: string | null; description: string; qty: number }) => ({ stockItemId: l.stockItemId, description: l.description, qty: l.qty })) });
+  assert.equal(po.status, 201, JSON.stringify(po.body));
+  const row = (await db.query('SELECT photo_id, job_id FROM purchase_orders WHERE id = $1', [po.body.id])).rows[0];
+  assert.equal(row.photo_id, pic.body.id);
+  assert.equal(row.job_id, job);
+  const office = (await call('admin', 'GET', '/purchase-orders?view=requested')).body;
+  assert.ok((Array.isArray(office) ? office : office.orders ?? office.list ?? []).some((p: { id: string; photo_id: string }) => p.id === po.body.id && p.photo_id === pic.body.id));
+});
