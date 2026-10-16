@@ -23,13 +23,15 @@ export async function supportLogin(c: Q, owner: { id: string; name: string }) {
   const had = (await c.query('SELECT id, session_epoch FROM users WHERE support_owner = $1', [owner.id])).rows[0];
   const name = `Support: ${owner.name.split(' ')[0]} (Real Sandbox)`;
   if (had) {
-    await c.query('UPDATE users SET full_name = $2 WHERE id = $1', [had.id, name]);
+    await c.query("SELECT set_config('app.user_id', $1, false)", [had.id]);
+    await c.query('UPDATE users SET full_name = $2 WHERE id = $1 AND full_name <> $2', [had.id, name]);
     return { id: had.id as string, epoch: had.session_epoch as number, name };
   }
   // A Creator's rights, but never a person on the staff lists (status 'left') and no password: it is only opened from the owner's dashboard.
   const r = (await c.query(
     `INSERT INTO users (full_name, login_level, password_hash, login_enabled, status, support_owner)
      VALUES ($1, 'creator', '!', true, 'left', $2) RETURNING id, session_epoch`, [name, owner.id])).rows[0];
+  await c.query("SELECT set_config('app.user_id', $1, false)", [r.id]);
   return { id: r.id as string, epoch: r.session_epoch as number, name };
 }
 

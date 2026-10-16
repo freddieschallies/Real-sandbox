@@ -15,6 +15,8 @@ export async function migrate(db: pg.Pool, log: (s: string) => void = () => {}) 
     await db.query(readFileSync(DIR + f, 'utf8'));
     await db.query('INSERT INTO schema_migrations (name) VALUES ($1)', [f]);
   }
+  // Every table of company records is in the history, including ones added by later migrations.
+  if ((await db.query("SELECT 1 FROM pg_proc WHERE proname = 'history_watch_all'")).rowCount) await db.query('SELECT history_watch_all()');
 }
 
 /**
@@ -37,8 +39,14 @@ export async function ensureAppRole(owner: pg.Pool, appUrl: string) {
   await owner.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
   await owner.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
   await owner.query(`REVOKE ALL ON schema_migrations FROM ${role}`);
+  // The history and the activity log: the app adds to them (the history only through the database's
+  // own trigger) and reads them, but can never change or delete them.
+  const has = async (t: string) => !!(await owner.query('SELECT to_regclass($1) AS r', [t])).rows[0].r;
+  if (await has('public.history')) await owner.query(`REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON history, history_seals FROM ${role}`);
+  await owner.query(`REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM ${role}`);
   await owner.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
   await owner.query(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO ${role}`);
+  if (await has('public.history')) await owner.query(`REVOKE ALL ON SEQUENCE history_id_seq FROM ${role}`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

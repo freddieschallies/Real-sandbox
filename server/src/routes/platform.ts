@@ -29,6 +29,7 @@ async function inCompany<T>(db: Db, companyId: string, fn: (c: Q) => Promise<T>)
     throw e;
   } finally {
     await c.query('RESET app.company_id').catch(() => {});
+    await c.query('RESET app.user_id').catch(() => {});
     c.release();
   }
 }

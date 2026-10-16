@@ -30,6 +30,7 @@ import { DemoWhatsApp, seedWhatsApp, type DemoWaState } from './demoWhatsApp.ts'
 import { DemoPastelSetup, seedPastelSetup, type DemoPastelState } from './demoPastel.ts';
 import { DemoSupport, SUPPORT_WHO, seedSupport, type DemoSupportState } from './demoSupport.ts';
 import { findStock, stockScore } from '../../server/src/core/stockSearch.ts';
+import { DemoHistory, seedHistory, type DemoHistoryState } from './demoHistory.ts';
 import type { PaySettings } from '../../server/src/core/pay.ts';
 import { demoFuel, demoVehiclesPage, type DemoTrip } from './demoVehicles.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
@@ -1733,7 +1734,12 @@ export class DemoTransport implements Transport {
     }
     // A slip in the demo must never leave a screen blank: answer with the error instead.
     // In the real-data demo, the company's real people and stores stand in for the made-up ones.
-    try { return realDeep(await this.handle(req)); } catch (e) {
+    try {
+      const res = realDeep(await this.handle(req));
+      // Every change goes into the History (the CEO's record of who did what).
+      try { new DemoHistory(((this.state as { history?: DemoHistoryState }).history ??= seedHistory())).remember(req, res, this.who); this.persist(this.state); } catch { /* never in the way */ }
+      return res;
+    } catch (e) {
       console.error('demo error', req.method, req.path, e);
       return { status: 500, body: { error: 'demo error', reasons: [`the test drive hit a problem (${(e as Error)?.message ?? e}); Reset the demo on the welcome screen if it keeps happening`] } };
     }
@@ -1780,6 +1786,11 @@ export class DemoTransport implements Transport {
         user: who,
         company: { id: 'demo', name: 'ZSP (demo)' },
       });
+    }
+    if (p === '/history' || p.startsWith('/history/')) {
+      const lvl0 = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
+      if (lvl0 !== 'creator' || this.who.id === SUPPORT_WHO.id) return refuse(403, 'the history is for the Creator (the CEO) only');
+      return new DemoHistory(((this.state as { history?: DemoHistoryState }).history ??= seedHistory())).route(req.path);
     }
     const sup = this.supportRoute(p, req, b);
     if (sup) return sup;
@@ -1882,7 +1893,7 @@ export class DemoTransport implements Transport {
       it.photoId = b.photoId;
       ((this.state as { priceMeta?: Record<string, { by: string; at: string }> }).priceMeta ??= {})[it.id] = { by: this.who.name, at: new Date().toISOString() };
       this.persist(this.state);
-      return ok({ id: it.id, photoId: b.photoId });
+      return ok({ id: it.id, photoId: b.photoId, description: `${it.code} · ${it.description}` });
     }
     if (p === '/stock/catalogue') return ok(this.stock().catalogue());
     {

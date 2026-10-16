@@ -275,6 +275,12 @@ export const GUIDES: Guide[] = [
     'Tap "End now" on the band (or in Settings) the moment you want them out. They can never get in without you.',
     'Locked out of your own login? Phone Real Sandbox: they send you a new setup code without coming in.',
   ] },
+  { id: 'ceo-history', title: 'See who changed what (the History, for fraud)', roles: ['creator'], steps: [
+    'History tab (only you, the Creator, have it): every change anyone made, who and when, with what it was before. Deleted things too.',
+    'Search a name, job or invoice number, part or amount; or choose who, what and the time.',
+    'Tap an entry for every field before and after, and everything else that happened to that job, invoice or part.',
+    'Nobody can change or delete the History, not even you. "Check the history" shows whether anything was ever taken out or changed.',
+  ] },
   { id: 'ceo-access', title: 'Decide who may do what', roles: CEO, steps: [
     'People → the person → Position: their role (technician, admin, accounts, stock controller, manager, HR, mechanic).',
     'Under the position, switch extra work on or off for that person (e.g. give Admin the stockroom when the stock controller is away).',

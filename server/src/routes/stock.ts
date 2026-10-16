@@ -794,7 +794,7 @@ export async function readPendingInvoices(db: Db, reader: InvoiceReader, uploadR
     } catch {
       await client.query('ROLLBACK').catch(() => {});
     } finally {
-      await client.query('RESET app.company_id').catch(() => {});
+      await client.query('RESET app.company_id').catch(() => {}); await client.query('RESET app.user_id').catch(() => {});
       client.release();
     }
   }

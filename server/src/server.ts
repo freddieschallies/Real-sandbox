@@ -9,6 +9,7 @@ import { escalate, pollInboxes } from './intake.ts';
 import { breakdownReaderFromEnv } from './breakdownReader.ts';
 import { geocoderFromEnv } from './geocoder.ts';
 import { locateStores } from './storePins.ts';
+import { sealAll } from './routes/history.ts';
 
 // Migrations run as the database owner; the app then runs as its own restricted user.
 const appUrl = process.env.DATABASE_URL ?? '';
@@ -56,3 +57,6 @@ if (geocoder) setInterval(() => {
 const purge = () => purgeOldPhotos(pool).then(n => { if (n) app.log.info(`removed ${n} old vehicle photos`); }).catch(e => app.log.error(e));
 purge();
 setInterval(purge, 6 * 3600_000);
+
+// The history: what has settled is sealed every 5 minutes, so nothing can later be taken out unseen.
+setInterval(() => { sealAll(pool).catch(e => app.log.error(e)); }, 5 * 60_000);

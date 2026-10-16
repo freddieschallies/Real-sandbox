@@ -86,6 +86,8 @@ export function registerAuth(app: FastifyInstance, db: Db) {
     const actor = await loadActor(req.db, req.user.sub, req.user.v ?? 0);
     if (!actor) return reply.code(401).send({ error: 'signed out: sign in again' });
     req.actor = actor;
+    // Who is doing this, for the history (db/072_history.sql).
+    await req.db.query("SELECT set_config('app.user_id', $1, false)", [actor.id]);
     if (req.user.s) {
       // Support only while the CEO's permission lasts: ended or run out means signed out at once.
       const ok = (await req.db.query('SELECT 1 FROM support_grants WHERE id = $1 AND ended_at IS NULL AND until > now()', [req.user.s])).rowCount;
@@ -126,6 +128,7 @@ export function registerAuth(app: FastifyInstance, db: Db) {
       return wrong();
     }
     if (!u.login_enabled) return fail(reply, 403, 'your login is stopped', 'Ask the office (HR or the CEO) to allow it again.');
+    await req.db.query("SELECT set_config('app.user_id', $1, false)", [u.id]);
     await req.db.query('UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = now() WHERE id = $1', [u.id]);
     await audit(req.db, u.id, 'login', 'user', u.id, { remember: !!body.data.remember });
     return signedIn(dir.company_id, u, !!body.data.remember);
@@ -167,6 +170,7 @@ export function registerAuth(app: FastifyInstance, db: Db) {
       return wrong();
     }
     const epoch = u.session_epoch + 1;
+    await req.db.query("SELECT set_config('app.user_id', $1, false)", [u.id]);
     await req.db.query(
       `UPDATE users SET password_hash = $2, password_set_at = now(), login_enabled = true, failed_logins = 0, locked_until = NULL,
               session_epoch = $3, last_login_at = now() WHERE id = $1`, [u.id, await hashPassword(b.password), epoch]);

@@ -37,6 +37,7 @@ export const PLACE_WORDS: Record<string, string> = {
   invoices: 'invoice billing bill money in credit notes paid',
   supplier: 'supplier invoices slips till slips money out bills',
   pos: 'purchase orders po orders stock run',
+  history: 'history log audit trail fraud who changed deleted changes backlog record of everything',
   prices: 'price list prices parts part price what does it cost selling price picture of a part',
   customers: 'clients customer statements statement accounts',
   debtors: 'owing owed age analysis 30 60 90 120 days on hold overdue statement',

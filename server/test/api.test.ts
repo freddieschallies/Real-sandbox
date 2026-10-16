@@ -3284,3 +3284,50 @@ test('price list: every part with its selling price only, for everyone; anyone p
   assert.ok(after.photoBy);
   assert.equal((await app.inject({ method: 'GET', url: `/photos/${pic.body.id}`, headers: { authorization: `Bearer ${tokens.admin}` } })).statusCode, 200, 'everyone sees the picture');
 });
+
+test('history: every change kept with who and when, only the Creator reads it, nobody can change or delete it, and tampering shows', async () => {
+  const h = await call('creator', 'GET', '/history');
+  assert.equal(h.status, 200, JSON.stringify(h.body));
+  assert.ok(h.body.total > 50 && h.body.entries.length === 100);
+  assert.ok(h.body.entries.some((e: { who: string }) => e.who !== 'The app (automatic)'), 'who did it');
+  for (const who of ['admin', 'director', 'books']) {
+    if ((await call(who, 'GET', '/me')).status === 401) tokens[who] = (await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW })).body.token;
+    assert.equal((await call(who, 'GET', '/history')).status, 403, `${who}: the Creator only`);
+  }
+  // Deleted things are kept, with what they were.
+  const del = (await call('creator', 'GET', '/history?op=delete')).body.entries;
+  assert.ok(del.length > 0 && del[0].op === 'delete');
+  const one = (await call('creator', 'GET', `/history/${del[0].id}`)).body;
+  assert.ok(one.fields.length > 0 && one.fields.some((f: { before: string }) => f.before && f.before !== '—'), JSON.stringify(one));
+  // A price change: who, from what, to what.
+  const job = (await call('creator', 'GET', '/history?what=jobs&op=add')).body.entries[0];
+  assert.ok(job && /^job \d+/.test(job.name), JSON.stringify(job));
+  // Nobody can change or delete it: not the app, not even the database owner.
+  await assert.rejects(appDb.query('DELETE FROM history'), /permission denied|cannot be changed/);
+  await assert.rejects(appDb.query("UPDATE history SET actor_name = 'x'"), /permission denied|cannot be changed/);
+  await assert.rejects(appDb.query('DELETE FROM audit_log'), /permission denied|cannot be changed/);
+  await assert.rejects(appDb.query("INSERT INTO history (id, company_id, at, tbl, op, hash) VALUES (1, $1, now(), 'jobs', 'add', 'x')", [ids.company]), /permission denied/);
+  await assert.rejects(owner.query('DELETE FROM history WHERE id = (SELECT max(id) FROM history)'), /cannot be changed or deleted/);
+  await assert.rejects(owner.query('TRUNCATE history'), /cannot be changed or deleted/);
+  let check = await call('creator', 'POST', '/history/check');
+  assert.equal(check.status, 200, JSON.stringify(check.body));
+  assert.equal(check.body.ok, true, JSON.stringify(check.body));
+  // Someone with full database access goes around it: the check shows where.
+  const sc = await owner.connect();
+  try {
+    await sc.query("SELECT set_config('app.company_id', $1, false)", [ids.company]);
+    await sc.query("SELECT history_seal($1, interval '0')", [ids.company]);
+    await sc.query('ALTER TABLE history DISABLE TRIGGER history_no_change');
+    const mid = (await sc.query('SELECT id FROM history WHERE company_id = $1 ORDER BY id OFFSET 20 LIMIT 1', [ids.company])).rows[0].id;
+    await sc.query('DELETE FROM history WHERE id = $1', [mid]);
+    check = await call('creator', 'POST', '/history/check');
+    assert.equal(check.body.ok, false, 'a deleted entry is found');
+    const later = (await sc.query('SELECT id FROM history WHERE company_id = $1 ORDER BY id OFFSET 40 LIMIT 1', [ids.company])).rows[0].id;
+    await sc.query(`UPDATE history SET new = jsonb_set(coalesce(new, '{}'), '{note}', '"changed"') WHERE id = $1`, [later]);
+    assert.match((await sc.query('SELECT problem FROM history_verify($1)', [ids.company])).rows[0].problem, /taken out|changed/);
+  } finally {
+    await sc.query('ALTER TABLE history ENABLE TRIGGER history_no_change');
+    await sc.query('RESET app.company_id');
+    sc.release();
+  }
+});

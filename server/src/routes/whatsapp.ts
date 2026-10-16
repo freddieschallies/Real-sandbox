@@ -295,7 +295,7 @@ export function registerWhatsAppRoutes(app: FastifyInstance, db: Db, o: WhatsApp
           await c.query('ROLLBACK').catch(() => {});
           req.log.error(e);
         } finally {
-          await c.query('RESET app.company_id').catch(() => {});
+          await c.query('RESET app.company_id').catch(() => {}); await c.query('RESET app.user_id').catch(() => {});
           c.release();
         }
       }

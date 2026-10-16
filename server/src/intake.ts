@@ -134,7 +134,7 @@ export async function eachCompany(db: Db, fn: (c: Q, companyId: string) => Promi
       await c.query("SELECT set_config('app.company_id', $1, false)", [id]);
       await fn(c, id);
     } finally {
-      await c.query('RESET app.company_id').catch(() => {});
+      await c.query('RESET app.company_id').catch(() => {}); await c.query('RESET app.user_id').catch(() => {});
       c.release();
     }
   }

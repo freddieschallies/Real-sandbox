@@ -1,6 +1,7 @@
 // The office screen (control base), for Admin, Management, Directors and the CEO. Made for a desktop
 // browser: menu, list and detail side by side. Works on a phone too, one screen at a time.
 import { jobOutcome, NO_CHARGE_REASONS, type NoChargeReason } from '../../../server/src/core/jobOutcome.ts';
+import { HistoryPage } from './History.tsx';
 import { PriceList } from '../prices/PriceList.tsx';
 import { SupportBanner, SupportSettings } from './Support.tsx';
 import { BottomTabs } from '../BottomTabs.tsx';
@@ -52,7 +53,7 @@ import { WhatsAppTab, useWhatsAppUnread } from '../whatsapp/WhatsAppTab.tsx';
 import { BreakdownAlert, BreakdownById, BreakdownList, BreakdownSettings, type Bd } from './Breakdowns.tsx';
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
-type Tab = 'prices' | 'setup' | 'today' | 'breakdowns' | 'whatsapp' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'pos' | 'customers' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'vehicles' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
+type Tab = 'history' | 'prices' | 'setup' | 'today' | 'breakdowns' | 'whatsapp' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'pos' | 'customers' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'vehicles' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
 type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | { kind: 'supplierinv'; id: string } | { kind: 'debtor'; id: string } | { kind: 'customer'; id: string; show?: 'statement' } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
@@ -71,7 +72,7 @@ const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: '
 /** On the phone, unless the CEO or an admin pinned others: the first four show and the rest go under More, most used first. */
 const PHONE_ORDER: string[] = MENU_TABS.office.map(t => t.key);
 /** Screens that use the whole width on a computer (no list and detail). */
-const FULL: Tab[] = ['prices', 'setup', 'today', 'profit', 'pos', 'accounts', 'map', 'departments', 'timesheets', 'vehicles', 'whatsapp', 'settings'];
+const FULL: Tab[] = ['history', 'prices', 'setup', 'today', 'profit', 'pos', 'accounts', 'map', 'departments', 'timesheets', 'vehicles', 'whatsapp', 'settings'];
 const OFFICE_LEVELS = ['admin', 'accounts', 'management', 'hr', 'director', 'creator'];
 export const isOffice = (level?: string) => OFFICE_LEVELS.includes(level ?? '');
 
@@ -146,13 +147,15 @@ export function OfficeApp() {
     { key: 'repairs', label: 'Workshop', count: o.d.jobs.filter(j => j.ready_to_deliver && j.status !== 'closed' && j.status !== 'cancelled').length || undefined },
     { key: 'stores', label: 'Stores' },
     { key: 'barcodes', label: 'QR codes' },
+    { key: 'history', label: 'History' },
     ...(setup.d?.dismissed ? [{ key: 'setup' as Tab, label: 'Start-up' }] : []),
     { key: 'settings', label: 'Settings' },
   ];
   const brand = useBrand();
   useLetterhead(); // ready for printing quotes, invoices and timesheets on the letterhead
   const mine = officeTabKeys(level, work, { people: canPeople, settings: menu.canEdit || brand.canTheme });
-  const tabs = allTabs.filter(t => mine.includes(t.key));
+  // Support from Real Sandbox never sees the history.
+  const tabs = allTabs.filter(t => mine.includes(t.key) && !(t.key === 'history' && s.session?.support));
   const has = (k: Tab) => tabs.some(t => t.key === k);
   const arrange = () => { setMenuStart(level); go('settings'); };
   // Until the person picks a tab, show their first one (their work may load after the screen does);
@@ -197,7 +200,8 @@ export function OfficeApp() {
   );
 
   const [part, setPart] = useState<{ n: number; id?: string }>({ n: 0 });
-  const body = tab === 'prices' ? <PriceList key={part.n} itemId={part.id} />
+  const body = tab === 'history' ? <HistoryPage />
+    : tab === 'prices' ? <PriceList key={part.n} itemId={part.id} />
     : tab === 'vehicles' ? <VehiclesPage key={veh.n} o={o} start={veh.start} />
     : tab === 'whatsapp' ? <WhatsAppTab openBreakdown={id => go('breakdowns', { kind: 'breakdown', id })} /> : list;
   const close = () => setSel(null);

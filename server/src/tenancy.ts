@@ -58,6 +58,7 @@ export function registerTenancy(app: FastifyInstance) {
     try {
       await c.query('ROLLBACK').catch(() => {});
       await c.query('RESET app.company_id');
+      await c.query('RESET app.user_id');
       c.release();
     } catch (e) {
       c.release(e as Error);
