@@ -1,6 +1,7 @@
 // Quotes, invoices and the link to Sage Pastel Partner, for whoever the CEO gave quotes and invoices.
 // A quote or invoice is made here on the company letterhead, sent, and then exported in an import
 // batch for Pastel, so the books stay in Pastel.
+import { ExportBar } from '../exportDoc.tsx';
 import { PastelSetup } from './PastelSetup.tsx';
 import { letterheadBottom, letterheadTop } from '../letterhead.tsx';
 import { BrandLogo, brandChanged, currentLogo, useBrand } from '../brand.tsx';
@@ -148,32 +149,28 @@ export function Paper({ kind, doc, lines, totals, company }: { kind: 'quote' | '
   );
 }
 
-/** Print or save as PDF (in a browser). */
-function printDoc(kind: 'quote' | 'invoice', doc: any, lines: Line[], totals: any, co: any) {
-  if (Platform.OS !== 'web') return false;
+/** The quote, invoice or credit note as printed and exported (on the letterhead). */
+export function docHtml(kind: 'quote' | 'invoice' | 'credit', doc: any, lines: Line[], totals: any, co: any): string {
   const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
   const rows = lines.map(l => `<tr><td>${esc(l.description)}</td><td class=r>${l.qty}</td><td class=r>${R(l.unitPriceCents)}</td><td class=r>${R(D.lineTotal(l))}</td></tr>`).join('');
   // The company's letterhead (set by the CEO), or the plain heading and footer.
-  const plainHead = `<div class=bar></div><div class=head>${currentLogo() ? `<img src="${currentLogo()}" style="height:56px;background:#fff;padding:4px;border-radius:4px;margin-right:14px">` : ''}<div style="flex:1"><h1>${esc(co.trading_name || co.legal_name)}</h1>${co.trading_name ? `<div>${esc(co.legal_name)}</div>` : ''}</div><div class=t>${kind === 'quote' ? 'QUOTATION' : 'TAX INVOICE'}</div></div>`;
+  const plainHead = `<div class=bar></div><div class=head>${currentLogo() ? `<img src="${currentLogo()}" style="height:56px;background:#fff;padding:4px;border-radius:4px;margin-right:14px">` : ''}<div style="flex:1"><h1>${esc(co.trading_name || co.legal_name)}</h1>${co.trading_name ? `<div>${esc(co.legal_name)}</div>` : ''}</div><div class=t>${kind === 'quote' ? 'QUOTATION' : kind === 'credit' ? 'CREDIT NOTE' : 'TAX INVOICE'}</div></div>`;
   const plainFoot = `<div class=foot>${esc([co.address, co.phone, co.email].filter(Boolean).join(' · '))}<br>Reg. no. ${esc(co.reg_no || '–')} · VAT no. ${esc(co.vat_no || '–')}</div><div class=bar></div>`;
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${kind === 'quote' ? 'Quote' : 'Invoice'} ${kind === 'quote' ? doc.quote_number : doc.invoice_number}</title>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${kind === 'quote' ? `Quote ${doc.quote_number}` : kind === 'credit' ? `Credit note ${doc.credit_number}` : `Invoice ${doc.invoice_number}`}</title>
 <style>body{font:13px Arial,sans-serif;margin:0;color:#111}.bar{height:10px;background:#E8701A}.head{background:#111;color:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center}
 .head h1{margin:0;font-size:22px;letter-spacing:1px}.head .t{color:#E8701A;font-weight:900;font-size:20px}.body{padding:20px 24px}.two{display:flex;justify-content:space-between;gap:20px}
 table{width:100%;border-collapse:collapse;margin-top:14px}th{text-align:left;border-top:2px solid #111;border-bottom:1px solid #ccc;padding:6px 4px}td{border-bottom:1px solid #eee;padding:6px 4px}.r{text-align:right}
 .tot{text-align:right;margin-top:8px}.tot b{font-size:16px}.foot{background:#111;color:#eee;font-size:11px;padding:10px 24px}@media print{.noprint{display:none}}</style></head><body>
 ${letterheadTop(plainHead)}
-<div class=body><div class=two><div><b>${kind === 'quote' ? 'Quote for' : 'Invoice to'}</b><br>${esc(doc.client)}<br>${esc(doc.store)}<br>${esc(doc.store_address)}</div>
-<div><b>${kind === 'quote' ? 'Quote no.' : 'Invoice no.'}</b> ${kind === 'quote' ? doc.quote_number : doc.invoice_number}<br><b>Date</b> ${day(doc.sent_at ?? doc.created_at)}<br>
-${kind === 'quote' ? `<b>Valid until</b> ${day(doc.valid_until)}` : `<b>Due</b> ${day(doc.due_date)}`}${doc.client_ref ? `<br><b>Your order no.</b> ${esc(doc.client_ref)}` : ''}${doc.job_number ? `<br><b>Job</b> ${doc.job_number}` : ''}</div></div>
+<div class=body><div class=two><div><b>${kind === 'quote' ? 'Quote for' : kind === 'credit' ? 'Credit to' : 'Invoice to'}</b><br>${esc(doc.client)}<br>${esc(doc.store)}<br>${esc(doc.store_address)}</div>
+<div>${kind === 'credit' ? `<b>Credit note no.</b> ${doc.credit_number}<br><b>Against invoice</b> ${doc.invoice_number}<br><b>Date</b> ${day(String(doc.credit_at ?? doc.created_at).slice(0, 10))}` : `<b>${kind === 'quote' ? 'Quote no.' : 'Invoice no.'}</b> ${kind === 'quote' ? doc.quote_number : doc.invoice_number}<br><b>Date</b> ${day(doc.sent_at ?? doc.created_at)}<br>
+${kind === 'quote' ? `<b>Valid until</b> ${day(doc.valid_until)}` : `<b>Due</b> ${day(doc.due_date)}`}`}${doc.client_ref ? `<br><b>Your order no.</b> ${esc(doc.client_ref)}` : ''}${doc.job_number ? `<br><b>Job</b> ${doc.job_number}` : ''}</div></div>
 ${kind === 'quote' && doc.title ? `<h3>${esc(doc.title)}</h3>` : ''}<table><tr><th>Description</th><th class=r>Qty</th><th class=r>Price</th><th class=r>Total</th></tr>${rows}</table>
 <div class=tot>Total excl. VAT ${R(totals.exVatCents)}<br>VAT ${doc.vat_pct ?? 15}% ${R(totals.vatCents)}<br><b>Total ${R(totals.totalCents)}</b></div>
-${doc.notes ? `<p>${esc(doc.notes)}</p>` : ''}<p>${esc(kind === 'quote' ? co.quote_terms : co.invoice_terms)}</p>${kind === 'invoice' && co.bank_details ? `<p><b>Banking details:</b> ${esc(co.bank_details)}</p>` : ''}</div>
+${doc.notes ? `<p>${esc(doc.notes)}</p>` : ''}${kind === 'credit' ? `<p><b>Reason:</b> ${esc(doc.reason)}</p>` : `<p>${esc(kind === 'quote' ? co.quote_terms : co.invoice_terms)}</p>`}${kind === 'invoice' && co.bank_details ? `<p><b>Banking details:</b> ${esc(co.bank_details)}</p>` : ''}</div>
 ${letterheadBottom(plainFoot)}
 <p class=noprint style="padding:12px 24px"><button onclick="print()">Print / save as PDF</button></p></body></html>`;
-  const w = window.open('', '_blank');
-  if (!w) return false;
-  w.document.write(html); w.document.close();
-  return true;
+  return html;
 }
 
 // ---- Quotes -------------------------------------------------------------------------------------
@@ -313,7 +310,8 @@ export function QuoteDetail({ b, id, techs }: { b: Books; id: string; techs: { i
       {draft ? null : <Reasons a={ans} />}
       <Heading>As the client sees it</Heading>
       <Paper kind="quote" doc={{ ...q, title, notes, client_ref: ref }} lines={lines} totals={totals} company={d.company ?? b.company?.profile} />
-      {Platform.OS === 'web' ? <Button label="Print / save as PDF" kind="secondary" onPress={() => { if (!printDoc('quote', { ...q, title, notes, client_ref: ref }, lines, totals, d.company ?? b.company?.profile ?? {})) setAns({ ok: false, reasons: ['the browser blocked the print window: allow pop-ups'] }); }} /> : null}
+      <ExportBar title={`Export quote ${q.quote_number}`} email={q.store_email ?? q.client_email ?? null} phone={q.client_phone ?? null}
+        make={() => ({ kind: 'quote', title: `Quote ${q.quote_number} – ${q.client}${q.store ? `, ${q.store}` : ''}`, ref: `quote ${q.quote_number}`, html: docHtml('quote', { ...q, title, notes, client_ref: ref }, lines, totals, d.company ?? b.company?.profile ?? {}) })} />
       {draft ? <Button label="Throw away this draft" kind="quiet" onPress={() => doThen(`/quotes/${id}/cancel`, { note: 'Draft thrown away' })} /> : null}
     </>
   );
@@ -478,6 +476,11 @@ export function InvoiceDetail({ b, id }: { b: Books; id: string }) {
             <View key={c.id} style={{ borderTopWidth: 1, borderTopColor: C.line, paddingTop: 6, gap: 2 }}>
               <Text style={[st.body, { fontWeight: '800' }]}>Credit note {c.credit_number} · {R(c.amount_cents)} excl. VAT ({R(c.total_cents)} incl.)</Text>
               <Text style={st.small}>{c.reason} · {day(c.created_at.slice(0, 10))} · {c.created_by}</Text>
+              <ExportBar title={`Export credit note ${c.credit_number}`} email={i.store_email ?? i.client_email ?? null} phone={i.client_phone ?? null}
+                make={() => ({ kind: 'credit_note', title: `Credit note ${c.credit_number} – ${i.client}`, ref: `credit note ${c.credit_number}`,
+                  html: docHtml('credit', { ...i, credit_number: c.credit_number, credit_at: c.created_at, reason: c.reason, client_ref: i.client_ref },
+                    [{ kind: 'other', description: `Credit against invoice ${i.invoice_number}`, qty: 1, unitPriceCents: c.amount_cents } as Line],
+                    { exVatCents: c.amount_cents, vatCents: c.total_cents - c.amount_cents, totalCents: c.total_cents }, d.company ?? b.company?.profile ?? {}) })} />
             </View>
           ))}
         </Card>
@@ -512,7 +515,8 @@ export function InvoiceDetail({ b, id }: { b: Books; id: string }) {
       {draft ? null : <Reasons a={ans} />}
       <Heading>As the client sees it</Heading>
       <Paper kind="invoice" doc={{ ...i, notes, client_ref: ref }} lines={lines} totals={totals} company={d.company ?? b.company?.profile} />
-      {Platform.OS === 'web' ? <Button label="Print / save as PDF" kind="secondary" onPress={() => { if (!printDoc('invoice', { ...i, notes, client_ref: ref }, lines, totals, d.company ?? b.company?.profile ?? {})) setAns({ ok: false, reasons: ['the browser blocked the print window: allow pop-ups'] }); }} /> : null}
+      <ExportBar title={`Export invoice ${i.invoice_number}`} email={i.store_email ?? i.client_email ?? null} phone={i.client_phone ?? null}
+        make={() => ({ kind: 'invoice', title: `Invoice ${i.invoice_number} – ${i.client}${i.store ? `, ${i.store}` : ''}`, ref: `invoice ${i.invoice_number}`, html: docHtml('invoice', { ...i, notes, client_ref: ref }, lines, totals, d.company ?? b.company?.profile ?? {}) })} />
       {draft ? <Button label="Throw away this draft" kind="quiet" onPress={() => doThen(`/invoices/${id}/cancel`, { note: 'Draft thrown away' })} /> : null}
     </>
   );

@@ -3467,3 +3467,61 @@ test('assistants and casual labour: the technician ticks who is with him, the of
   assert.equal((await call('books', 'POST', '/crew/pay', { memberId: joe.body.id, from: today, to: today })).status, 409, 'paid once');
   assert.equal((await call('books', 'GET', `/crew/pay?from=${today}&to=${today}`)).body.casuals.find((x: { name: string }) => x.name === 'Joe Casual').paid.length, 1);
 });
+
+test('export any document: kept as it went out, a PDF to download, a link for WhatsApp that needs no sign-in, and email with the PDF', async () => {
+  const page = `<!doctype html><html><head><meta charset="utf-8"><title>Quote 9</title></head><body><h1>Quote 9</h1><p>Total R 1 150.00</p>
+    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="><img src="http://169.254.169.254/latest">
+    <script>document.body.innerHTML='hacked'</script><button onclick="alert(1)">x</button></body></html>`;
+  const made = await call('admin', 'POST', '/exports', { kind: 'quote', title: 'Quote 9 for Spar', ref: 'quote 9', html: page });
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  assert.equal((await call('admin', 'POST', '/exports', { kind: 'nonsense', title: 'x', html: page })).status, 400);
+  // Download: the PDF (Chromium on the server), or the page made safe.
+  const file = await app.inject({ method: 'GET', url: `/exports/${made.body.id}/file`, headers: { authorization: `Bearer ${tokens.admin}` } });
+  assert.equal(file.statusCode, 200);
+  if (made.body.pdf) assert.equal(file.rawPayload.subarray(0, 5).toString(), '%PDF-');
+  else { assert.doesNotMatch(file.payload, /<script|onclick|169\.254/); assert.match(String(file.headers['content-security-policy']), /sandbox/); }
+  assert.equal((await app.inject({ method: 'GET', url: `/exports/${made.body.id}/file`, headers: { authorization: `Bearer ${tokens.tech}` } })).statusCode, 403, "someone else's document");
+  assert.equal((await app.inject({ method: 'GET', url: `/exports/${made.body.id}/file`, headers: { authorization: `Bearer ${tokens.creator}` } })).statusCode, 200, 'the CEO sees what went out');
+  // The page made safe: no scripts, handlers or pictures from elsewhere.
+  const { safePage } = await import('../src/pdf.ts');
+  const safe = safePage(page);
+  assert.doesNotMatch(safe, /<script|onclick|169\.254/);
+  assert.match(safe, /data:image\/png/);
+  // A link for WhatsApp: opens without signing in; it signs in to nothing else.
+  const link = await call('admin', 'POST', `/exports/${made.body.id}/link`);
+  assert.equal(link.status, 200);
+  assert.match(link.body.message, /Quote 9 for Spar/);
+  const path = new URL(link.body.url).pathname;
+  const pub = await app.inject({ method: 'GET', url: path });
+  assert.equal(pub.statusCode, 200);
+  assert.equal((await app.inject({ method: 'GET', url: '/me', headers: { authorization: `Bearer ${path.slice(3)}` } })).statusCode, 401, 'the link is no sign-in');
+  assert.equal((await app.inject({ method: 'GET', url: '/x/nonsense' })).statusCode, 410);
+  // Email with the PDF attached.
+  mailBox = [];
+  const em = await call('admin', 'POST', `/exports/${made.body.id}/email`, { to: ['store@example.co.za'], message: 'As discussed' });
+  assert.equal(em.status, 200, JSON.stringify(em.body));
+  assert.equal(mailBox.length, 1);
+  assert.match(mailBox[0].subject, /Quote 9 for Spar/);
+  // Kept as it went out: nobody changes or deletes it.
+  await assert.rejects(db.query("UPDATE doc_exports SET html = 'changed' WHERE id = $1", [made.body.id]), /kept/);
+  await assert.rejects(db.query('DELETE FROM doc_exports WHERE id = $1', [made.body.id]), /kept/);
+  const mine = (await call('admin', 'GET', '/exports')).body.exports.find((x: { id: string }) => x.id === made.body.id);
+  assert.deepEqual(mine.sends.map((s: { how: string }) => s.how), ['download', 'download', 'link', 'email']);
+});
+
+test('export the job card: the client\'s copy made from the job (work done, parts, sign-off, no prices), kept and sent like any document', async () => {
+  const job = (await db.query("SELECT id, job_number FROM jobs WHERE status = 'closed' AND lead_technician_id = $1 ORDER BY closed_at DESC LIMIT 1", [ids.tech])).rows[0]
+    ?? (await db.query("SELECT id, job_number FROM jobs WHERE status = 'closed' ORDER BY closed_at DESC LIMIT 1")).rows[0];
+  const r = await call('admin', 'POST', `/jobs/${job.id}/export`);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.match(r.body.title, new RegExp(`^Job card ${job.job_number}`));
+  const x = (await db.query('SELECT html FROM doc_exports WHERE id = $1', [r.body.id])).rows[0];
+  assert.match(x.html, /Fault reported/);
+  assert.match(x.html, /Sign-off/);
+  assert.doesNotMatch(x.html, /R\s?\d+[.,]\d{2}/, 'no prices on the job card');
+  assert.equal((await call('tech3', 'POST', `/jobs/${job.id}/export`)).status, 403, "another technician's job");
+  const link = await call('admin', 'POST', `/exports/${r.body.id}/link`);
+  assert.equal(link.status, 200);
+  const pubr = await app.inject({ method: 'GET', url: new URL(link.body.url).pathname });
+  assert.equal(pubr.statusCode, 200, pubr.payload.slice(0, 300));
+});

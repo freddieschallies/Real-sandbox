@@ -2,6 +2,7 @@
 // client with every job, invoice, credit note and quote; and its statement (brought forward, every
 // invoice, credit note and payment with the running balance, and the age analysis: current, 30, 60,
 // 90 and 120 days), printed on the letterhead or emailed to the customer.
+import { ExportBar } from '../exportDoc.tsx';
 import { ClientRatesEditor } from './Books.tsx';
 import React, { useEffect, useState } from 'react';
 import { Platform, Text, View } from 'react-native';
@@ -190,17 +191,15 @@ export function StatementPanel({ clientId, co }: { clientId: string; co: any }) 
   useEffect(() => { load(); }, [clientId, period]);
   const s: ST.Statement | null = d?.statement ?? null;
   const company = { ...co, ...(d?.company ?? {}) };
-  const print = () => {
-    if (Platform.OS !== 'web' || !s) return;
+  const page = () => {
+    if (!s) return null;
     const esc = (x: unknown) => String(x ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]!));
     const plainHead = `<div class=bar></div><div class=head>${currentLogo() ? `<img src="${currentLogo()}" style="height:56px;background:#fff;padding:4px;border-radius:4px;margin-right:14px">` : ''}<div style="flex:1"><h1>${esc(company.trading_name || company.legal_name)}</h1>${company.trading_name ? `<div>${esc(company.legal_name)}</div>` : ''}</div></div>`;
     const plainFoot = `<div class=foot>${esc([company.address, company.phone, company.email].filter(Boolean).join(' · '))}<br>Reg. no. ${esc(company.reg_no || '–')} · VAT no. ${esc(company.vat_no || '–')}</div><div class=bar></div>`;
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Statement ${esc(d.client.name)}</title><style>${ST.STATEMENT_CSS}</style></head><body>
 ${letterheadTop(plainHead)}${ST.statementHtml(s, d.client, company)}${letterheadBottom(plainFoot)}
 <p class=noprint style="padding:12px 24px"><button onclick="print()">Print / save as PDF</button></p></body></html>`;
-    const w = window.open('', '_blank');
-    if (!w) { setAns({ ok: false, title: 'The browser blocked the print window', lines: ['Allow pop-ups for this page.'] }); return; }
-    w.document.write(html); w.document.close();
+    return { kind: 'statement' as const, title: `Statement – ${d.client.name} – ${day(s.to)}`, ref: `statement ${d.client.name}`, html };
   };
   const email = async () => {
     const list = (to ?? '').split(/[,;\s]+/).map(x => x.trim()).filter(Boolean);
@@ -241,7 +240,7 @@ ${letterheadTop(plainHead)}${ST.statementHtml(s, d.client, company)}${letterhead
               <Text style={[st.body, { fontWeight: '800' }]}>Balance due {R(s.closing)}</Text>
             </View>
           </Card>
-          {Platform.OS === 'web' ? <Button label="Print / save as PDF (letterhead)" kind="secondary" onPress={print} /> : null}
+          <ExportBar title="Export the statement" make={page} phone={d.client.phone ?? null} noEmail />
           <Card>
             <Text style={[st.body, { fontWeight: '800' }]}>Email it to the customer</Text>
             <Field label="To (separate with commas)" value={to ?? ''} onChangeText={setTo} placeholder="accounts@customer.co.za" autoCapitalize="none" keyboardType="email-address" />

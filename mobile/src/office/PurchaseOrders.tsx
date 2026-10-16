@@ -1,6 +1,8 @@
 // Purchase orders the technicians ask for on their stock runs: approve (or say no, with why). The
 // stock controller, admin, the department manager (his own team) and the CEO approve; Accounts sees
 // them. Once approved the PO number is on the technician's phone; he scans the slip against it.
+import { ExportBar } from '../exportDoc.tsx';
+import { techPoHtml } from '../jobs/poPage.ts';
 import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
@@ -79,6 +81,7 @@ export function PurchaseOrderList() {
             {(p.lines ?? []).map((l: any) => <Text key={l.lineNo} style={st.body}>{l.qty} × {l.description}{l.code ? ` (${l.code})` : ''}</Text>)}
             {p.note ? <Text style={st.small}>Note: {p.note}</Text> : null}
             {p.decided_by ? <Text style={st.small}>{p.status === 'rejected' ? 'Not approved' : 'Approved'} by {p.decided_by}{p.decision_note ? `: ${p.decision_note}` : ''}</Text> : null}
+            {['approved', 'collected'].includes(p.status) ? <ExportBar title={`PO ${p.external_number ?? p.po_number}: PDF, WhatsApp or email`} make={() => ({ kind: 'purchase_order', title: `Purchase order ${p.external_number ?? p.po_number} – ${p.supplier_name}`, ref: `PO ${p.po_number}`, html: techPoHtml(p, s.session?.company.name ?? '') })} /> : null}
             {p.invoice ? <Text style={[st.small, { color: C.good }]}>Slip {p.invoice.invoiceNumber}{p.invoice.totalCents != null ? `, ${D.rand(p.invoice.totalCents)}` : ''}: the parts are on {p.job_number ? `job ${p.job_number}` : 'his van'}.</Text> : null}
             {p.canDecide ? (
               noFor === p.id ? (

@@ -31,6 +31,13 @@ export const GUIDES: Guide[] = [
     'The pill at the top shows how many things are waiting. Tap it to see them.',
     'Some things need signal (loading new jobs, search, purchase orders). The app tells you when.',
   ] },
+  { id: 'export', title: 'Send or save any document (PDF, WhatsApp, email)', roles: ALL, steps: [
+    'Every document has an Export box: the job card, quotes, invoices, credit notes, statements, purchase orders, timesheets, site reports, stock takes, the price list and the reports.',
+    'Download PDF (on a phone: Open PDF) saves it or prints it. WhatsApp sends a link: the client taps it to open, save or print the PDF, for 7 days, without signing in.',
+    'Email sends it with the PDF attached, from the company\'s email. Copy link (or Share on a phone) puts the link in any other message.',
+    'The job card for the client has the work done, parts used, before and after photos and the manager\'s signature, but no prices.',
+    'Everything sent is kept exactly as it went out, with who sent it and where.',
+  ] },
   { id: 'dark', title: 'Light or dark screen', roles: ALL, steps: [
     'Tap the sun or moon button at the top.',
     'Dark is easier on the eyes at night; light is easier to read in bright sun. Each phone keeps its own choice.',

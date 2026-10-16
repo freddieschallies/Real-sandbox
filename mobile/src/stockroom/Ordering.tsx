@@ -1,6 +1,7 @@
 // Ordering from suppliers: the stockroom's purchase orders (made from the order list), sent by email
 // on the letterhead, by WhatsApp or printed, and received against the delivery; and the suppliers'
 // contact details for sending them.
+import { ExportBar } from '../exportDoc.tsx';
 import React, { useEffect, useState } from 'react';
 import { Linking, Platform, Pressable, Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
@@ -80,7 +81,9 @@ function OrderCard({ o, canEmail, changed }: { o: StockOrder; canEmail: boolean;
           {o.note ? <Text style={st.small}>Note: {o.note}</Text> : null}
           {o.status === 'approved' ? (
             <>
-              {Platform.OS === 'web' ? <Button label="Print / save as PDF (letterhead)" kind="secondary" onPress={async () => { const x = await doc(); if (x) printPo(x.doc); }} /> : null}
+              <ExportBar title={`Purchase order ${o.po_number}: PDF, WhatsApp to the supplier`} phone={o.supplier_phone} noEmail
+                make={async () => { const x = await doc(); return x ? { kind: 'purchase_order' as const, title: `Purchase order ${o.po_number} – ${o.supplier_name}`, ref: `PO ${o.po_number}`, html: poPageHtml(x.doc) } : null; }}
+                onSent={how => { if (how === 'whatsapp' && !o.sent_at) sent('whatsapp', o.supplier_phone ?? undefined); }} />
               {canEmail ? (
                 <View style={{ gap: 6 }}>
                   <Field label="Supplier's email" value={to} onChangeText={setTo} autoCapitalize="none" keyboardType="email-address" placeholder="orders@supplier.co.za" />
@@ -93,9 +96,6 @@ function OrderCard({ o, canEmail, changed }: { o: StockOrder; canEmail: boolean;
                 </View>
               ) : <Text style={st.small}>Email goes once the office server's email is set up; until then WhatsApp or print it.</Text>}
               <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-                {!demo && waNumber(o.supplier_phone) ? (
-                  <Button label="Send by WhatsApp" kind="secondary" onPress={async () => { const x = await doc(); if (!x) return; await Linking.openURL(`https://wa.me/${waNumber(o.supplier_phone)}?text=${encodeURIComponent(x.text)}`); await sent('whatsapp', o.supplier_phone ?? undefined); }} style={{ flexGrow: 1 }} />
-                ) : null}
                 {!o.sent_at ? <Button label="I sent it another way" kind="quiet" onPress={() => sent('phone')} style={{ flexGrow: 1 }} /> : null}
               </View>
               {!o.supplier_phone ? <Text style={st.small}>Add the supplier's cell number under Suppliers to send it by WhatsApp.</Text> : null}
@@ -118,14 +118,13 @@ function OrderCard({ o, canEmail, changed }: { o: StockOrder; canEmail: boolean;
   );
 }
 
-export function printPo(doc: R.PoDoc) {
-  if (Platform.OS !== 'web') return;
+export function poPageHtml(doc: R.PoDoc): string {
   const esc = (x: unknown) => String(x ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
   const plainHead = `<div class=bar></div><div class=head>${currentLogo() ? `<img src="${currentLogo()}" style="height:56px;background:#fff;padding:4px;border-radius:4px;margin-right:14px">` : ''}<div style="flex:1"><h1>${esc(doc.company.name)}</h1></div></div>`;
   const plainFoot = `<div class=foot>${esc([doc.company.address, doc.company.phone, doc.company.email].filter(Boolean).join(' · '))}</div><div class=bar></div>`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Purchase order ${doc.number}</title><style>${R.PO_CSS}</style></head><body>
 ${letterheadTop(plainHead)}${R.poHtml(doc)}${letterheadBottom(plainFoot)}<p class=noprint style="padding:12px 24px"><button onclick="print()">Print / save as PDF</button></p></body></html>`;
-  try { const w = window.open('', '_blank'); if (w) { w.document.write(html); w.document.close(); } } catch { /* blocked */ }
+  return html;
 }
 
 /** Suppliers and their contact details (email for purchase orders, cell for WhatsApp). */

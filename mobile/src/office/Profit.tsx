@@ -1,6 +1,8 @@
 // What the jobs made: invoiced (less credit notes) against what they cost (technicians' time on site
 // and driving, km, parts at cost, items bought). Per client, technician, month, and job by job,
 // worst first, so the jobs that lose money stand out. For the CEO and Accounts.
+import { ExportBar } from '../exportDoc.tsx';
+import { escHtml, letterPage } from '../letterhead.tsx';
 import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
@@ -59,6 +61,15 @@ export function ProfitView({ openJob }: { openJob: (jobId: string) => void }) {
         </View>
         <Text style={st.small}>Cost: technicians' hours on site and driving at {R(d.rates.labourCostPerHourCents)} an hour, km at {R(d.rates.vehicleCostPerKmCents)}, parts at their latest cost, and items bought for the job.</Text>
       </Card>
+      <ExportBar title="Export this profit report" make={() => {
+        const e = escHtml, rr = (c: number | null) => (c == null ? '–' : R(c)), pct = (x: number | null) => (x == null ? '–' : `${x}%`);
+        const grp = (title: string, list: ProfitGroup[], month = false) => `<h3>${title}</h3><table><tr><th>${month ? 'Month' : title.replace('By ', '')}</th><th class=r>Jobs</th><th class=r>Invoiced</th><th class=r>Cost</th><th class=r>Profit</th><th class=r>Margin</th></tr>${list.map(g => `<tr><td>${e(month ? MONTH(g.key) : g.key)}</td><td class=r>${g.jobs}</td><td class=r>${rr(g.revenueCents)}</td><td class=r>${rr(g.costCents)}</td><td class="r ${g.profitCents < 0 ? 'bad' : ''}">${rr(g.profitCents)}</td><td class=r>${pct(g.marginPct)}</td></tr>`).join('')}</table>`;
+        const label = range === 'year' ? 'This year' : `Last ${range} days`;
+        const body = `<h2>Profit · ${e(label)}</h2><p><b>Invoiced</b> ${rr(t.revenueCents)} · <b>Cost</b> ${rr(t.costCents)} · <b>Profit</b> ${rr(t.profitCents)} · <b>Margin</b> ${pct(t.marginPct)} · ${t.jobs} jobs${t.notInvoiced ? ` (${t.notInvoiced} closed, not invoiced yet)` : ''}</p>
+${grp('By client', d.byClient)}${grp('By technician', d.byTechnician)}${grp('By month', d.byMonth, true)}
+<h3>Job by job</h3><table><tr><th>Job</th><th>Client / store</th><th>Technician</th><th class=r>Invoiced</th><th class=r>Labour</th><th class=r>Travel</th><th class=r>Parts</th><th class=r>Profit</th></tr>${jobs.map(j => `<tr><td>${j.jobNumber}</td><td>${e(j.client)}<br><span class=muted>${e(j.store)}</span></td><td>${e(j.technician)}</td><td class=r>${j.noCharge ? 'No charge' : rr(j.revenueCents)}</td><td class=r>${rr(j.labourCostCents)}</td><td class=r>${rr(j.travelCostCents)}</td><td class=r>${rr(j.partsCostCents + j.boughtOutCents)}</td><td class="r ${(j.profitCents ?? 0) < 0 ? 'bad' : ''}">${rr(j.profitCents)}</td></tr>`).join('')}</table>`;
+        return { kind: 'profit', title: `Profit report – ${label}`, html: letterPage({ title: `Profit report – ${label}`, label: 'PROFIT REPORT', company: s.session?.company.name ?? '', body, landscape: true }) };
+      }} />
       <Choice options={['client', 'technician', 'month', 'jobs'] as const} value={by} onChange={setBy} labels={{ client: 'By client', technician: 'By technician', month: 'By month', jobs: 'Job by job' }} />
       {by !== 'jobs' ? groups.map(g => (
         <Card key={g.key}>

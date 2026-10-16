@@ -1,6 +1,8 @@
 // Assistants and casual labour with no app: the office's list of them (People tab), with the day rate
 // for casual workers and the hour rate they cost (Accounts and the CEO only), and the casual labour to
 // pay for a week (Timesheets and Accounts). Who was on which job is on the job card (jobs/JobCrew.tsx).
+import { ExportBar } from '../exportDoc.tsx';
+import { escHtml, letterPage } from '../letterhead.tsx';
 import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
@@ -127,6 +129,12 @@ export function CasualPay() {
         );
       })}
       {d && d.casuals.length ? <Text style={[st.body, { fontWeight: '800' }]}>Together: {rand(d.totalCents)}{d.noRate ? ` (and ${d.noRate} without a day rate)` : ''}</Text> : null}
+      {d && d.casuals.length ? <ExportBar title="Export the pay list" make={() => {
+        const e = escHtml;
+        const rows = d.casuals.map(p => `<tr><td>${e(p.name)}${p.phone ? `<br><span class=muted>${e(p.phone)}</span>` : ''}</td><td>${p.days.map(dayName).join(', ')}</td><td class=r>${p.dayCount}</td><td class=r>${p.dayRateCents != null ? rand(p.dayRateCents) : '–'}</td><td class=r><b>${p.amountCents != null ? rand(p.amountCents) : 'no rate'}</b></td><td>${p.paid.length ? `Paid by ${e(p.paid[0].by)}` : ''}</td><td style="width:150px;border-bottom:1px solid #111"></td></tr>`).join('');
+        const body = `<h2>Casual labour to pay · ${dayName(from)} – ${dayName(to)}</h2><table><tr><th>Name</th><th>Days worked</th><th class=r>Days</th><th class=r>Day rate</th><th class=r>Amount</th><th>Paid</th><th>Signed for</th></tr>${rows}</table><p><b>Together: ${rand(d.totalCents)}</b></p>`;
+        return { kind: 'crew', title: `Casual labour to pay – ${from} to ${to}`, html: letterPage({ title: `Casual labour to pay – ${from} to ${to}`, label: 'CASUAL LABOUR', company: s.session?.company.name ?? '', body }) };
+      }} /> : null}
       {err ? <Notice tone="bad" title="Not marked paid" lines={err} /> : null}
     </Card>
   );

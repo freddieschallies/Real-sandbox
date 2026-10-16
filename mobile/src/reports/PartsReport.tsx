@@ -3,6 +3,7 @@
 // the whole machine or site, the serial tag (typed too if it is hard to read), the part needed, and
 // more photos if he thinks they help. It becomes a draft quote for the office, and the report can be
 // printed or emailed to the client on the company's letterhead.
+import { ExportBar } from '../exportDoc.tsx';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Image, Platform, Pressable, Text, View } from 'react-native';
 import { useNav } from '../nav.tsx';
@@ -173,8 +174,7 @@ export function PartsReportView({ id }: { id: string }) {
       {uri ? <Image source={{ uri }} style={{ width: '100%', height: 240, borderRadius: 8, backgroundColor: '#000' }} resizeMode="contain" accessibilityLabel={label} /> : <Text style={st.small}>Loading the photo…</Text>}
     </View>
   );
-  const print = () => {
-    if (Platform.OS !== 'web') return;
+  const page = () => {
     const esc = (x: unknown) => String(x ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
     const img = (u: string | null, t: string, n?: string | null) => (u ? `<div class=ph><b>${esc(t)}</b>${n ? `<div>${esc(n)}</div>` : ''}<img src="${u}"></div>` : '');
     const plainHead = `<div class=bar></div><div class=head>${currentLogo() ? `<img src="${currentLogo()}" style="height:52px;background:#fff;padding:4px;border-radius:4px;margin-right:12px">` : ''}<h1>${esc(s.session?.company.name)}</h1><div class=t>SITE REPORT</div></div>`;
@@ -187,9 +187,7 @@ ${letterheadTop(plainHead)}<div class=body><h2 style="margin:0 0 4px">Site repor
 ${img(machine, 'The machine / site')}${img(serial, 'Serial tag', r.serial_text ? `Serial number: ${r.serial_text}` : null)}${img(part, 'Part needed', `${r.part_description}${r.part_qty !== 1 ? ` ×${r.part_qty}` : ''}`)}
 ${extras.map((u, n) => img(u, `More (${n + 1})`)).join('')}</div>${letterheadBottom('<div class=bar></div>')}
 <p class=noprint style="padding:12px 22px"><button onclick="print()">Print / save as PDF</button></p></body></html>`;
-    const w = window.open('', '_blank');
-    if (!w) { setDone('The browser blocked the print window: allow pop-ups for this site.'); return; }
-    w.document.write(html); w.document.close();
+    return { kind: 'site_report' as const, title: `Site report ${r.report_number} – ${r.client}, ${r.store}`, ref: `site report ${r.report_number}`, html };
   };
   const send = async () => {
     setBusy(true); setDone(null); setErr(null);
@@ -208,7 +206,7 @@ ${extras.map((u, n) => img(u, `More (${n + 1})`)).join('')}</div>${letterheadBot
       {photo(serial, 'Serial tag', r.serial_text ? `Serial number: ${r.serial_text}` : null)}
       {photo(part, 'Part needed', `${r.part_description}${r.part_qty !== 1 ? ` ×${r.part_qty}` : ''}`)}
       {extras.map((u, n) => <View key={n}>{photo(u, `More (${n + 1})`)}</View>)}
-      {Platform.OS === 'web' ? <Button label="Print / save as PDF" kind="secondary" onPress={print} /> : null}
+      <ExportBar title="Export the report" make={page} noEmail />
       <Card>
         <Label>Email it{lh.header ? ' (on the company letterhead)' : ''}</Label>
         {!d.canEmail ? <Text style={st.small}>Email is not set up on the server yet: print or save it as PDF and attach it, until it is.</Text> : null}

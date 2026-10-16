@@ -8,6 +8,7 @@ import { usePhotoUri, rememberPhoto } from './photo.ts';
 import { pickImage, nowIso } from './device.ts';
 import { Body, Button, Card, Heading, Label, Notice, st } from './ui.tsx';
 import { C } from './theme.ts';
+import { currentLogo } from './brand.tsx';
 
 type LH = { headerPhotoId: string | null; footerPhotoId: string | null; canEdit: boolean };
 const cache = new Map<string, LH>();
@@ -82,4 +83,24 @@ export function LetterheadSettings() {
       {msg ? <Notice tone={msg.startsWith('Not') || msg.includes('could not') ? 'bad' : 'good'} title={msg} /> : null}
     </View>
   );
+}
+
+/** Text made safe for a printed page. */
+export const escHtml = (x: unknown) => String(x ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+
+/** A printed page on the letterhead (or the plain black and orange heading with the logo): for every
+ *  document the app exports that has no layout of its own (job card, purchase order, lists, reports). */
+export function letterPage(o: { title: string; label: string; company: string; body: string; logo?: string | null; landscape?: boolean }): string {
+  const e = escHtml;
+  const logo = o.logo === undefined ? currentLogo() : o.logo;
+  const plainHead = `<div class=bar></div><div class=head>${logo ? `<img src="${logo}" style="height:52px;background:#fff;padding:4px;border-radius:4px;margin-right:14px">` : ''}<div style="flex:1"><h1>${e(o.company)}</h1></div><div class=t>${e(o.label)}</div></div>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${e(o.title)}</title><style>
+@page{size:A4${o.landscape ? ' landscape' : ''};margin:12mm}body{font:12.5px Arial,sans-serif;margin:0;color:#111}.bar{height:8px;background:#E8701A}
+.head{background:#111;color:#fff;padding:12px 22px;display:flex;justify-content:space-between;align-items:center}.head h1{margin:0;font-size:20px;letter-spacing:.5px}.head .t{color:#E8701A;font-weight:900;font-size:17px;text-align:right}
+.body{padding:14px 22px}.two{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}h2{margin:4px 0 6px;font-size:18px}h3{margin:16px 0 4px;font-size:14px;border-bottom:2px solid #E8701A;padding-bottom:2px}
+table{width:100%;border-collapse:collapse;margin-top:8px}th{text-align:left;border-top:2px solid #111;border-bottom:1px solid #ccc;padding:5px 4px}td{border-bottom:1px solid #eee;padding:5px 4px;vertical-align:top}.r{text-align:right}
+.bad{color:#B00020}.good{color:#1B7F3B}.muted{color:#666}.ph{display:inline-block;margin:6px 8px 6px 0;vertical-align:top;page-break-inside:avoid}.ph img{display:block;max-width:300px;max-height:260px;border:1px solid #ccc}
+.sig img{max-height:90px;border-bottom:1px solid #111}.foot{background:#111;color:#eee;font-size:11px;padding:8px 22px}@media print{.noprint{display:none}}</style></head><body>
+${letterheadTop(plainHead)}${letterheadTop('') ? `<h2 style="margin:10px 22px 0">${e(o.label)}</h2>` : ''}<div class=body>${o.body}</div>${letterheadBottom('<div class=bar></div>')}
+<p class=noprint style="padding:10px 22px"><button onclick="print()">Print / save as PDF</button></p></body></html>`;
 }

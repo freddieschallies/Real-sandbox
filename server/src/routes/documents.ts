@@ -56,7 +56,7 @@ async function writeLines(c: Q, col: 'quote_id' | 'invoice_id', id: string, line
 }
 
 /** Who the document is for: the store and its client, from the job or the store itself. */
-const WHO = `s.name AS store, s.address AS store_address, c.name AS client, s.email AS store_email`;
+const WHO = `s.name AS store, s.address AS store_address, c.name AS client, s.email AS store_email, c.email AS client_email, c.phone AS client_phone`;
 
 export function registerDocumentRoutes(app: FastifyInstance) {
   const see = (req: FastifyRequest) => { if (!can(req.actor, 'view_quotes_invoices_stock') && !can(req.actor, 'prepare_quotes_invoices')) throw new Refused(403, ['quotes and invoices are not part of your work']); };

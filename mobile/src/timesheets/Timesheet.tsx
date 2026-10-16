@@ -2,6 +2,7 @@
 // every job with its times, the vehicles, and the flags of the day. The technician submits the
 // previous day's; HR (and a department manager for his own team) exports them for a day, a week or
 // a month, for one person, a department or everyone.
+import { ExportBar } from '../exportDoc.tsx';
 import React, { useEffect, useState } from 'react';
 import { Platform, Pressable, Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
@@ -416,10 +417,10 @@ export function TimesheetsExport() {
       {d ? (
         <>
           <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-            {Platform.OS === 'web' ? <Button label="Print / save as PDF" onPress={() => setMsg(printSheets(d, `${whoLabel} · ${r.label}`, s.session?.company.name ?? '', hide, r.label) ? null : 'The browser blocked the print window: allow pop-ups for this site.')} style={{ flexGrow: 1 }} /> : null}
             {Platform.OS === 'web' ? <Button label="Download for Excel (CSV)" kind="secondary" onPress={() => setMsg(downloadCsv(d, `timesheets-${r.from}-to-${r.to}.csv`) ? null : 'This browser could not save the file.')} style={{ flexGrow: 1 }} /> : null}
           </View>
-          {Platform.OS === 'web' && d.canPerformance && d.technicians.some(t => t.performance) ? (
+          <ExportBar title="Export the timesheets" make={() => ({ kind: 'timesheet', title: `Timesheets – ${whoLabel} – ${r.label}`, ref: `timesheets ${r.from} to ${r.to}`, html: sheetsHtml(d, `${whoLabel} · ${r.label}`, s.session?.company.name ?? '', hide, r.label) })} />
+          {d.canPerformance && d.technicians.some(t => t.performance) ? (
             <Pressable onPress={() => setHide(v => !v)} accessibilityRole="switch" accessibilityState={{ checked: hide }} accessibilityLabel="Hide performance on the print-out" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <View style={{ width: 22, height: 22, borderRadius: 4, borderWidth: 2, borderColor: hide ? C.accent : C.line, backgroundColor: hide ? C.accent : 'transparent' }} />
               <Text style={[st.body, { flex: 1 }]}>Hide performance{d.canMoney ? ' and money' : ''} on the print-out (when the technician asks for a copy)</Text>
@@ -595,8 +596,7 @@ function HoursRules({ reload }: { reload: () => void }) {
 const esc = (x: unknown) => String(x ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 
 /** One printable page per timesheet, on the company letterhead (black and orange). */
-function printSheets(d: Export, title: string, company: string, hide = false, period?: string): boolean {
-  if (Platform.OS !== 'web') return false;
+function sheetsHtml(d: Export, title: string, company: string, hide = false, period?: string): string {
   const head = (sub: string, right: string) => `<div class=bar></div><div class=head>${currentLogo() ? `<img src="${currentLogo()}" style="height:48px;background:#fff;padding:3px;border-radius:4px;margin-right:12px">` : ''}<div style="flex:1"><h1>${esc(company)}</h1><div>${esc(sub)}</div></div><div class=t>${esc(right)}</div></div>`;
   const lines = (l: PerfLine[]) => `<table>${l.map(x => `<tr><td>${esc(x.label)}</td><td class="r${x.tone === 'bad' ? ' bad' : ''}"><b>${esc(x.value)}</b></td></tr>`).join('')}</table>`;
   // The statement for the period: one page per technician with his totals, office time, hours invoiced,
@@ -638,7 +638,7 @@ body{font:12px Arial,sans-serif;margin:0;color:#111}section{page-break-after:alw
 table{width:100%;border-collapse:collapse;margin-top:10px}th{text-align:left;border-top:2px solid #111;border-bottom:1px solid #ccc;padding:4px}td{border-bottom:1px solid #eee;padding:4px;vertical-align:top}.r{text-align:right}
 .tot td{font-size:16px;font-weight:bold}.bad{color:#B00020}.sign{margin-top:24px}h3{margin:14px 0 4px}@media print{.noprint{display:none}}</style></head><body>
 <p class=noprint style="padding:10px 20px">${esc(title)} · ${d.technicians.reduce((n, t) => n + t.days.length, 0)} timesheets${hide ? ' · performance hidden' : ''} <button onclick="print()">Print / save as PDF</button></p>${d.technicians.length ? summaries : ''}${pages || '<p style="padding:20px">No timesheets.</p>'}</body></html>`;
-  try { const w = window.open('', '_blank'); if (!w) return false; w.document.write(html); w.document.close(); return true; } catch { return false; }
+  return html;
 }
 
 /** One row per technician per day, for Excel: hours, jobs and flags as text. */

@@ -8,6 +8,7 @@ import { DemoTimes, type DemoTimesState } from './demoTimes.ts';
 import { DemoTools, seedTools, type DemoToolsState } from './demoTools.ts';
 import { DEMO_LOGO } from './demoLogo.ts';
 import { DemoCrew, seedCrew, type CrewState } from './demoCrew.ts';
+import { jobReportHtml } from '../../server/src/core/jobReport.ts';
 import { EXAMPLE_TECH, REAL, realDeep, unrealDeep, unrealText } from './demoReal.ts';
 import { APP_OF, MAX_PINNED, MENU_LABEL, MENU_LEVELS, MENU_TABS, cleanPinned, usualTabs } from '../../server/src/core/phoneMenu.ts';
 import { LEVELS, TRADES, type LoginLevel } from '../../server/src/core/permissions.ts';
@@ -193,6 +194,8 @@ export function seedDemo(): DemoState {
 }
 
 const ok = (body: unknown, status = 200): Response => ({ status, body });
+/** Documents exported in the test drive (not kept: pages can be large). */
+const DEMO_EXPORTS = new Map<string, { title: string; html: string; by: string; at: string; kind: string }>();
 const refuse = (status: number, ...reasons: string[]): Response => ({ status, body: { error: 'refused', reasons } });
 
 export class DemoTransport implements Transport {
@@ -1942,6 +1945,56 @@ export class DemoTransport implements Transport {
       const to = (b.to ?? []) as string[];
       if (!to.length) return refuse(400, 'type the email address');
       d.sent.unshift({ how: 'email', to: to.join(', '), at: new Date().toISOString(), by: this.who.name, ok: true }); this.persist(this.state);
+      return ok({ sent: true, to, demo: true });
+    }
+    // Exported documents (the server's routes/exports.ts): kept in this browser while it is open.
+    if ((m = p.match(/^\/jobs\/([^/]+)\/export$/)) && req.method === 'POST') {
+      const j = this.findJob(m[1]);
+      if (!j) return refuse(404, 'no such job');
+      const st = this.state.office?.stores.find(x => x.id === (j.meta as { store_id?: string }).store_id) as { client?: string; email?: string | null } | undefined;
+      const items = this.stock().s.items;
+      const used = new Map<string, { code: string | null; description: string; qty: number; unit: string | null }>();
+      for (const a of (this.stock().s.activity ?? []).filter(x => x.kind === 'use_on_job' && x.jobNumber === j.meta.job_number)) {
+        const it = items.find(i => i.code === a.code);
+        const u = used.get(a.code ?? '') ?? { code: a.code ?? null, description: it?.description ?? String(a.code), qty: 0, unit: it?.unit ?? null };
+        u.qty += a.qty; used.set(a.code ?? '', u);
+      }
+      const crew = (this.state.crew?.entries ?? []).filter(e => e.job_id === j.meta.id && !e.removed_at);
+      const company = (this.state.docs?.profile as { trading_name?: string; legal_name?: string } | null)?.trading_name ?? REAL?.company.name ?? 'ZSP (test drive)';
+      const eq = (id?: string) => { const e2 = j.meta.equipment.find(x => x.id === id); return e2 ? [e2.description, [e2.brand, e2.model].filter(Boolean).join(' '), e2.serial ? `· serial ${e2.serial}` : ''].filter(Boolean).join(' ') : null; };
+      const helpers = (j.meta.helper_ids ?? []).map(h => ({ name: this.office().name(h), trade: (this.office().o.people.find(x => x.id === h) as { trade?: string } | undefined)?.trade ?? null }));
+      const html = jobReportHtml({
+        company,
+        job: { number: j.meta.job_number, type: j.meta.job_type, status: j.card.status as string, fault: j.meta.fault_reported, scheduledDate: j.meta.scheduled_date, clientRef: j.meta.client_order_ref,
+          closedAt: (j as { closedAt?: string }).closedAt ?? (j.card.status === 'closed' ? j.card.visits.at(-1)?.endedAt ?? null : null), managerName: j.meta.manager_name, unavailableReason: null, unavailableSpokeTo: null },
+        client: st?.client ?? '', store: j.meta.store, storeAddress: j.meta.store_address, lead: j.meta.lead_technician, helpers,
+        crew: [...new Set(crew.map(e => e.member_id))].map(id => { const x = this.state.crew!.members.find(y => y.id === id)!; return { name: x.full_name, kind: x.kind, days: new Set(crew.filter(e => e.member_id === id).map(e => e.work_date)).size }; }),
+        visits: j.card.visits.map(v => ({ arrivedAt: v.arrivedAt ?? null, endedAt: v.endedAt ?? null, place: v.place ?? null, checkedInWith: v.checkedInManager ?? null, technician: j.meta.lead_technician })),
+        items: j.card.items.map(i => ({ title: i.title, equipment: eq(i.equipmentId), faultType: i.faultType ?? null, found: i.found ?? null, did: i.did ?? null, tested: i.tested ?? null, outcome: i.outcome ?? null, stillNeeded: i.stillNeeded ?? null, before: [], after: [] })),
+        parts: [...used.values()].filter(x => x.qty > 0), signature: null,
+      }, '', '');
+      const id = `exp-${Date.now().toString(36)}`;
+      const title = `Job card ${j.meta.job_number} – ${st?.client ? `${st.client}, ` : ''}${j.meta.store}`;
+      DEMO_EXPORTS.set(id, { title, html, by: this.who.name, at: new Date().toISOString(), kind: 'job_card' });
+      return ok({ id, title, fileName: `${title}.pdf`, pdf: true, email: true, linkDays: 7, storeEmail: st?.email ?? null, phone: null, html }, 201);
+    }
+    if (p === '/exports/setup') return ok({ pdf: false, email: true, linkDays: 7 });
+    if (p === '/exports' && req.method === 'POST') {
+      const id = `exp-${Date.now().toString(36)}`;
+      DEMO_EXPORTS.set(id, { title: String(b.title), html: String(b.html), by: this.who.name, at: new Date().toISOString(), kind: String(b.kind) });
+      return ok({ id, fileName: `${String(b.title).replace(/[\\/:*?"<>|]+/g, ' ')}.pdf`, pdf: true, email: true, linkDays: 7 }, 201);
+    }
+    if (p === '/exports') return ok({ exports: [...DEMO_EXPORTS].map(([id, x]) => ({ id, kind: x.kind, title: x.title, made_at: x.at, made_by: x.by, sends: [] })).reverse() });
+    if ((m = p.match(/^\/exports\/([^/]+)\/(link|email)$/))) {
+      const x = DEMO_EXPORTS.get(m[1]);
+      if (!x) return refuse(404, 'no such document');
+      if (m[2] === 'link') {
+        const company = this.state.office ? (this.state.docs?.profile as { trading_name?: string } | null)?.trading_name ?? '' : '';
+        const url = 'https://your-office-server/x/(test-drive-link)';
+        return ok({ url, message: `${x.title}${company ? ` from ${company}` : ''}. Open it to view, save or print: ${url}\n(The link works for 7 days.)` });
+      }
+      const to = (b.to ?? []) as string[];
+      if (!to.length) return refuse(400, 'type the email address');
       return ok({ sent: true, to, demo: true });
     }
     if (p.startsWith('/crew') || /^\/jobs\/[^/]+\/crew$/.test(p) || p.startsWith('/job-crew/')) {

@@ -2,6 +2,7 @@
 // the app expects shows only once it is counted), see the differences and what they are worth, and
 // sign off: the stockroom is corrected and Accounts and the CEO are told. A blank count sheet prints
 // for counting on paper; the results print for the file.
+import { ExportBar } from '../exportDoc.tsx';
 import React, { useEffect, useState } from 'react';
 import { findStock } from '../../../server/src/core/stockSearch.ts';
 import { Platform, Pressable, Text, TextInput, View } from 'react-native';
@@ -98,12 +99,8 @@ function TakeView({ id, close }: { id: string; close: () => void }) {
         {sm.differences ? <Text style={st.small}>{sm.short} short{sm.lossCents ? ` (${D.rand(sm.lossCents)})` : ''} · {sm.over} over{sm.gainCents ? ` (${D.rand(sm.gainCents)})` : ''}{sm.noCost ? ` · ${sm.noCost} with no cost price` : ''}</Text> : null}
         {t.signoff_note ? <Text style={st.small}>Why: {t.signoff_note}</Text> : null}
       </Card>
-      {Platform.OS === 'web' ? (
-        <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-          {open ? <Button label="Print a count sheet" kind="secondary" onPress={() => printTake(t, d.items, false)} style={{ flexGrow: 1 }} /> : null}
-          <Button label="Print the results" kind="secondary" onPress={() => printTake(t, d.items, true, sm)} style={{ flexGrow: 1 }} />
-        </View>
-      ) : null}
+      {open ? <ExportBar title="Count sheet (to count on paper)" make={() => ({ kind: 'stock_take', title: `Stock take count sheet – ${t.label}`, html: takeHtml(t, d.items, false) })} /> : null}
+      <ExportBar title="Export the results" make={() => ({ kind: 'stock_take', title: `Stock take results – ${t.label}`, html: takeHtml(t, d.items, true, sm) })} />
       {open ? (
         <>
           <TextInput value={q} onChangeText={setQ} placeholder="Find an item: code or name" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Find an item to count" />
@@ -167,8 +164,7 @@ function TakeView({ id, close }: { id: string; close: () => void }) {
 }
 
 /** A count sheet (blank, for counting on paper) or the results, on the letterhead. */
-function printTake(t: Take, items: Item[], results: boolean, sm?: TakeSummary) {
-  if (Platform.OS !== 'web') return;
+function takeHtml(t: Take, items: Item[], results: boolean, sm?: TakeSummary): string {
   const esc = (x: unknown) => String(x ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
   const list = results ? items.filter(i => i.counted !== null) : items;
   const rows = list.map(i => results
@@ -182,5 +178,5 @@ ${results && sm ? `<p><b>${sm.counted} counted, ${sm.differences} differ</b>${sm
 <table><tr>${results ? '<th>Code</th><th>Item</th><th class=r>Expected</th><th class=r>Counted</th><th class=r>Difference</th><th class=r>Value</th>' : '<th>Code</th><th>Item</th><th>Unit</th><th>Counted</th>'}</tr>${rows}</table>
 <p style="margin-top:24px">Counted by: ____________________ &nbsp;&nbsp; Checked by: ____________________</p></div>${letterheadBottom('<div class=bar></div>')}
 <p class=noprint style="padding:10px 20px"><button onclick="print()">Print / save as PDF</button></p></body></html>`;
-  try { const w = window.open('', '_blank'); if (w) { w.document.write(html); w.document.close(); } } catch { /* blocked */ }
+  return html;
 }

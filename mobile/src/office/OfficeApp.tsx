@@ -2,6 +2,7 @@
 // browser: menu, list and detail side by side. Works on a phone too, one screen at a time.
 import { jobOutcome, NO_CHARGE_REASONS, type NoChargeReason } from '../../../server/src/core/jobOutcome.ts';
 import { JobCrew } from '../jobs/JobCrew.tsx';
+import { ExportBar } from '../exportDoc.tsx';
 import { CasualPay, CrewPeople } from './Crew.tsx';
 import { JobDocuments } from '../jobs/JobDocuments.tsx';
 import { HistoryPage } from './History.tsx';
@@ -601,6 +602,7 @@ function JobDetail({ id, o, canEdit, canDocs, openReport }: { id: string; o: Off
         {j.client_on_hold ? <Pill text="Account on hold" tone="bad" /> : null}
       </View>
       <JobReports jobId={id} open={openReport} />
+      <ExportBar key={`export-${id}-${j.status}`} title="Job card: PDF, WhatsApp or email" server={`/jobs/${id}/export`} />
       <JobCrew key={`crew-${id}`} jobId={id} closed={j.status === 'cancelled'} />
       <JobDocuments key={`docs-${id}`} jobId={id} closed={j.status === 'cancelled'} />
       <Card>

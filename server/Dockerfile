@@ -1,6 +1,9 @@
 FROM node:22-slim
 WORKDIR /app
 ENV NODE_ENV=production
+# Chromium makes the PDFs of documents (quotes, invoices, job cards...) exported from the app.
+RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-dejavu-core fonts-liberation && rm -rf /var/lib/apt/lists/*
+ENV CHROMIUM_PATH=/usr/bin/chromium
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY src ./src

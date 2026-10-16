@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { audit, tx, type Db, type Q } from '../db.ts';
 import { can } from '../core/permissions.ts';
 import { Refused, Uuid, parse } from '../http.ts';
+import { disposition } from './exports.ts';
 import type { Mailer } from '../mailer.ts';
 import { openFile, removeFile, uploadRoot } from '../uploads.ts';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -120,7 +121,7 @@ export function registerJobDocumentRoutes(app: FastifyInstance, db: Db, mailer: 
     const d = await docOf(req.db, parse(Uuid, req.params.id));
     await mayOpen(req, d.job_id);
     const f = await fileOf(req.db, d);
-    reply.header('content-type', f.type).header('content-disposition', `inline; filename="${fileName(d).replace(/"/g, '')}"`);
+    reply.header('content-type', f.type).header('content-disposition', disposition('inline', fileName(d)));
     return reply.send(openFile(f.path));
   });
 
@@ -147,7 +148,7 @@ export function registerJobDocumentRoutes(app: FastifyInstance, db: Db, mailer: 
       if (!d) return reply.code(404).type('text/plain').send('This document was taken off the job.');
       const f = await fileOf(c, d);
       const buf = await readFile(join(uploadRoot(), f.path));
-      return reply.header('content-type', f.type).header('content-disposition', `inline; filename="${fileName(d).replace(/"/g, '')}"`).send(buf);
+      return reply.header('content-type', f.type).header('content-disposition', disposition('inline', fileName(d))).send(buf);
     } finally {
       await c.query('RESET app.company_id').catch(() => {});
       c.release();

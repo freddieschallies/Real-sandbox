@@ -3,6 +3,8 @@
 // typos); tap a part for its picture and price. The stock controller, Admin and the CEO put up the
 // pictures of parts. The last
 // list is kept on the phone, so it works without signal too.
+import { ExportBar } from '../exportDoc.tsx';
+import { escHtml, letterPage } from '../letterhead.tsx';
 import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { useStore } from '../state.tsx';
@@ -56,6 +58,7 @@ export function PriceListScreen({ itemId }: { itemId?: string }) {
 
 /** The list and, on a computer, the chosen part beside it; on a phone the part opens on its own. */
 export function PriceList({ itemId, back }: { itemId?: string; back?: () => void }) {
+  const s = useStore();
   const { d, offline, load } = usePriceList();
   // Side by side only when there is room where it is shown (the technician's app keeps phone width on a computer).
   const [boxW, setBoxW] = useState(useWindowDimensions().width);
@@ -92,6 +95,13 @@ export function PriceList({ itemId, back }: { itemId?: string; back?: () => void
           </View>
         </Pressable>
       ))}
+      {shown.length ? <ExportBar title={q.trim() ? `Export these ${shown.length} parts` : 'Export the whole price list'} make={() => {
+        const e = escHtml;
+        const day = new Date().toLocaleDateString('en-ZA', { day: 'numeric', month: 'long', year: 'numeric' });
+        const rows = shown.map(i => `<tr><td>${e(i.code)}</td><td>${e(i.description)}</td><td>${e(i.unit)}</td><td class=r>${i.priceCents != null ? rand(i.priceCents) : '–'}</td><td class=r>${i.priceCents != null ? rand(incl(i.priceCents, d.vatPct)) : '–'}</td></tr>`).join('');
+        const body = `<h2>Price list · ${e(day)}</h2>${q.trim() ? `<p class=muted>Parts matching “${e(q.trim())}”</p>` : ''}<table><tr><th>Code</th><th>Part</th><th>Unit</th><th class=r>Excl. VAT</th><th class=r>Incl. VAT (${d.vatPct}%)</th></tr>${rows}</table><p class=muted>Prices may change; a client with its own mark-up may pay a little differently on the invoice.</p>`;
+        return { kind: 'price_list', title: `Price list – ${day}`, html: letterPage({ title: `Price list – ${day}`, label: 'PRICE LIST', company: s.session?.company.name ?? '', body }) };
+      }} /> : null}
       {!shown.length ? <Body quiet>No part fits “{q.trim()}”. Try the code, or just the start of the name.</Body> : null}
       {back ? <Button label="Back" kind="quiet" onPress={back} /> : null}
     </ScrollView>

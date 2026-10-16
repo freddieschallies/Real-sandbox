@@ -2,6 +2,8 @@
 // (sundries and van stock) on his main page. Ask for one by taking a photo of what is needed (a quote,
 // a list, the part's label): the app reads it into the request, which he checks. Once approved, show
 // the PO number at the counter and scan the supplier's slip against it.
+import { ExportBar } from '../exportDoc.tsx';
+import { techPoHtml } from '../jobs/poPage.ts';
 import React, { useEffect, useState } from 'react';
 import { findStock } from '../../../server/src/core/stockSearch.ts';
 import { Image, Pressable, Text, TextInput, View } from 'react-native';
@@ -49,6 +51,7 @@ export function PurchaseOrdersScreen({ jobId, ask }: { jobId?: string; ask?: boo
               <>
                 <Text style={st.small}>{p.source === 'group' ? `Issued by the office${p.posted_by ? ` (${p.posted_by})` : ''}` : `Approved by ${p.decided_by}`}. Show this at {p.supplier_name}.</Text>
                 <Button label="Scan the supplier's slip for this PO" onPress={() => nav.push({ name: 'invoice', jobId: p.job_id ?? undefined })} />
+                <ExportBar title="Send the PO to the supplier" make={() => ({ kind: 'purchase_order', title: `Purchase order ${p.external_number ?? p.po_number} – ${p.supplier_name}`, ref: `PO ${p.po_number}`, html: techPoHtml(p, s.session?.company.name ?? '') })} />
                 <Button label="Cancel this PO" kind="quiet" onPress={async () => { await s.ask({ method: 'POST', path: `/me/purchase-orders/${p.id}/cancel`, json: {} }); load(); }} />
               </>
             ) : null}

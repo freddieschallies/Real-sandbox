@@ -1,6 +1,8 @@
 // Debtors: who owes what and for how long (current, 30, 60, 90 and 120 days and more, by invoice
 // date, the way Pastel shows it), and accounts on hold. An invoice counts until it is marked paid
 // (Invoices → the invoice → Paid); credit notes come off.
+import { ExportBar } from '../exportDoc.tsx';
+import { escHtml, letterPage } from '../letterhead.tsx';
 import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
@@ -40,6 +42,7 @@ function Bands({ bands }: { bands: Record<DB.AgeBand, number> }) {
 
 export function DebtorList({ open, selected, tick }: { open: (clientId: string) => void; selected: string | null; tick: number }) {
   const ask = useAsk();
+  const companyName = useStore().session?.company.name ?? '';
   const [d, setD] = useState<any>(null);
   const [only, setOnly] = useState<'all' | 'over60' | 'hold'>('all');
   useEffect(() => { ask('GET', '/office/debtors').then(r => { if (r.ok) setD(r.body); }); }, [tick]);
@@ -55,6 +58,15 @@ export function DebtorList({ open, selected, tick }: { open: (clientId: string) 
         <Bands bands={d.totals} />
       </Card>
       <Text style={st.small}>Counted until an invoice is marked paid (Invoices → the invoice → Paid). Credit notes come off.</Text>
+      <ExportBar title="Export the age analysis" make={() => {
+        const e = escHtml, rr = (c: number) => (c ? R(c) : '–');
+        const rows = list.map(c => `<tr><td>${e(c.client)}${c.onHold ? ' <b class=bad>(on hold)</b>' : ''}</td>${DB.AGE_BANDS.map(b => `<td class=r>${rr(c.bands[b])}</td>`).join('')}<td class=r><b>${rr(c.total)}</b></td></tr>`).join('');
+        const tot = `<tr><td><b>Total</b></td>${DB.AGE_BANDS.map(b => `<td class=r><b>${rr(d.totals[b] ?? 0)}</b></td>`).join('')}<td class=r><b>${rr(d.totals.total)}</b></td></tr>`;
+        const today = new Date().toLocaleDateString('en-ZA', { day: 'numeric', month: 'long', year: 'numeric' });
+        const body = `<h2>Debtors age analysis · ${e(today)}</h2><p>Incl. VAT, until an invoice is marked paid; credit notes come off.${d.totals.overdue ? ` ${R(d.totals.overdue)} past its due date.` : ''}</p>
+<table><tr><th>Client</th>${DB.AGE_BANDS.map(b => `<th class=r>${e(DB.AGE_LABEL[b])}</th>`).join('')}<th class=r>Total</th></tr>${rows}${tot}</table>`;
+        return { kind: 'debtors', title: `Debtors age analysis – ${today}`, html: letterPage({ title: `Debtors age analysis – ${today}`, label: 'DEBTORS', company: companyName, body, landscape: true }) };
+      }} />
       <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
         {(['all', 'over60', 'hold'] as const).map(k => (
           <Button key={k} label={k === 'all' ? 'Everyone' : k === 'over60' ? '60 days and older' : 'On hold'} kind={only === k ? 'primary' : 'secondary'} onPress={() => setOnly(k)} style={{ flexGrow: 1, flexBasis: 110, minHeight: 44 }} />
