@@ -7,6 +7,7 @@ import { DemoVan, seedVan, type DemoVanState } from './demoVan.ts';
 import { DemoTimes, type DemoTimesState } from './demoTimes.ts';
 import { DemoTools, seedTools, type DemoToolsState } from './demoTools.ts';
 import { DEMO_LOGO } from './demoLogo.ts';
+import { DemoCrew, seedCrew, type CrewState } from './demoCrew.ts';
 import { EXAMPLE_TECH, REAL, realDeep, unrealDeep, unrealText } from './demoReal.ts';
 import { APP_OF, MAX_PINNED, MENU_LABEL, MENU_LEVELS, MENU_TABS, cleanPinned, usualTabs } from '../../server/src/core/phoneMenu.ts';
 import { LEVELS, TRADES, type LoginLevel } from '../../server/src/core/permissions.ts';
@@ -91,6 +92,8 @@ export interface DemoState {
   /** Customer lists uploaded in the test drive, until brought in. */
   customerImports?: Record<string, { headers: string[]; rows: string[][]; applied: boolean }>;
   docs?: DemoDocsState;
+  /** Assistants and casual labour (no app). */
+  crew?: CrewState;
   /** Accounts: supplier invoices (the office's scans, checks of the slips, supplier Pastel codes). */
   suppliers?: DemoSupplierState;
   /** Stock takes and ordering from suppliers. */
@@ -1315,6 +1318,20 @@ export class DemoTransport implements Transport {
     return null;
   }
 
+  /** Assistants and casual labour on jobs (the server's routes/crew.ts). */
+  private crew(): DemoCrew {
+    this.office();
+    const lvl = this.office().levelOf(this.who.id) ?? this.who.level;
+    const office = this.does('jobs') || this.does('jobcards');
+    const money = this.does('pay');
+    return new DemoCrew(this.state.crew ??= seedCrew(!REAL), {
+      who: { id: this.who.id, name: this.who.name }, level: lvl, office, money,
+      keepsList: office || money || ['hr', 'admin', 'director', 'creator', 'accounts'].includes(lvl),
+      onJob: id => { const j = this.findJob(id); return !!j && ((j.meta.lead_id ?? 'me') === this.who.id || (j.meta.helper_ids ?? []).includes(this.who.id)); },
+      job: id => { const j = this.findJob(id); return j ? { number: j.meta.job_number, status: j.card.status as string, visits: j.card.visits } : null; },
+    });
+  }
+
   private docs(): DemoDocs {
     this.office();
     const d = this.state.docs ?? (this.state.docs = seedDocs());
@@ -1347,6 +1364,8 @@ export class DemoTransport implements Transport {
         const km = st?.lat != null && st?.lng != null ? CR.kmBetween(w, { lat: st.lat, lng: st.lng }) * CR.ROAD_FACTOR * 2 * visits.length : 0;
         return { km: Math.round(km), minutes: Math.round(minutes), kmEstimated: true };
       },
+      crewHours: jobId => this.crew().hours(jobId),
+      crewCost: jobId => this.crew().cost(jobId),
       name: this.who.name,
       openJob: (storeId, fault, leadId, date, priority, ref) => {
         const st = this.state.office!.stores.find(x => x.id === storeId)!;
@@ -1924,6 +1943,10 @@ export class DemoTransport implements Transport {
       if (!to.length) return refuse(400, 'type the email address');
       d.sent.unshift({ how: 'email', to: to.join(', '), at: new Date().toISOString(), by: this.who.name, ok: true }); this.persist(this.state);
       return ok({ sent: true, to, demo: true });
+    }
+    if (p.startsWith('/crew') || /^\/jobs\/[^/]+\/crew$/.test(p) || p.startsWith('/job-crew/')) {
+      const r = this.crew().route(req.method, p, new URLSearchParams(req.path.split('?')[1] ?? ''), b ?? {});
+      if (r) { this.persist(this.state); return r; }
     }
     // The price list: every part and its selling price, for everyone; anyone puts up a picture of the part.
     if (p === '/price-list') {

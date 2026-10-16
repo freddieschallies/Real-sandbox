@@ -6,7 +6,7 @@ import { useNetworkState } from 'expo-network';
 import { randomUUID as cryptoUUID } from 'expo-crypto';
 
 /** A new id; falls back to a random v4 id where the secure generator isn't available (e.g. a plain http page). */
-function randomUUID(): string {
+export function randomUUID(): string {
   try { return cryptoUUID(); } catch { /* fall back */ }
   const b = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
   b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
@@ -37,6 +37,8 @@ interface Cache {
   fleet?: unknown;
   /** The price list, kept for when there is no signal. */
   prices?: unknown;
+  /** Assistants and casual labour: the list, and who is on each job, for when there is no signal. */
+  crew?: { members?: unknown; jobs?: Record<string, unknown> };
   /** Photos taken on this device, by id, so they show without downloading. */
   photoUris?: Record<string, string>;
 }

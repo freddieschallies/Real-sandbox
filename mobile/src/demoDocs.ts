@@ -53,6 +53,9 @@ export interface DocsSources {
   /** Driving there and back for a job (km estimated from the workshop until the tracker gives trips). */
   travelOf?: (jobId: string) => { km: number; minutes: number; kmEstimated: boolean } | null;
   stockCode: (stockItemId: string) => { code: string; unit: string } | null;
+  /** Assistants' and casual labour's hours on a job (invoiced at the assistant rate), and what they cost. */
+  crewHours?: (jobId: string) => number;
+  crewCost?: (jobId: string) => number;
   name: string;
   /** Opens a follow-up job when a quote is accepted. */
   openJob: (storeId: string, fault: string, leadId: string, date: string, priority: string, ref: string | null) => { id: string; job_number: number };
@@ -91,7 +94,7 @@ export function seedDocs(): DemoDocsState {
       address: REAL?.company.address ?? 'Alton, Richards Bay, KwaZulu-Natal', phone: REAL?.company.phone ?? null, email: REAL?.company.email ?? null, bank_details: null, quote_terms: 'Quote valid for 30 days. Prices exclude VAT unless shown.', invoice_terms: 'Payment within 30 days of invoice.',
       vat_pct: 15, quote_valid_days: 30, invoice_due_days: 30,
     },
-    rates: { labour_per_hour: 65000, call_out: 45000, travel_per_km: 900, bought_out_markup_pct: 20 },
+    rates: { labour_per_hour: 65000, assistant_per_hour: 32500, call_out: 45000, travel_per_km: 900, bought_out_markup_pct: 20 },
     pastel: { yearStartMonth: 3, taxType: '01', codes: {}, store: null },
     // Real-data demo: the customers' account codes from Servcraft.
     clientCodes: REAL ? Object.fromEntries(REAL.clients.map(c => [c.name, c.code])) : { FreshMart: null, 'Harbour Deli': null, Boxer: null, Spar: null },
@@ -302,7 +305,7 @@ export class DemoDocs {
     if (j.card.status !== 'closed') return bad(409, 'only a closed job can be invoiced');
     if (this.d.invoices.some(i => i.job_id === jobId && i.status !== 'cancelled')) return bad(409, 'this job already has an invoice');
     const lines = D.invoiceDraft({
-      jobType: j.meta.job_type, jobNumber: j.meta.job_number, minutesOnSite: this.src.minutesOf(jobId), technicians: 1 + (j.meta.helper_ids ?? []).length,
+      jobType: j.meta.job_type, jobNumber: j.meta.job_number, minutesOnSite: this.src.minutesOf(jobId), technicians: 1 + (j.meta.helper_ids ?? []).length, assistantHours: this.src.crewHours?.(jobId) ?? 0,
       visits: j.card.visits.length, stockUsed: this.src.stockUsed(j.meta.job_number), boughtOut: [], travel: this.src.travelOf?.(jobId) ?? null,
     }, this.rulesFor(j.meta.store_id));
     const id = nid('inv');
@@ -539,7 +542,7 @@ export class DemoDocs {
         jobId: j.meta.id, jobNumber: j.meta.job_number, client: s?.client ?? '?', store: j.meta.store, technician: j.meta.lead_technician, month: closed.slice(0, 7), closed,
         revenueCents: invs.length ? invs.reduce((n, i) => n + this.exVat(i.lines), 0) - credited : null, noCharge: !!this.d.noCharge?.[j.meta.id],
         labourMinutes: (this.src.minutesOf(j.meta.id) + (travel?.minutes ?? 0)) * people, km: travel?.km ?? 0, kmEstimated: travel?.kmEstimated ?? false,
-        partsCostCents: used.reduce((n, u) => n + Math.round(u.qty * (u.costCents ?? 0)), 0), partsWithoutCost: used.filter(u => u.costCents == null).length, boughtOutCents: 0,
+        partsCostCents: used.reduce((n, u) => n + Math.round(u.qty * (u.costCents ?? 0)), 0), partsWithoutCost: used.filter(u => u.costCents == null).length, boughtOutCents: 0, crewCostCents: this.src.crewCost?.(j.meta.id) ?? 0,
       }, cr));
     }
     const counted = jobs.filter(x => x.profitCents !== null);

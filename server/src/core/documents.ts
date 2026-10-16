@@ -39,6 +39,8 @@ export interface JobForInvoice {
   jobNumber: number;
   minutesOnSite: number;
   technicians: number;
+  /** Assistants' and casual workers' hours on the job (charged at the assistant rate). */
+  assistantHours?: number;
   visits: number;
   stockUsed: { stockItemId: string; description: string; qty: number; sellingPriceCents: number | null; costCents?: number | null }[];
   boughtOut: { description: string; qty: number; costCents: number }[];
@@ -56,6 +58,9 @@ export function invoiceDraft(j: JobForInvoice, p: PriceRules): DocLine[] {
   const hours = quarterHours(j.minutesOnSite);
   if (hours > 0 && p.labour !== null) {
     lines.push({ kind: 'labour', description: `Labour, job ${j.jobNumber}${j.technicians > 1 ? ` (${j.technicians} technicians)` : ''}`, qty: Math.round(hours * j.technicians * 100) / 100, unitPriceCents: p.labour });
+  }
+  if (j.assistantHours && j.assistantHours > 0 && p.assistant !== null) {
+    lines.push({ kind: 'labour', description: `Assistant labour, job ${j.jobNumber}`, qty: j.assistantHours, unitPriceCents: p.assistant });
   }
   if (j.jobType === 'breakdown' && j.visits > 0 && p.callOut !== null) {
     lines.push({ kind: 'call_out', description: j.visits > 1 ? `Call-out (${j.visits} visits)` : 'Call-out', qty: j.visits, unitPriceCents: p.callOut });
@@ -78,8 +83,8 @@ export function invoiceDraft(j: JobForInvoice, p: PriceRules): DocLine[] {
 }
 
 /** Rates the CEO sets. */
-export const RATE_KEYS = ['labour_per_hour', 'call_out', 'travel_per_km', 'travel_per_hour', 'bought_out_markup_pct', 'labour_cost_per_hour', 'vehicle_cost_per_km'] as const;
+export const RATE_KEYS = ['labour_per_hour', 'assistant_per_hour', 'call_out', 'travel_per_km', 'travel_per_hour', 'bought_out_markup_pct', 'labour_cost_per_hour', 'vehicle_cost_per_km'] as const;
 export const RATE_LABEL: Record<(typeof RATE_KEYS)[number], string> = {
-  labour_per_hour: 'Labour per hour (excl. VAT)', call_out: 'Call-out fee (excl. VAT)', travel_per_km: 'Travel per km (excl. VAT)', travel_per_hour: 'Travel time per hour (excl. VAT)', bought_out_markup_pct: 'Mark-up on bought-out items (%)',
+  labour_per_hour: 'Labour per hour (excl. VAT)', assistant_per_hour: 'Assistant labour per hour (excl. VAT)', call_out: 'Call-out fee (excl. VAT)', travel_per_km: 'Travel per km (excl. VAT)', travel_per_hour: 'Travel time per hour (excl. VAT)', bought_out_markup_pct: 'Mark-up on bought-out items (%)',
   labour_cost_per_hour: 'What an hour of a technician costs us (wages and all), for profit per job', vehicle_cost_per_km: 'What a km costs us (fuel, tyres, services), for profit per job',
 };

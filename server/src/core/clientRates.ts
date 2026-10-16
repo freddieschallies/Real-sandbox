@@ -4,10 +4,10 @@
 // price bands; the cheaper the part, the bigger the mark-up. A client without its own uses the
 // company's rates (Accounts → Company and rates). Pure functions, the same on the server and in the app.
 
-export const CLIENT_RATE_KEYS = ['labour_per_hour', 'call_out', 'travel_per_km', 'travel_per_hour'] as const;
+export const CLIENT_RATE_KEYS = ['labour_per_hour', 'assistant_per_hour', 'call_out', 'travel_per_km', 'travel_per_hour'] as const;
 export type ClientRateKey = (typeof CLIENT_RATE_KEYS)[number];
 export const CLIENT_RATE_LABEL: Record<ClientRateKey, string> = {
-  labour_per_hour: 'Labour per hour', call_out: 'Call-out fee', travel_per_km: 'Travel per km', travel_per_hour: 'Travel time per hour',
+  labour_per_hour: 'Labour per hour', assistant_per_hour: 'Assistant labour per hour', call_out: 'Call-out fee', travel_per_km: 'Travel per km', travel_per_hour: 'Travel time per hour',
 };
 
 export interface RateSetting { on: boolean; cents: number }
@@ -32,6 +32,8 @@ export function ratesProblems(r: ClientRates): string[] {
   const out: string[] = [];
   for (const k of CLIENT_RATE_KEYS) {
     const x = r.rates[k];
+    // No assistant rate of the client's own (or saved before there was one): the company's is used.
+    if (k === 'assistant_per_hour' && (!x || !(x.cents > 0))) continue;
     if (!x) { out.push(`${CLIENT_RATE_LABEL[k]}: missing`); continue; }
     if (x.on && !(x.cents > 0)) out.push(`${CLIENT_RATE_LABEL[k]}: a rate, or untick it`);
   }
@@ -60,7 +62,7 @@ export function markedUp(costCents: number, m: Markup): number {
 /** The pricing for one invoice: null = not charged to this client. */
 export interface PriceRules {
   source: 'client' | 'company';
-  labour: number | null; callOut: number | null; travelKm: number | null; travelHour: number | null;
+  labour: number | null; assistant: number | null; callOut: number | null; travelKm: number | null; travelHour: number | null;
   /** The client's banded mark-up on parts, or null: stock at its selling price, bought-out items at the company mark-up. */
   markup: Markup | null;
   boughtOutPct: number;
@@ -70,14 +72,17 @@ export function priceRules(company: Record<string, number>, client: ClientRates 
   const boughtOutPct = company.bought_out_markup_pct ?? 0;
   if (!client) {
     return {
-      source: 'company', labour: company.labour_per_hour ?? 0, callOut: company.call_out ?? 0,
+      source: 'company', labour: company.labour_per_hour ?? 0, assistant: company.assistant_per_hour ?? 0, callOut: company.call_out ?? 0,
       // Travel only once the company has a travel rate.
       travelKm: company.travel_per_km ? company.travel_per_km : null, travelHour: company.travel_per_hour ? company.travel_per_hour : null,
       markup: null, boughtOutPct,
     };
   }
   const r = (k: ClientRateKey) => (client.rates[k]?.on ? client.rates[k].cents : null);
-  return { source: 'client', labour: r('labour_per_hour'), callOut: r('call_out'), travelKm: r('travel_per_km'), travelHour: r('travel_per_hour'), markup: client.markup.on ? client.markup : null, boughtOutPct };
+  // Assistants: the client's own rate; unticked, not charged; ticked with no rate (or none saved), the company's.
+  const a = client.rates.assistant_per_hour;
+  const assistant = a && !a.on ? null : a && a.cents > 0 ? a.cents : company.assistant_per_hour ?? 0;
+  return { source: 'client', labour: r('labour_per_hour'), assistant, callOut: r('call_out'), travelKm: r('travel_per_km'), travelHour: r('travel_per_hour'), markup: client.markup.on ? client.markup : null, boughtOutPct };
 }
 
 /** Straight-line km between two points (for estimating travel before the tracker gives real trips). */

@@ -73,6 +73,11 @@ export const GUIDES: Guide[] = [
     'WhatsApp: sends the store manager a link; they tap it on their phone or computer and print it. Or Email it to the store with the file attached, or Open it to save or print it yourself.',
     'Fill it in, have it signed, then tap "Photo of the filled-in form": it goes on the job card for the office.',
   ] },
+  { id: 'tech-crew', title: 'An assistant or casual worker is with you', roles: ['technician'], steps: [
+    'Tap Go on the job first. Then on the job card, under "Who is with you", tap their name: their time on the job follows yours.',
+    'Someone new (casual labour)? "+ Casual worker not on the list": his name and phone. The office does the rest.',
+    'No signal? It is kept on the phone and sent by itself. Wrong person? "Take off" (the same day), or ask the office.',
+  ] },
   { id: 'tech-po', title: 'Ask for a purchase order', roles: ['technician'], steps: [
     'For a job: open the job card → Purchase orders for this job → Ask for a PO. For sundries or van stock: on your main page → Purchase orders: sundries.',
     'Tap "Take a photo of the list or quote": the app reads it and fills in the supplier and the parts.',
@@ -291,6 +296,13 @@ export const GUIDES: Guide[] = [
     'The lead technician does the sign-off. Tick everyone working with him: other technicians and assistants.',
     'Everyone ticked sees the job on their phone and works on the same job card. Each one is told when added or taken off.',
     'Giving the job to another lead needs a reason; if the lead is busy on it, he taps Continue later first.',
+  ] },
+  { id: 'office-labour', title: 'Assistants and casual labour (no app)', roles: ['admin', 'management', 'hr', 'director', 'creator', 'accounts'], steps: [
+    'People → "Assistants and casual labour – no app": add each assistant, and casual workers when you use them (name and phone).',
+    'The technician ticks who is with him on the job card. Their time follows his time on site. A new casual worker he can add there by name.',
+    'Forgotten or wrong? Jobs → the job → Assistants and casual labour: "Take off", or add someone with the day and the hours.',
+    'Their hours go on the invoice as "Assistant labour" at the assistant rate (Accounts → company rates; a client can have its own).',
+    'Accounts and the CEO: set a casual worker\'s day rate on his name; Timesheets → "Casual labour to pay" shows each week what to pay. Tap "Mark … paid" when paid.',
   ] },
   { id: 'office-docs', title: 'Add a client\'s form or papers to a job card', roles: ['admin', 'management', 'director', 'creator'], steps: [
     'Jobs → the job → Documents for this job → "+ Add a document": a PDF, Word, Excel or a picture (up to 4 MB).',

@@ -10,6 +10,7 @@ import * as D from '../core/documents.ts';
 import * as Jc from '../core/jobCard.ts';
 import { NO_CHARGE_REASONS, type NoChargeReason } from '../core/jobOutcome.ts';
 import { DateOnly, Refused, Uuid, parse } from '../http.ts';
+import { crewHoursForJob } from './crew.ts';
 import { loadCard } from '../jobsRepo.ts';
 import { notify } from './field.ts';
 import { priceRulesForJob, travelForJob } from './clientRates.ts';
@@ -470,14 +471,18 @@ export function registerDocumentRoutes(app: FastifyInstance) {
       if (j?.no_charge_reason) throw new Refused(409, [`job ${j.job_number} was closed at no charge: take that off the job first if it must be invoiced`]);
       if (j.status !== 'closed') throw new Refused(409, ['only a closed job can be invoiced']);
       if ((await c.query("SELECT 1 FROM invoices WHERE job_id = $1 AND status <> 'cancelled'", [b.jobId])).rowCount) throw new Refused(409, ['this job already has an invoice']);
-      const helpers = (await c.query('SELECT count(*)::int AS n FROM job_helpers WHERE job_id = $1', [b.jobId])).rows[0].n;
+      // Technicians with app logins working with the lead; those whose trade is assistant are charged at the assistant rate,
+      // with the assistants and casual labour who have no login (routes/crew.ts).
+      const h = (await c.query("SELECT count(*) FILTER (WHERE u.trade IS DISTINCT FROM 'assistant')::int AS techs, count(*) FILTER (WHERE u.trade = 'assistant')::int AS assistants FROM job_helpers h JOIN users u ON u.id = h.user_id WHERE h.job_id = $1", [b.jobId])).rows[0];
+      const onSite = Jc.jobMinutes(loaded.card);
+      const assistantHours = Math.ceil((h.assistants * onSite) / 15) / 4 + await crewHoursForJob(c, b.jobId);
       const stockUsed = (await c.query(
         `SELECT m.stock_item_id AS "stockItemId", i.description, sum(m.qty)::float AS qty, i.selling_price_cents AS "sellingPriceCents", i.cost_cents AS "costCents"
            FROM stock_movements m JOIN stock_items i ON i.id = m.stock_item_id
           WHERE m.job_id = $1 AND m.kind = 'use_on_job' GROUP BY m.stock_item_id, i.description, i.selling_price_cents, i.cost_cents ORDER BY i.description`, [b.jobId])).rows;
       const boughtOut = (await c.query('SELECT description, qty::float AS qty, price_cents AS "costCents" FROM bought_out_items WHERE job_id = $1 ORDER BY description', [b.jobId])).rows;
       const lines = D.invoiceDraft({
-        jobType: j.job_type, jobNumber: j.job_number, minutesOnSite: Jc.jobMinutes(loaded.card), technicians: 1 + helpers,
+        jobType: j.job_type, jobNumber: j.job_number, minutesOnSite: onSite, technicians: 1 + h.techs, assistantHours,
         visits: loaded.card.visits.length, stockUsed, boughtOut, travel: await travelForJob(c, b.jobId, loaded.card),
       }, await priceRulesForJob(c, b.jobId));
       const p = await profile(c);

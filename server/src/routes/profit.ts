@@ -8,6 +8,7 @@ import * as P from '../core/profit.ts';
 import { DateOnly, Refused, parse } from '../http.ts';
 import { loadCard } from '../jobsRepo.ts';
 import { companyRates, travelForJob } from './clientRates.ts';
+import { crewCostCents } from './crew.ts';
 
 const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
 const back = (days: number) => new Date(Date.now() - days * 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
@@ -40,7 +41,7 @@ export function registerProfitRoutes(app: FastifyInstance) {
         jobId: r.id, jobNumber: r.job_number, client: r.client, store: r.store, technician: r.technician, month: r.closed.slice(0, 7), closed: r.closed,
         revenueCents: r.invoiced === null ? null : Number(r.invoiced) - Number(r.credited), noCharge: r.no_charge,
         labourMinutes: (Jc.jobMinutes(loaded.card) + (travel?.minutes ?? 0)) * people, km: travel?.km ?? 0, kmEstimated: travel?.kmEstimated ?? false,
-        partsCostCents: Number(r.parts), partsWithoutCost: r.parts_no_cost, boughtOutCents: Number(r.bought),
+        partsCostCents: Number(r.parts), partsWithoutCost: r.parts_no_cost, boughtOutCents: Number(r.bought), crewCostCents: await crewCostCents(req.db, r.id),
       }, cr));
     }
     const counted = jobs.filter(j => j.profitCents !== null);

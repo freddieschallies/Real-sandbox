@@ -3409,3 +3409,61 @@ test('help videos: one per position, no sign-in, seeking works', async () => {
   assert.equal(part.statusCode, 206);
   assert.equal(part.rawPayload.length, 100);
 });
+
+test('assistants and casual labour: the technician ticks who is with him, the office corrects; assistants on the invoice, casuals paid a day rate', async () => {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+  const job = (await db.query("INSERT INTO jobs (job_type, store_id, fault_reported, scheduled_date, lead_technician_id, created_by) VALUES ('breakdown', $1, 'Cold room iced up', $2, $3, $4) RETURNING id, job_number",
+    [ids.store, today, ids.tech, ids.admin])).rows[0];
+  // The list: the office adds an assistant; the technician on site may add a casual worker by name, never rates.
+  const sam = await call('admin', 'POST', '/crew-members', { fullName: 'Sam Assistant', kind: 'assistant', phone: '082 000 0001' });
+  assert.equal(sam.status, 201, JSON.stringify(sam.body));
+  assert.equal((await call('tech', 'POST', '/crew-members', { fullName: 'Someone Else', kind: 'assistant' })).status, 403, 'assistants are added by the office');
+  assert.equal((await call('tech', 'POST', '/crew-members', { fullName: 'Paid Casual', kind: 'casual', dayRateCents: 30000 })).status, 403, 'no rates on site');
+  const joe = await call('tech', 'POST', '/crew-members', { fullName: 'Joe Casual', kind: 'casual', phone: '082 000 0002' });
+  assert.equal(joe.status, 201);
+  assert.equal((await call('tech', 'POST', '/crew-members', { fullName: 'joe casual', kind: 'casual' })).body.existing, true, 'the same name is the same person');
+  assert.equal((await call('admin', 'PATCH', `/crew-members/${joe.body.id}`, { dayRateCents: 35000 })).status, 403, 'rates: Accounts or the CEO');
+  assert.equal((await call('books', 'PATCH', `/crew-members/${joe.body.id}`, { dayRateCents: 35000 })).status, 200);
+  const techList = (await call('tech', 'GET', '/crew-members')).body;
+  assert.ok(techList.members.some((m: { full_name: string }) => m.full_name === 'Joe Casual'));
+  assert.equal(techList.members[0].dayRateCents, undefined, 'the technician never sees rates');
+  assert.equal(techList.members[0].phone, undefined);
+
+  // On site: their time follows the technician's visit, so he taps Go first.
+  assert.equal((await call('tech', 'POST', `/jobs/${job.id}/crew`, { memberId: sam.body.id })).status, 409, 'Go first');
+  await db.query("INSERT INTO job_visits (job_id, technician_id, state, go_at, arrived_at, started_at, ended_at) VALUES ($1, $2, 'done', now(), now(), now(), now() + interval '2 hours')", [job.id, ids.tech]);
+  const onSite = await call('tech', 'POST', `/jobs/${job.id}/crew`, { memberId: sam.body.id });
+  assert.equal(onSite.status, 201, JSON.stringify(onSite.body));
+  assert.equal((await call('tech', 'POST', `/jobs/${job.id}/crew`, { memberId: sam.body.id })).status, 409, 'once a day');
+  assert.equal((await call('tech', 'POST', `/jobs/${job.id}/crew`, { memberId: joe.body.id })).status, 201);
+  assert.equal((await call('tech3', 'GET', `/jobs/${job.id}/crew`)).status, 403, "another technician's job");
+  const seen = (await call('tech', 'GET', `/jobs/${job.id}/crew`)).body;
+  assert.equal(seen.crew.length, 2);
+  assert.equal(seen.crew.find((x: { name: string }) => x.name === 'Sam Assistant').minutes, 120, 'the visit time');
+  assert.equal(seen.hours, 4);
+  // The office corrects: Joe left after an hour (taken off and added with typed hours).
+  const joeEntry = seen.crew.find((x: { name: string }) => x.name === 'Joe Casual');
+  assert.equal((await call('admin', 'POST', `/job-crew/${joeEntry.id}/remove`)).status, 200);
+  assert.equal((await call('admin', 'POST', `/jobs/${job.id}/crew`, { memberId: joe.body.id, workDate: today })).status, 400, 'how many hours');
+  assert.equal((await call('admin', 'POST', `/jobs/${job.id}/crew`, { memberId: joe.body.id, workDate: today, hours: 1 })).status, 201);
+  assert.equal((await call('admin', 'GET', `/jobs/${job.id}/crew`)).body.hours, 3);
+
+  // The invoice: the assistants' and casuals' hours at the assistant rate.
+  assert.equal((await call('creator', 'PUT', '/office/rates', { assistant_per_hour: 18000 })).status, 200);
+  await db.query("UPDATE jobs SET status = 'closed', closed_at = now(), manager_unavailable_reason = 'Closed for the test', manager_unavailable_spoke_to = 'Test' WHERE id = $1", [job.id]);
+  const inv = await call('books', 'POST', '/invoices', { jobId: job.id });
+  assert.equal(inv.status, 201, JSON.stringify(inv.body));
+  const lines = (await db.query('SELECT description, qty::float AS qty, unit_price_cents FROM document_lines WHERE invoice_id = $1', [inv.body.id])).rows;
+  const a = lines.find(l => /^Assistant labour/.test(l.description));
+  assert.deepEqual([a?.qty, a?.unit_price_cents], [3, 18000], JSON.stringify(lines));
+
+  // Casual pay: the day rate for each day worked, however many jobs; paid once.
+  assert.equal((await call('admin', 'GET', '/crew/pay')).status, 403);
+  const pay = (await call('books', 'GET', `/crew/pay?from=${today}&to=${today}`)).body;
+  const owed = pay.casuals.find((x: { name: string }) => x.name === 'Joe Casual');
+  assert.deepEqual([owed.dayCount, owed.amountCents], [1, 35000]);
+  assert.equal(pay.casuals.some((x: { name: string }) => x.name === 'Sam Assistant'), false, 'assistants are on the wages, not casual pay');
+  assert.deepEqual((await call('books', 'POST', '/crew/pay', { memberId: joe.body.id, from: today, to: today })).body, { days: 1, amountCents: 35000 });
+  assert.equal((await call('books', 'POST', '/crew/pay', { memberId: joe.body.id, from: today, to: today })).status, 409, 'paid once');
+  assert.equal((await call('books', 'GET', `/crew/pay?from=${today}&to=${today}`)).body.casuals.find((x: { name: string }) => x.name === 'Joe Casual').paid.length, 1);
+});

@@ -736,3 +736,20 @@ test('stock search: codes with or without dashes, word starts, plurals, typos, s
   assert.equal(stockScore(items[2], 'fuse 99'), 0);
   assert.equal(findStock(items, '').length, items.length);
 });
+
+test('assistants and casual labour: time follows the visit unless typed; quarter hours on the invoice; a casual day rate once a day, spread over that day\'s jobs', async () => {
+  const CR = await import('../src/core/crew.ts');
+  const visit = { from: '2026-10-12T08:00:00+02:00', to: '2026-10-12T10:10:00+02:00' };
+  assert.equal(CR.crewMinutes({ memberId: 'a', workDate: '2026-10-12', minutes: null, visit }), 130);
+  assert.equal(CR.crewMinutes({ memberId: 'a', workDate: '2026-10-12', minutes: 45, visit }), 45, 'typed by the office wins');
+  assert.equal(CR.crewMinutes({ memberId: 'a', workDate: '2026-10-12', minutes: null, visit: { from: visit.from, to: null } }, new Date('2026-10-12T09:00:00+02:00')), 60, 'still on site');
+  assert.equal(CR.crewHours([{ memberId: 'a', workDate: 'd', minutes: 130 }, { memberId: 'b', workDate: 'd', minutes: 50 }]), 3, '180 minutes');
+  assert.equal(CR.crewHours([{ memberId: 'a', workDate: 'd', minutes: 61 }]), 1.25, 'per started quarter hour');
+  const pay = CR.casualPay([{ memberId: 'j', workDate: '2026-10-12' }, { memberId: 'j', workDate: '2026-10-12' }, { memberId: 'j', workDate: '2026-10-13' }, { memberId: 'k', workDate: '2026-10-12' }],
+    id => (id === 'j' ? 35000 : null));
+  assert.deepEqual(pay.map(p => [p.memberId, p.dayCount, p.amountCents]), [['j', 2, 70000], ['k', 1, null]]);
+  const day = [{ jobId: 'x', memberId: 'j', workDate: 'd', minutes: 120 }, { jobId: 'y', memberId: 'j', workDate: 'd', minutes: 360 }];
+  assert.equal(CR.crewCostForJob('x', day, () => ({ dayCents: 40000, hourCents: null })), 10000, 'a quarter of his day');
+  assert.equal(CR.crewCostForJob('y', day, () => ({ dayCents: 40000, hourCents: null })), 30000);
+  assert.equal(CR.crewCostForJob('x', day, () => ({ dayCents: null, hourCents: 6000 })), 12000, 'an hour rate');
+});

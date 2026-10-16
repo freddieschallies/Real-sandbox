@@ -651,7 +651,7 @@ export function ClientRatesEditor({ b, client, done }: { b: Pick<Books, 'ask'>; 
     if (!x.ok) { setAns(x); return; }
     setV(x.body);
     const rt = x.body.rates as CR.ClientRates;
-    setR(Object.fromEntries(CR.CLIENT_RATE_KEYS.map(k => [k, { on: rt.rates[k].on, amount: rt.rates[k].cents ? (rt.rates[k].cents / 100).toFixed(2) : '' }])) as never);
+    setR(Object.fromEntries(CR.CLIENT_RATE_KEYS.map(k => [k, { on: rt.rates[k]?.on ?? true, amount: rt.rates[k]?.cents ? (rt.rates[k].cents / 100).toFixed(2) : '' }])) as never);
     setMOn(rt.markup.on);
     setBands(rt.markup.bands.map(x => ({ upTo: x.upToCents == null ? '' : String(x.upToCents / 100), pct: String(x.pct) })));
   };
@@ -676,7 +676,7 @@ export function ClientRatesEditor({ b, client, done }: { b: Pick<Books, 'ask'>; 
             <Text style={[st.body, !r[k].on ? { color: C.quiet, textDecorationLine: 'line-through' } : null]}>{CR.CLIENT_RATE_LABEL[k]}</Text>
           </Pressable>
           {r[k].on ? (
-            <TextInput editable={canEdit} value={r[k].amount} onChangeText={t => setR({ ...r, [k]: { ...r[k], amount: t } })} keyboardType="decimal-pad" placeholder="R" placeholderTextColor={C.quiet}
+            <TextInput editable={canEdit} value={r[k].amount} onChangeText={t => setR({ ...r, [k]: { ...r[k], amount: t } })} keyboardType="decimal-pad" placeholder={k === 'assistant_per_hour' ? "Company's" : 'R'} placeholderTextColor={C.quiet}
               accessibilityLabel={`${CR.CLIENT_RATE_LABEL[k]} amount`} style={[st.input, { width: 130 }]} />
           ) : <Text style={[st.small, { width: 130 }]}>Not charged</Text>}
         </View>

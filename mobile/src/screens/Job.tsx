@@ -2,6 +2,7 @@
 // Go → Arrived (manager + safety) → Start → work items → Done → sign-off, or Continue later.
 import { JobPOs } from './PurchaseOrders.tsx';
 import { JobDocuments } from '../jobs/JobDocuments.tsx';
+import { JobCrew } from '../jobs/JobCrew.tsx';
 import { JobReports } from '../reports/PartsReport.tsx';
 import { MachineMoves, WorkshopStartForm } from './Workshop.tsx';
 import React, { useEffect, useState } from 'react';
@@ -167,6 +168,7 @@ export function Job({ jobId }: { jobId: string }) {
       ) : null}
 
       {state !== 'closed' && v.status !== 'closed' ? <Button label="Submit a quote for this job" kind="quiet" onPress={() => nav.push({ name: 'quote', jobId })} /> : null}
+      {state !== 'not_started' || v.status === 'closed' ? <JobCrew jobId={jobId} tech closed={state === 'closed' || v.status === 'closed'} /> : null}
       <JobDocuments jobId={jobId} tech closed={state === 'closed' || v.status === 'closed'} />
       <JobPOs jobId={jobId} closed={state === 'closed' || v.status === 'closed'} />
       {(v.parts_reports ?? []).length ? <JobReports key={(v.parts_reports ?? []).length} jobId={jobId} open={id => nav.push({ name: 'report', id })} /> : null}

@@ -2,7 +2,7 @@
 // show and the rest go in a "More" menu, so the labels stay readable. The CEO or an admin chooses,
 // per position, which tabs are pinned to the bar (Settings → Phone menus).
 import React, { useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { C } from './theme.ts';
 import { arrangeTabs } from '../../server/src/core/phoneMenu.ts';
 
@@ -14,6 +14,8 @@ export function BottomTabs<T extends string>({ tabs, current, onSelect, accent, 
   /** For whoever arranges the menus: a shortcut at the bottom of More. */ onArrange?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  // A long More menu scrolls instead of running off the top of a small screen.
+  const maxH = Math.max(220, useWindowDimensions().height - 62 - bottom - 40);
   const { bar: shown, more: rest } = arrangeTabs(tabs, pinned);
   const many = rest.length > 0;
   const inRest = rest.find(t => t.key === current);
@@ -25,7 +27,8 @@ export function BottomTabs<T extends string>({ tabs, current, onSelect, accent, 
       {open ? (
         <>
           <Pressable onPress={() => setOpen(false)} accessibilityLabel="Close the menu" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, top: -2000 }} />
-          <View accessibilityRole="menu" style={{ position: 'absolute', right: 8, bottom: 62 + bottom, minWidth: 230, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 12, paddingVertical: 6, elevation: 8, shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 12 }}>
+          <View accessibilityRole="menu" style={{ position: 'absolute', right: 8, bottom: 62 + bottom, minWidth: 230, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 12, paddingVertical: 6, elevation: 8, shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 12, maxHeight: maxH }}>
+            <ScrollView style={{ flexGrow: 0 }}>
             {rest.map(t => (
               <Pressable key={t.key} onPress={() => pick(t.key)} accessibilityRole="tab" accessibilityState={{ selected: current === t.key }} accessibilityLabel={t.label}
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 14, backgroundColor: current === t.key ? C.panel2 : 'transparent', borderLeftWidth: 3, borderLeftColor: current === t.key ? accent : 'transparent' }}>
@@ -39,6 +42,7 @@ export function BottomTabs<T extends string>({ tabs, current, onSelect, accent, 
                 <Text style={{ color: C.quiet, fontSize: 14, fontWeight: '700' }}>Choose what's pinned…</Text>
               </Pressable>
             ) : null}
+            </ScrollView>
           </View>
         </>
       ) : null}

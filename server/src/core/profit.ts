@@ -11,6 +11,8 @@ export interface JobMoney {
   /** Technician minutes (on site and driving, every technician on the job). */
   labourMinutes: number; km: number; kmEstimated: boolean;
   partsCostCents: number; partsWithoutCost: number; boughtOutCents: number;
+  /** Assistants and casual labour on the job (their hourly rate, or a share of their day rate). */
+  crewCostCents?: number;
 }
 export interface CostRates { labourCostPerHourCents: number; vehicleCostPerKmCents: number }
 
@@ -21,7 +23,7 @@ export interface JobProfit extends JobMoney {
 export function jobProfit(j: JobMoney, r: CostRates): JobProfit {
   const labourCostCents = Math.round((j.labourMinutes / 60) * r.labourCostPerHourCents);
   const travelCostCents = Math.round(j.km * r.vehicleCostPerKmCents);
-  const costCents = labourCostCents + travelCostCents + j.partsCostCents + j.boughtOutCents;
+  const costCents = labourCostCents + travelCostCents + j.partsCostCents + j.boughtOutCents + (j.crewCostCents ?? 0);
   const revenue = j.noCharge ? 0 : j.revenueCents;
   const profitCents = revenue === null ? null : revenue - costCents;
   return { ...j, labourCostCents, travelCostCents, costCents, profitCents, marginPct: revenue ? Math.round((profitCents! / revenue) * 1000) / 10 : null };

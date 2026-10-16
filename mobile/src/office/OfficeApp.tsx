@@ -1,6 +1,8 @@
 // The office screen (control base), for Admin, Management, Directors and the CEO. Made for a desktop
 // browser: menu, list and detail side by side. Works on a phone too, one screen at a time.
 import { jobOutcome, NO_CHARGE_REASONS, type NoChargeReason } from '../../../server/src/core/jobOutcome.ts';
+import { JobCrew } from '../jobs/JobCrew.tsx';
+import { CasualPay, CrewPeople } from './Crew.tsx';
 import { JobDocuments } from '../jobs/JobDocuments.tsx';
 import { HistoryPage } from './History.tsx';
 import { PriceList } from '../prices/PriceList.tsx';
@@ -183,10 +185,10 @@ export function OfficeApp() {
       {tab === 'pos' ? <PurchaseOrderList /> : null}
       {tab === 'customers' ? <CustomerList open={id => setSel({ kind: 'customer', id })} selected={sel?.kind === 'customer' ? sel.id : null} /> : null}
       {tab === 'profit' ? <ProfitView openJob={id => go('jobs', { kind: 'job', id })} /> : null}
-      {tab === 'accounts' ? <Accounts b={books} canPrices={does('prices')} canBooks={does('books')} /> : null}
+      {tab === 'accounts' ? <><Accounts b={books} canPrices={does('prices')} canBooks={does('books')} />{does('books') ? <CasualPay /> : null}</> : null}
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
       {tab === 'map' ? <TeamMap openPerson={canPeople ? id => go('people', { kind: 'person', id }) : undefined} /> : null}
-      {tab === 'timesheets' ? <TimesheetsExport /> : null}
+      {tab === 'timesheets' ? <><TimesheetsExport /><CasualPay /></> : null}
       {tab === 'departments' ? <DepartmentsBoard openPerson={canPeople ? id => go('people', { kind: 'person', id }) : undefined} /> : null}
       {tab === 'vans' ? <VanLists openTech={id => setSel({ kind: 'van', id })} /> : null}
       {tab === 'people' ? <PeopleList key={`people-${sel?.kind === 'leaver' ? sel.id : ''}`} o={o} open={id => setSel({ kind: 'person', id })} openLeaver={id => setSel({ kind: 'leaver', id })} add={() => setSel({ kind: 'newperson' })} /> : null}
@@ -599,6 +601,7 @@ function JobDetail({ id, o, canEdit, canDocs, openReport }: { id: string; o: Off
         {j.client_on_hold ? <Pill text="Account on hold" tone="bad" /> : null}
       </View>
       <JobReports jobId={id} open={openReport} />
+      <JobCrew key={`crew-${id}`} jobId={id} closed={j.status === 'cancelled'} />
       <JobDocuments key={`docs-${id}`} jobId={id} closed={j.status === 'cancelled'} />
       <Card>
         <Text style={[st.body, { fontWeight: '800' }]}>{j.store}</Text>
@@ -918,6 +921,7 @@ function PeopleList({ o, open, openLeaver, add }: { o: OfficeHook; open: (id: st
           ))}
         </View>
       ))}
+      <CrewPeople />
       {p.canManage || p.canSetPositions ? <TerminatedStaff open={openLeaver} /> : null}
     </>
   );
