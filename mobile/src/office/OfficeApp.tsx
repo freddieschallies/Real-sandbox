@@ -1,6 +1,7 @@
 // The office screen (control base), for Admin, Management, Directors and the CEO. Made for a desktop
 // browser: menu, list and detail side by side. Works on a phone too, one screen at a time.
 import { jobOutcome, NO_CHARGE_REASONS, type NoChargeReason } from '../../../server/src/core/jobOutcome.ts';
+import { JobDocuments } from '../jobs/JobDocuments.tsx';
 import { HistoryPage } from './History.tsx';
 import { PriceList } from '../prices/PriceList.tsx';
 import { SupportBanner, SupportSettings } from './Support.tsx';
@@ -598,6 +599,7 @@ function JobDetail({ id, o, canEdit, canDocs, openReport }: { id: string; o: Off
         {j.client_on_hold ? <Pill text="Account on hold" tone="bad" /> : null}
       </View>
       <JobReports jobId={id} open={openReport} />
+      <JobDocuments key={`docs-${id}`} jobId={id} closed={j.status === 'cancelled'} />
       <Card>
         <Text style={[st.body, { fontWeight: '800' }]}>{j.store}</Text>
         {c?.store_address ? <Text style={st.small}>{c.store_address}</Text> : null}

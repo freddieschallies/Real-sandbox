@@ -7,7 +7,8 @@ import tls from 'node:tls';
 import { randomUUID } from 'node:crypto';
 
 export interface MailPicture { cid: string; mime: string; data: Buffer }
-export interface Mail { to: string[]; replyTo?: string | null; subject: string; html: string; text: string; pictures: MailPicture[]; fromName?: string | null }
+export interface MailFile { filename: string; mime: string; data: Buffer }
+export interface Mail { to: string[]; replyTo?: string | null; subject: string; html: string; text: string; pictures: MailPicture[]; fromName?: string | null; files?: MailFile[] }
 export type Mailer = (m: Mail) => Promise<void>;
 
 const b64 = (b: Buffer) => b.toString('base64').replace(/.{1,76}/g, l => `${l}\r\n`);
@@ -27,6 +28,9 @@ export function buildMime(from: string, m: Mail): string {
   ];
   for (const p of m.pictures) {
     lines.push(`--${outer}`, `Content-Type: ${p.mime}`, 'Content-Transfer-Encoding: base64', `Content-ID: <${p.cid}>`, `Content-Disposition: inline; filename="${p.cid}"`, '', b64(p.data));
+  }
+  for (const f of m.files ?? []) {
+    lines.push(`--${outer}`, `Content-Type: ${f.mime}; name="${header(f.filename)}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${header(f.filename)}"`, '', b64(f.data));
   }
   lines.push(`--${outer}--`, '');
   // A line starting with a dot is doubled, as SMTP requires.

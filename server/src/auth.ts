@@ -73,12 +73,14 @@ export function registerAuth(app: FastifyInstance, db: Db) {
   app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     const path = req.routeOptions.url ?? req.url;
     // The WhatsApp link on the same server signs its requests with its own key (routes/breakdowns.ts).
-    if (PUBLIC.has(path) || path.startsWith('/platform/') || path.startsWith('/internal/') || path.startsWith('/webhooks/')) return;
+    // /d/: a document link for a client (a week, signed: routes/jobDocuments.ts).
+    if (PUBLIC.has(path) || path.startsWith('/platform/') || path.startsWith('/internal/') || path.startsWith('/webhooks/') || path.startsWith('/d/')) return;
     try {
       await req.jwtVerify();
     } catch {
       return reply.code(401).send({ error: 'not signed in' });
     }
+    if (req.user.sub?.startsWith('doc:')) return reply.code(401).send({ error: 'not signed in' });
     const cid = req.user.cid;
     if (req.user.platform || !cid) return reply.code(401).send({ error: 'not signed in to a company' });
     if (!(await companyActive(db, cid))) return reply.code(403).send({ error: 'this company account is suspended', code: 'company_suspended' });

@@ -36,6 +36,11 @@ services:
       # Finding stores' addresses on the map: Google with a key (best for shop addresses), otherwise OpenStreetMap (free).
       GOOGLE_MAPS_KEY: ${GOOGLE_MAPS_KEY:-}
       NOMINATIM_EMAIL: ${NOMINATIM_EMAIL:-}
+      # Sending email (site reports, statements, documents for a job): the company's mailbox, e.g. Gmail with an app password.
+      MAIL_URL: ${MAIL_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      # The address phones and clients reach the server on (the tunnel's), for links to documents sent on WhatsApp.
+      PUBLIC_URL: ${PUBLIC_URL:-}
       # The WhatsApp link (below) signs in to the server with this key.
       WA_BRIDGE_KEY: ${WA_BRIDGE_KEY:?set WA_BRIDGE_KEY in .env (openssl rand -hex 24)}
       # The official WhatsApp number option: Real Sandbox's own sign-up with Meta (see OFFICE-SERVER.md).

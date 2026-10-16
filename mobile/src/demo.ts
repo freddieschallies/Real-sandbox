@@ -1877,6 +1877,50 @@ export class DemoTransport implements Transport {
     }
     if (p === '/me/stock') return ok(this.stock().totals());
     if (p === '/me/inventory') { const r = this.stock().inventory(); this.persist(this.state); return ok(r); }
+    // Documents on a job card (the server's routes/jobDocuments.ts): the file itself stays in this browser.
+    if ((m = p.match(/^\/jobs\/([^/]+)\/documents$/)) || (m = p.match(/^\/job-documents\/([^/]+)\/(link|email|remove)$/))) {
+      type Doc = { id: string; jobId: string; name: string; kind: 'for_site' | 'filled_in'; contentType: string; bytes: number | null; note: string | null; addedBy: string; addedById: string; addedAt: string;
+        dataUrl: string; removedAt?: string | null; sent: { how: 'email' | 'link'; to: string | null; at: string; by: string; ok: boolean }[] };
+      const docs = ((this.state as { jobDocs?: Doc[] }).jobDocs ??= []);
+      const lvl = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
+      const isOffice = ['admin', 'management', 'director', 'creator', 'accounts'].includes(lvl);
+      if (p.startsWith('/jobs/')) {
+        const jobId = m[1];
+        if (req.method === 'GET') {
+          const j = this.findJob(jobId);
+          return ok({ documents: docs.filter(x => x.jobId === jobId && !x.removedAt).sort((x, y) => x.kind.localeCompare(y.kind) || x.addedAt.localeCompare(y.addedAt))
+            .map(x => ({ ...x, canRemove: isOffice || x.addedById === this.who.id })), canAdd: isOffice, canEmail: true, storeEmail: (j as { meta?: { store_email?: string } } | null)?.meta?.store_email ?? null, linkDays: 7, demo: true });
+        }
+        if (!req.upload) return refuse(400, 'no document attached');
+        const kind = (req.upload.fields.kind as Doc['kind']) || (isOffice ? 'for_site' : 'filled_in');
+        if (kind === 'for_site' && !isOffice) return refuse(403, 'the office adds the forms for site; you add the filled-in form');
+        let dataUrl = req.upload.fileUri;
+        if (!dataUrl.startsWith('data:') && typeof fetch !== 'undefined' && typeof FileReader !== 'undefined') {
+          const blob = await (await fetch(dataUrl)).blob();
+          if (blob.size > 4 * 1024 * 1024) return refuse(413, 'the document is larger than 4 MB: save it smaller (e.g. as PDF) and try again');
+          dataUrl = await new Promise<string>((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = rej; fr.readAsDataURL(blob); });
+        }
+        const name = (req.upload.fields.name || (req.upload.name ?? 'Document').replace(/\.[a-z0-9]+$/i, '')).slice(0, 200);
+        const id = `doc-${Date.now()}`;
+        docs.push({ id, jobId, name, kind, contentType: req.upload.mime, bytes: null, note: null, addedBy: this.who.name, addedById: this.who.id, addedAt: new Date().toISOString(), dataUrl, sent: [] });
+        this.persist(this.state);
+        return { status: 201, body: { id, name } };
+      }
+      const d = docs.find(x => x.id === m![1] && !x.removedAt);
+      if (!d) return refuse(404, 'no such document (or it was taken off the job)');
+      if (m[2] === 'remove') {
+        if (!isOffice && d.addedById !== this.who.id) return refuse(403, 'only the office, or whoever added it, takes a document off the job');
+        d.removedAt = new Date().toISOString(); this.persist(this.state); return ok({ id: d.id });
+      }
+      if (m[2] === 'link') {
+        d.sent.unshift({ how: 'link', to: null, at: new Date().toISOString(), by: this.who.name, ok: true }); this.persist(this.state);
+        return ok({ url: d.dataUrl, message: `${d.name}: open it to print (test drive link)`, expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString() });
+      }
+      const to = (b.to ?? []) as string[];
+      if (!to.length) return refuse(400, 'type the email address');
+      d.sent.unshift({ how: 'email', to: to.join(', '), at: new Date().toISOString(), by: this.who.name, ok: true }); this.persist(this.state);
+      return ok({ sent: true, to, demo: true });
+    }
     // The price list: every part and its selling price, for everyone; anyone puts up a picture of the part.
     if (p === '/price-list') {
       const meta = ((this.state as { priceMeta?: Record<string, { by: string; at: string }> }).priceMeta ??= {});

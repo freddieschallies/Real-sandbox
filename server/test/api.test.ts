@@ -3331,3 +3331,59 @@ test('history: every change kept with who and when, only the Creator reads it, n
     sc.release();
   }
 });
+
+test('job documents: the office adds a service form to a job; the technician opens, emails or links it for the client to print, and brings back the filled-in form', async () => {
+  const job = (await db.query('SELECT j.id FROM jobs j WHERE j.lead_technician_id = $1 ORDER BY j.created_at DESC LIMIT 1', [ids.tech])).rows[0].id;
+  const pdf = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
+  const send = async (who: string, name: string, mime: string, data: Buffer, fields: Record<string, string> = {}) => {
+    const boundary = '----rs' + Math.random().toString(16).slice(2);
+    const parts = Object.entries(fields).map(([k, v]) => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`));
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: ${mime}\r\n\r\n`), data, Buffer.from(`\r\n--${boundary}--\r\n`));
+    const res = await app.inject({ method: 'POST', url: `/jobs/${job}/documents`, payload: Buffer.concat(parts), headers: { authorization: `Bearer ${tokens[who]}`, 'content-type': `multipart/form-data; boundary=${boundary}` } });
+    return { status: res.statusCode, body: res.json() };
+  };
+  const add = await send('admin', 'Shoprite service report.pdf', 'application/pdf', pdf, { name: 'Shoprite service report' });
+  assert.equal(add.status, 201, JSON.stringify(add.body));
+  assert.equal((await send('tech', 'x.pdf', 'application/pdf', pdf, { kind: 'for_site' })).status, 403, 'the technician brings back filled-in forms, the office adds forms for site');
+  assert.equal((await send('admin', 'virus.exe', 'application/x-msdownload', pdf)).status, 415);
+  assert.equal((await send('tech3', 'x.pdf', 'application/pdf', pdf)).status, 403, "another technician's job");
+  const list = (await call('tech', 'GET', `/jobs/${job}/documents`)).body;
+  const doc = list.documents.find((d: { id: string }) => d.id === add.body.id);
+  assert.equal(doc.kind, 'for_site');
+  assert.equal(doc.name, 'Shoprite service report');
+  // Open it (download).
+  const file = await app.inject({ method: 'GET', url: `/job-documents/${doc.id}/file`, headers: { authorization: `Bearer ${tokens.tech}` } });
+  assert.equal(file.statusCode, 200);
+  assert.match(String(file.headers['content-type']), /pdf/);
+  // A link for WhatsApp: opens without signing in, for a week; it is no sign-in for anything else.
+  const link = await call('tech', 'POST', `/job-documents/${doc.id}/link`);
+  assert.equal(link.status, 200, JSON.stringify(link.body));
+  const path = new URL(link.body.url).pathname;
+  const pub = await app.inject({ method: 'GET', url: path });
+  assert.equal(pub.statusCode, 200);
+  assert.ok(pub.rawPayload.subarray(0, 5).toString() === '%PDF-');
+  const token = path.split('/').pop()!;
+  assert.equal((await app.inject({ method: 'GET', url: '/jobs', headers: { authorization: `Bearer ${token}` } })).statusCode, 401, 'a document link opens nothing else');
+  assert.equal((await app.inject({ method: 'GET', url: '/d/not-a-token' })).statusCode, 410);
+  // Emailed with the file attached.
+  const before = mailBox.length;
+  const em = await call('tech', 'POST', `/job-documents/${doc.id}/email`, { to: ['manager@store.test'] });
+  assert.equal(em.status, 200, JSON.stringify(em.body));
+  const m = mailBox[before] as unknown as { files: { filename: string; data: Buffer }[]; to: string[] };
+  assert.equal(m.files[0].filename, 'Shoprite service report.pdf');
+  assert.deepEqual(m.to, ['manager@store.test']);
+  // The filled-in form comes back as a photo.
+  const pic = await upload('tech', '/photos', { kind: 'job_form', takenAt: '2026-10-16T20:00:00+02:00', jobId: job });
+  assert.equal(pic.status, 201, JSON.stringify(pic.body));
+  const back = await call('tech', 'POST', `/jobs/${job}/documents/photo`, { photoId: pic.body.id, name: 'Shoprite service report (signed)' });
+  assert.equal(back.status, 201, JSON.stringify(back.body));
+  const after = (await call('admin', 'GET', `/jobs/${job}/documents`)).body.documents;
+  assert.ok(after.some((d: { kind: string; name: string }) => d.kind === 'filled_in' && d.name.includes('signed')));
+  assert.equal(after.find((d: { id: string }) => d.id === doc.id).sent.length, 2, 'link and email kept');
+  // Taken off the job: gone from the list, the link stops, the history keeps it.
+  assert.equal((await call('tech', 'POST', `/job-documents/${doc.id}/remove`, {})).status, 403);
+  assert.equal((await call('admin', 'POST', `/job-documents/${doc.id}/remove`, { reason: 'wrong form' })).status, 200);
+  assert.ok(!(await call('tech', 'GET', `/jobs/${job}/documents`)).body.documents.some((d: { id: string }) => d.id === doc.id));
+  assert.equal((await app.inject({ method: 'GET', url: path })).statusCode, 404);
+  assert.ok((await db.query("SELECT 1 FROM history WHERE tbl = 'job_documents' AND row_id = $1 AND op = 'change'", [doc.id])).rowCount);
+});

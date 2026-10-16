@@ -68,6 +68,11 @@ export const GUIDES: Guide[] = [
     'Tap the part: the price excl. VAT and with VAT. A client with its own mark-up may pay a little differently on the invoice.',
     'No picture yet? Tap "Take a picture" of the part, its box or label: everyone sees it from then on.',
   ] },
+  { id: 'tech-docs', title: 'Print a client\'s form on site, and bring it back filled in', roles: ['technician'], steps: [
+    'Open the job: under "Documents for this job" is what the office added (e.g. the client\'s own service report).',
+    'WhatsApp: sends the store manager a link; they tap it on their phone or computer and print it. Or Email it to the store with the file attached, or Open it to save or print it yourself.',
+    'Fill it in, have it signed, then tap "Photo of the filled-in form": it goes on the job card for the office.',
+  ] },
   { id: 'tech-po', title: 'Ask for a purchase order', roles: ['technician'], steps: [
     'For a job: open the job card → Purchase orders for this job → Ask for a PO. For sundries or van stock: on your main page → Purchase orders: sundries.',
     'Tap "Take a photo of the list or quote": the app reads it and fills in the supplier and the parts.',
@@ -280,6 +285,11 @@ export const GUIDES: Guide[] = [
     'Search a name, job or invoice number, part or amount; or choose who, what and the time.',
     'Tap an entry for every field before and after, and everything else that happened to that job, invoice or part.',
     'Nobody can change or delete the History, not even you. "Check the history" shows whether anything was ever taken out or changed.',
+  ] },
+  { id: 'office-docs', title: 'Add a client\'s form or papers to a job card', roles: ['admin', 'management', 'director', 'creator'], steps: [
+    'Jobs → the job → Documents for this job → "+ Add a document": a PDF, Word, Excel or a picture (up to 4 MB).',
+    'The technician sees it on his job card, and gets it to the client to print (WhatsApp link, email or download).',
+    'The filled-in, signed form comes back on the same job card. Who sent what, and to whom, is shown under each document.',
   ] },
   { id: 'ceo-access', title: 'Decide who may do what', roles: CEO, steps: [
     'People → the person → Position: their role (technician, admin, accounts, stock controller, manager, HR, mechanic).',
