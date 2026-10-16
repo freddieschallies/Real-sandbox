@@ -60,3 +60,28 @@ export function realDeep<T>(x: T): T {
   }
   return x;
 }
+
+// The other way round: what the screen sends back (an id that is a name, a search) in the made-up words,
+// so the test drive finds its own records again.
+let back: RegExp | null = null;
+const backTable = new Map<string, string>();
+if (REAL?.swaps.length) {
+  for (const [a, b] of [...REAL.swaps].filter(([a, b]) => a && b && a !== b)) if (!backTable.has(b)) backTable.set(b, a);
+  const keys = [...backTable.keys()].sort((x, y) => y.length - x.length);
+  if (keys.length) back = new RegExp(`(^|[^A-Za-z])(${keys.map(esc).join('|')})(?![A-Za-z])`, 'g');
+}
+export function unrealText(s: string): string {
+  if (!back || !s) return s;
+  return s.replace(back, (_m, pre: string, w: string) => pre + (backTable.get(w) ?? w));
+}
+export function unrealDeep<T>(x: T): T {
+  if (!back) return x;
+  if (typeof x === 'string') return unrealText(x) as T;
+  if (Array.isArray(x)) return x.map(unrealDeep) as T;
+  if (x && typeof x === 'object' && Object.getPrototypeOf(x) === Object.prototype) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(x as Record<string, unknown>)) out[k] = unrealDeep(v);
+    return out as T;
+  }
+  return x;
+}

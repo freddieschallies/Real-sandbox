@@ -1,0 +1,52 @@
+import asyncio, re, sys, os
+sys.path.insert(0, os.path.dirname(__file__))
+from vlib import Video, V
+
+async def main():
+    async with Video('ceo') as v:
+        pg = v.pg
+        await v.card('How to use the app', 'For the CEO', 'Setting the company up, deciding who may do what, and keeping an eye on everything.',
+                     ['The start-up checklist', 'WhatsApp and Pastel, the easy way', 'Who may do what', 'The History (for fraud)', 'Help from Real Sandbox support'], hold=7)
+        await v.start('Open as CEO')
+        await v.uncard()
+        await v.say('A new company starts with the start-up checklist: each step done right here, in this order.', 'Company details, numbering, departments, your people and their roles, logins, rates, customers.')
+        await v.scroll(500, x=800); await v.wait(1.5)
+        await v.scroll(900, x=800); await v.wait(1)
+        await v.say('Employees and their roles: add many at once, then give everyone a setup code in one go.', 'Each person signs in with their own email and a password only they know.')
+        await v.scroll(900, x=800)
+        await v.say('WhatsApp: breakdowns posted in your WhatsApp group come into the app by themselves.')
+        await v.tap(pg.get_by_text(re.compile(r'^WhatsApp \(if you want\)')).first, after=1.5)
+        await v.say('Choose: your own company phone (scan a code once), or an official WhatsApp Business number.')
+        await v.maybe('Use our own phone', after=1.2)
+        await v.maybe('The phone is ready: show the code', after=1.5)
+        await v.say('On the company phone: WhatsApp → Linked devices → Link a device, and scan this code.', 'Keep that phone charged and on: the app reads the group through it.')
+        await v.wait(8)
+        if await pg.get_by_label('The breakdowns group', exact=True).count():
+            await v.say('Linked. Choose the breakdowns group, and send a test message to it.')
+            await v.tap(pg.get_by_label('The breakdowns group', exact=True), after=0.6)
+            await v.tap(pg.get_by_role('menuitem').first, after=1)
+            await v.maybe(pg.get_by_text(re.compile(r'^Send a test to')).first, after=2)
+            await v.maybe('Yes, it is there', after=1.5)
+        await v.tab('Start-up')
+        await v.scroll(3000, x=800)
+        await v.say('Sage Pastel: bring in Pastel\'s own lists; the app matches your customers and parts to Pastel\'s codes.', 'Then a practice import with one test invoice, and it is done.')
+        await v.tap(pg.get_by_text(re.compile(r'^Sage Pastel \(if you want\)')).first, after=1.5)
+        await v.maybe(pg.get_by_text(re.compile(r'^Use a sample file')).first, after=2)
+        await v.scroll(500, x=800); await v.wait(1.5)
+        await v.tab('People')
+        await v.say('Who may do what: People → the person. Their position, and extra work you switch on.', 'E.g. give Admin the stockroom while the stock controller is on leave, or let Admin see the client rates.')
+        await v.tap(pg.locator('[aria-label^="Person Zanele"]').first, after=1.5)
+        await v.scroll(900, x=1000); await v.wait(2)
+        await v.tab('History')
+        await v.say('The History: every change anyone made, who and when, with what it was before. Only you see it.', 'Nobody can change or delete it, not even you. "Check the history" shows if anything was ever tampered with.')
+        await v.wait(1)
+        await v.tap('Check the history', after=2)
+        await v.tab('Settings')
+        await v.say('Stuck, or something looks wrong? Let Real Sandbox support in, for as long as you choose.', 'They can only come in while you allow it; everything they do is in the History. End it any time.')
+        await v.point('Let support in'); await v.wait(2)
+        await v.say('Also in Settings: your logo and letterhead, colours, the phone menus for each position, and your password.')
+        await v.scroll(800, x=800); await v.wait(1)
+        await v.say('Stuck? "How to use the app" has a step-by-step guide for everything.')
+        await v.card('That is it', 'Thank you', 'Your company, your people, your rules: and a record of everything.', hold=4)
+
+asyncio.run(main())

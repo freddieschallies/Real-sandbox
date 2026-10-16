@@ -1,0 +1,47 @@
+import asyncio, re, sys, os
+sys.path.insert(0, os.path.dirname(__file__))
+from vlib import Video, V
+
+async def main():
+    async with Video('accounts') as v:
+        pg = v.pg
+        await v.card('How to use the app', 'For Accounts', 'Invoices from the job cards, supplier invoices, who owes what, client rates, pay, and Pastel.',
+                     ['Invoice a closed job', 'Supplier invoices (money out)', 'Debtors and statements', 'Client rates and mark-up, and pay', 'Into Pastel'], hold=7)
+        await v.start('Open as Accounts')
+        await v.tab('Invoices')
+        await v.uncard()
+        await v.say('A job is closed and signed: it waits under "Closed jobs to invoice".')
+        await v.tap('Make invoice from the job card', after=1.8)
+        await v.say('The invoice is drafted from the job card: labour from the job timers, the call-out, travel and the parts used.', 'Prices come from the client\'s own rates and parts mark-up. Check every line.')
+        await v.scroll(500, x=1000)
+        await v.say('Add or change lines, the client\'s order number and a note. The total with VAT is worked out.', 'Save it as a draft, or send it: once sent it is locked.')
+        await v.tap(pg.get_by_role('button', name='Send invoice').first, after=2)
+        await v.say('Sent: it is on the client\'s statement and in the next Pastel batch. Paid? Tap "Mark paid".')
+        await v.tap(pg.get_by_text(re.compile(r'^money out', re.I)).last, after=1.5)
+        await v.say('Money out: supplier invoices and slips the technicians scanned. Check what the app read and approve them.')
+        await v.tab('Debtors')
+        await v.say('Debtors: who owes what, by age: current, 30, 60, 90 and 120 days.', 'Put an account on hold: the office is warned before opening a new job for that client.')
+        await v.tab('Customers')
+        await v.tap(pg.locator('[aria-label^="Customer "]').first, after=1.5)
+        await v.say('Each customer: every job, invoice, credit note and quote, and the statement to print or email.')
+        await v.tap(pg.get_by_role('radio', name='Rates and mark-up'), after=1.5)
+        await v.say('Their own rates, and the mark-up on parts in three price bands.', 'The example shows what a R100, R1 000 and R5 000 part sells at.')
+        await v.scroll(400, x=1000); await v.wait(1)
+        await v.tab('Accounts')
+        await v.say('Into Pastel: the invoices, credit notes and supplier invoices go to Pastel in batches.', 'Set up once (Pastel set-up): customers and items matched to Pastel\'s codes, a practice file, and done.')
+        await v.scroll(600, x=700); await v.wait(1.5)
+        await v.tab('People')
+        await v.tap(pg.locator('[aria-label^="Person Thabo"]').first, after=1.5)
+        await v.say('Pay: each person\'s wage or salary, overtime and Sunday rates. Only Accounts and the CEO see it.')
+        pay = pg.get_by_text('Save pay', exact=True)
+        if await pay.count(): await v.point(pay.first); await v.wait(1.5)
+        await v.tab('Timesheets')
+        await v.say('Timesheets: hours worked, travel, overtime, and wages from them, ready for the payroll.')
+        mon = pg.get_by_text(re.compile('^monthly$', re.I))
+        if await mon.count(): await v.tap(mon.first, after=2)
+        await v.tab('Profit')
+        await v.say('Profit: what each job made after labour, travel, parts and bought-out costs. By client, technician and month.')
+        await v.say('Stuck? "How to use the app" has a step-by-step guide for everything.')
+        await v.card('That is it', 'Thank you', 'Every invoice comes from a signed job card, so nothing is missed.', hold=4)
+
+asyncio.run(main())

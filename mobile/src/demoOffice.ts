@@ -45,7 +45,7 @@ const blank = (): DemoProfile => ({ photo_id: null, phone: null, email: null, em
 /** Demo contact details: 555 numbers and example.com addresses, so nothing real. */
 function seedProfiles(): Record<string, DemoProfile> {
   // Real-data demo: the real phone and email where Servcraft has them, and nothing made up.
-  if (REAL) {
+  if (REAL && (Object.keys(REAL.people).length || REAL.others.length)) {
     const real = [...Object.entries(REAL.people).map(([id, p]) => ({ id, ...p })), ...REAL.others];
     return Object.fromEntries(real.map(p => [p.id, { ...blank(), phone: p.phone, email: p.email }]));
   }

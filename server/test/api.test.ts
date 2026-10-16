@@ -3387,3 +3387,13 @@ test('job documents: the office adds a service form to a job; the technician ope
   assert.equal((await app.inject({ method: 'GET', url: path })).statusCode, 404);
   assert.ok((await db.query("SELECT 1 FROM history WHERE tbl = 'job_documents' AND row_id = $1 AND op = 'change'", [doc.id])).rowCount);
 });
+
+test('help videos: one per position, no sign-in, seeking works', async () => {
+  assert.equal((await app.inject({ method: 'GET', url: '/help/videos/secret.mp4' })).statusCode, 404);
+  const full = await app.inject({ method: 'GET', url: '/help/videos/technician.mp4' });
+  assert.equal(full.statusCode, 200);
+  assert.equal(full.headers['content-type'], 'video/mp4');
+  const part = await app.inject({ method: 'GET', url: '/help/videos/technician.mp4', headers: { range: 'bytes=0-99' } });
+  assert.equal(part.statusCode, 206);
+  assert.equal(part.rawPayload.length, 100);
+});

@@ -7,7 +7,7 @@ import { DemoVan, seedVan, type DemoVanState } from './demoVan.ts';
 import { DemoTimes, type DemoTimesState } from './demoTimes.ts';
 import { DemoTools, seedTools, type DemoToolsState } from './demoTools.ts';
 import { DEMO_LOGO } from './demoLogo.ts';
-import { EXAMPLE_TECH, REAL, realDeep } from './demoReal.ts';
+import { EXAMPLE_TECH, REAL, realDeep, unrealDeep, unrealText } from './demoReal.ts';
 import { APP_OF, MAX_PINNED, MENU_LABEL, MENU_LEVELS, MENU_TABS, cleanPinned, usualTabs } from '../../server/src/core/phoneMenu.ts';
 import { LEVELS, TRADES, type LoginLevel } from '../../server/src/core/permissions.ts';
 import { DemoOffice, END_REASONS, HR_POSITIONS, POSITION_LABEL, seedOffice, terminate, type DemoInspection, type DemoOfficeState, type DemoStore } from './demoOffice.ts';
@@ -1735,7 +1735,11 @@ export class DemoTransport implements Transport {
     // A slip in the demo must never leave a screen blank: answer with the error instead.
     // In the real-data demo, the company's real people and stores stand in for the made-up ones.
     try {
-      const res = realDeep(await this.handle(req));
+      // Names on the screen are the shown ones; the test drive's records use its own (made-up) words.
+      let path = req.path;
+      try { const dec = decodeURIComponent(path); const un = unrealText(dec); if (un !== dec) path = encodeURI(un); } catch { /* keep it */ }
+      const inReq = { ...req, path, json: req.json === undefined ? undefined : unrealDeep(req.json) };
+      const res = realDeep(await this.handle(inReq));
       // Every change goes into the History (the CEO's record of who did what).
       try { new DemoHistory(((this.state as { history?: DemoHistoryState }).history ??= seedHistory())).remember(req, res, this.who); this.persist(this.state); } catch { /* never in the way */ }
       return res;
@@ -1821,7 +1825,7 @@ export class DemoTransport implements Transport {
     const tl = this.toolRoute(p, req, b);
     if (tl) return tl;
     const ceoLevel = ['director', 'creator'].includes(this.office().levelOf(this.who.id) ?? this.who.level);
-    if (p === '/company/brand') return ok({ name: 'ZSP (demo)', logoPhotoId: this.state.logoPhotoId ?? null, logoDataUri: this.state.logoPhotoId ? null : DEMO_LOGO,
+    if (p === '/company/brand') return ok({ name: 'ZSP (demo)', logoPhotoId: this.state.logoPhotoId ?? null, logoDataUri: this.state.logoPhotoId || process.env.EXPO_PUBLIC_VIDEO === '1' ? null : DEMO_LOGO,
       accent: this.state.themeAccent ?? 'orange', canTheme: ceoLevel });
     if (p === '/company/theme' && req.method === 'PUT') {
       if (!ceoLevel) return refuse(403, 'only the director chooses the colour theme');

@@ -6,6 +6,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY src ./src
 COPY db ./db
 COPY scripts ./scripts
+COPY help-videos ./help-videos
 RUN mkdir -p /data/uploads && chown -R node:node /data
 USER node
 ENV UPLOAD_DIR=/data/uploads PORT=8080
