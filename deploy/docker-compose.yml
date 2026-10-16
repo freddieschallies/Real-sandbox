@@ -49,37 +49,43 @@ services:
       META_APP_SECRET: ${META_APP_SECRET:-}
       META_CONFIG_ID: ${META_CONFIG_ID:-}
       WA_VERIFY_TOKEN: ${WA_VERIFY_TOKEN:-}
+      # How the last backup went, for the owner's dashboard and the CEO's settings.
+      BACKUP_STATUS: /backups/status.json
     volumes:
       - uploads:/data/uploads
+      - ${BACKUP_DIR:-./backups}:/backups:ro
     ports:
       - "127.0.0.1:8080:8080"   # only reachable on the server itself; phones come in through the tunnel
 
-  # Nightly backup at 01:30: database dump + photos, 30 days kept. Copy /backups off-site (see OFFICE-SERVER.md).
+  # Every day at 01:30 (or as soon as the server is back on if it was off): the database and the files,
+  # kept on this server (BACKUP_DIR: best on a second disk) and, encrypted here first, in the cloud.
+  # See docs/OFFICE-SERVER.md, "Backups".
   backup:
-    image: postgres:16
+    build: ./backup
     restart: unless-stopped
     depends_on:
       - db
     environment:
       PGPASSWORD: ${DB_PASSWORD}
       TZ: Africa/Johannesburg
+      BACKUP_TIME: ${BACKUP_TIME:-01:30}
+      # The cloud (S3-type storage: Cloudflare R2, Backblaze B2, Amazon S3, Wasabi). Empty CLOUD_BUCKET: no cloud copy.
+      CLOUD_BUCKET: ${CLOUD_BUCKET:-}
+      CLOUD_FOLDER: ${CLOUD_FOLDER:-realsandbox}
+      CLOUD_PHOTOS: ${CLOUD_PHOTOS:-1}
+      RCLONE_CONFIG_CLOUD_TYPE: s3
+      RCLONE_CONFIG_CLOUD_PROVIDER: ${CLOUD_PROVIDER:-Cloudflare}
+      RCLONE_CONFIG_CLOUD_ACCESS_KEY_ID: ${CLOUD_ACCESS_KEY_ID:-}
+      RCLONE_CONFIG_CLOUD_SECRET_ACCESS_KEY: ${CLOUD_SECRET_ACCESS_KEY:-}
+      RCLONE_CONFIG_CLOUD_ENDPOINT: ${CLOUD_ENDPOINT:-}
+      RCLONE_CONFIG_CLOUD_REGION: ${CLOUD_REGION:-auto}
+      RCLONE_CONFIG_CLOUD_NO_CHECK_BUCKET: "true"
+      # Everything is encrypted with this before it leaves the server. Keep a copy somewhere safe (not only on
+      # this server): without it the cloud backup cannot be read.
+      BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE:-}
     volumes:
       - uploads:/data/uploads:ro
       - ${BACKUP_DIR:-./backups}:/backups
-    entrypoint: ["/bin/bash", "-c"]
-    command:
-      - |
-        while true; do
-          now=$$(date +%H%M)
-          if [ "$$now" = "0130" ]; then
-            stamp=$$(date +%Y-%m-%d)
-            pg_dump -h db -U realsandbox -Fc realsandbox > /backups/db-$$stamp.dump &&
-            tar -czf /backups/photos-$$stamp.tar.gz -C /data uploads &&
-            find /backups -type f -mtime +30 -delete
-            sleep 60
-          fi
-          sleep 30
-        done
 
   # The WhatsApp link for every company that chose "our own phone" (see whatsapp-bridge/bridge.mjs).
   # Always running; nothing to do per company: the CEO presses "Show the code" in the app and scans it.

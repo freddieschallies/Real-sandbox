@@ -24,7 +24,15 @@ interface Company {
   whatsapp: { mode: string; connected: boolean } | null; pastel: boolean;
   ceo: { id: string; name: string; email: string; login: string; lastLogin: string | null } | null;
   support: { until: string; grantedBy: string; reason: string | null; enteredAt: string | null } | null;
+  /** Space on the office server (its records, photos, documents, PDFs) and its share of the cloud copy. */
+  storage?: { dbBytes: number; photoBytes: number; documentBytes: number; pdfBytes: number; files: number; totalBytes: number; cloudBytes?: number; measuredAt: string };
 }
+export interface Backup {
+  state: 'ok' | 'late' | 'failed' | 'none'; at: string | null; ageHours: number | null; dbBytes: number; localBytes: number; freeBytes: number; dumps: number;
+  cloud: { configured: boolean; ok: boolean; bytes: number; lastOkAt: string | null; photos: boolean }; errors: string[];
+}
+/** Bytes as people read them: 820 KB, 14.2 MB, 3.1 GB. */
+export const size = (n?: number | null) => { const b = n ?? 0; return b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(0, Math.round(b / 1e3))} KB`; };
 interface Code { code: string; email: string; name: string; company: string; expiresAt: string; message: string }
 
 const reasons = (r: { status: number; body: any }) => (r.body?.reasons?.length ? r.body.reasons : [r.body?.error ?? `The server said ${r.status}`]) as string[];
@@ -53,7 +61,7 @@ export function OwnerApp({ mode, baseUrl, back }: { mode: 'demo' | 'server'; bas
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string[] | null>(null);
-  const [data, setData] = useState<{ owner: string; companies: Company[]; demo?: boolean } | null>(null);
+  const [data, setData] = useState<{ owner: string; companies: Company[]; backup?: Backup; demo?: boolean } | null>(null);
   const [q, setQ] = useState('');
   const [adding, setAdding] = useState(false);
 
@@ -132,7 +140,9 @@ export function OwnerApp({ mode, baseUrl, back }: { mode: 'demo' | 'server'; bas
           <Tile label="People on the app" value={String(sum(c => c.people))} sub={`${sum(c => c.activeWeek)} signed in this week`} />
           <Tile label="Jobs this month" value={String(sum(c => c.jobsMonth))} sub="all companies" />
           <Tile label="Support open now" value={String(all.filter(c => c.support).length)} sub="CEOs who let you in" tone={all.some(c => c.support) ? 'good' : 'quiet'} />
+          <Tile label="Space on the office server" value={size(all.reduce((n, c) => n + (c.storage?.totalBytes ?? 0), 0))} sub={data?.backup?.freeBytes ? `${size(data.backup.freeBytes)} free on the backup disk` : 'records, photos, documents, PDFs'} />
         </View>
+        {data?.backup ? <BackupCard b={data.backup} /> : null}
         <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           {all.length > 4 ? <View style={{ flexGrow: 1, flexBasis: 240 }}><Field label="Find a company" value={q} onChangeText={setQ} autoCorrect={false} /></View> : <View style={{ flex: 1 }} />}
           <Button label={adding ? 'Close' : '+ Add a company'} kind={adding ? 'quiet' : 'primary'} onPress={() => setAdding(a => !a)} />
@@ -191,7 +201,9 @@ function CompanyCard({ c, call, demo, changed, enter }: { c: Company; call: Call
         <Stat label="Jobs this month" value={`${c.jobsMonth}`} />
         <Stat label="Last activity" value={ago(c.lastActivity)} />
         <Stat label="Using since" value={day(c.created_at)} />
+        {c.storage ? <Stat label="Space used" value={size(c.storage.totalBytes)} sub={c.storage.cloudBytes ? `≈ ${size(c.storage.cloudBytes)} in the cloud` : undefined} /> : null}
       </View>
+      {c.storage ? <Text style={st.small} accessibilityLabel={`Space of ${c.name}`}>Records {size(c.storage.dbBytes)} · photos {size(c.storage.photoBytes)} · documents {size(c.storage.documentBytes)} · PDFs made {size(c.storage.pdfBytes)} · {c.storage.files} files</Text> : null}
       <View style={{ gap: 4 }}>
         <Text style={st.small}>Start-up: {c.setup.done} of {c.setup.total} done</Text>
         <View style={{ height: 8, borderRadius: 4, backgroundColor: C.panel2, overflow: 'hidden' }}><View style={{ width: `${pct}%`, height: 8, backgroundColor: pct === 100 ? C.good : C.accent }} /></View>
@@ -298,4 +310,20 @@ function AddCompany({ call, demo, done }: { call: Call; demo: boolean; done: () 
       {code ? <CodeCard code={code} demo={demo} close={() => setCode(null)} /> : null}
     </Card>
   );
+}
+
+/** How the daily backup went: on the office server and in the cloud. */
+function BackupCard({ b }: { b: Backup }) {
+  const when = (iso: string | null) => (iso ? `${day(iso)} ${time(iso)}` : 'never');
+  const tone = b.state === 'ok' ? (b.cloud.configured && !b.cloud.ok ? 'warn' : 'good') : b.state === 'none' ? 'warn' : 'bad';
+  const title = b.state === 'none' ? 'No backup has run yet' : b.state === 'failed' ? `The last backup had a problem (${when(b.at)})` : b.state === 'late' ? `No backup for ${Math.round(b.ageHours ?? 0)} hours` : `Backed up ${when(b.at)}`;
+  const lines = b.state === 'none'
+    ? ['The backup runs every day at 01:30 on the office server. Check it is running: docker compose ps (see OFFICE-SERVER.md, Backups).']
+    : [
+      `On the office server: ${b.dumps} daily copies of the database (${size(b.dbBytes)} each), with the files: ${size(b.localBytes)}${b.freeBytes ? `, ${size(b.freeBytes)} free` : ''}.`,
+      b.cloud.configured ? (b.cloud.ok ? `In the cloud, encrypted: ${size(b.cloud.bytes)}${b.cloud.photos ? ' (with photos)' : ' (documents and records; no photos)'}, last ${when(b.cloud.lastOkAt)}.` : `The cloud copy did not go through (last good: ${when(b.cloud.lastOkAt)}).`)
+        : 'Not in the cloud yet: set CLOUD_BUCKET and the keys in the server\'s .env (OFFICE-SERVER.md, Backups).',
+      ...b.errors,
+    ];
+  return <Notice tone={tone as 'good' | 'warn' | 'bad'} title={title} lines={lines} />;
 }

@@ -753,3 +753,22 @@ test('assistants and casual labour: time follows the visit unless typed; quarter
   assert.equal(CR.crewCostForJob('y', day, () => ({ dayCents: 40000, hourCents: null })), 30000);
   assert.equal(CR.crewCostForJob('x', day, () => ({ dayCents: null, hourCents: 6000 })), 12000, 'an hour rate');
 });
+
+test('the weekly timesheet of someone without the app: Monday to Sunday, normal, overtime and double time, and the pay', async () => {
+  const CR = await import('../src/core/crew.ts');
+  assert.equal(CR.weekStart('2026-10-18'), '2026-10-12', 'Sunday belongs to the week from Monday');
+  const items = [
+    { id: 'a', date: '2026-10-12', minutes: 420, what: 'Job 1', kind: 'job' as const, jobNumber: 1 },
+    { id: 'b', date: '2026-10-12', minutes: 180, what: 'Workshop', kind: 'other' as const },
+    { id: 'c', date: '2026-10-18', minutes: 120, what: 'Job 2', kind: 'job' as const, jobNumber: 2 },
+  ];
+  const rules = { weekdayNormalMin: 480, saturdayNormalMin: 0 };
+  const w = CR.crewWeek('2026-10-14', items, rules, { kind: 'assistant', dayRateCents: null, hourRateCents: 6000 });
+  assert.equal(w.start, '2026-10-12'); assert.equal(w.end, '2026-10-18');
+  assert.deepEqual(w.totals, { minutes: 720, normalMin: 480, overtimeMin: 120, doubleMin: 120, daysWorked: 2 });
+  assert.equal(w.pay.cents, 48000 + 18000 + 24000, '8 h normal, 2 h at 1.5, 2 h on Sunday at 2');
+  const casual = CR.crewWeek('2026-10-12', items, rules, { kind: 'casual', dayRateCents: 35000, hourRateCents: null });
+  assert.deepEqual([casual.pay.basis, casual.pay.cents], ['day', 70000], 'two days at the day rate');
+  assert.equal(CR.crewWeek('2026-12-14', [{ id: 'h', date: '2026-12-16', minutes: 300, what: 'Job', kind: 'job' }], rules, null).totals.doubleMin, 300, 'a public holiday is double time');
+  assert.equal(CR.crewWeek('2026-10-12', items, rules, { kind: 'assistant', dayRateCents: null, hourRateCents: null }).pay.cents, null, 'no rate: no amount');
+});

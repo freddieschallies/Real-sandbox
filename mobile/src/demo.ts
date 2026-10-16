@@ -8,6 +8,7 @@ import { DemoTimes, type DemoTimesState } from './demoTimes.ts';
 import { DemoTools, seedTools, type DemoToolsState } from './demoTools.ts';
 import { DEMO_LOGO } from './demoLogo.ts';
 import { DemoCrew, seedCrew, type CrewState } from './demoCrew.ts';
+import { demoBackup, demoStorage } from './demoSupport.ts';
 import { jobReportHtml } from '../../server/src/core/jobReport.ts';
 import { EXAMPLE_TECH, REAL, realDeep, unrealDeep, unrealText } from './demoReal.ts';
 import { APP_OF, MAX_PINNED, MENU_LABEL, MENU_LEVELS, MENU_TABS, cleanPinned, usualTabs } from '../../server/src/core/phoneMenu.ts';
@@ -1947,6 +1948,13 @@ export class DemoTransport implements Transport {
       d.sent.unshift({ how: 'email', to: to.join(', '), at: new Date().toISOString(), by: this.who.name, ok: true }); this.persist(this.state);
       return ok({ sent: true, to, demo: true });
     }
+    if (p === '/company/backup') {
+      const lvl = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
+      if (!['creator', 'director'].includes(lvl)) return refuse(403, 'for the CEO');
+      const people = this.state.office?.people.length ?? 10;
+      const st = demoStorage(people, (this.state.jobs ?? []).length);
+      return ok({ backup: demoBackup([st]), storage: st, demo: true });
+    }
     // Exported documents (the server's routes/exports.ts): kept in this browser while it is open.
     if ((m = p.match(/^\/jobs\/([^/]+)\/export$/)) && req.method === 'POST') {
       const j = this.findJob(m[1]);
@@ -1997,7 +2005,7 @@ export class DemoTransport implements Transport {
       if (!to.length) return refuse(400, 'type the email address');
       return ok({ sent: true, to, demo: true });
     }
-    if (p.startsWith('/crew') || /^\/jobs\/[^/]+\/crew$/.test(p) || p.startsWith('/job-crew/')) {
+    if (p.startsWith('/crew') || /^\/jobs\/[^/]+\/crew$/.test(p) || p.startsWith('/job-crew/') || p.startsWith('/crew-time/')) {
       const r = this.crew().route(req.method, p, new URLSearchParams(req.path.split('?')[1] ?? ''), b ?? {});
       if (r) { this.persist(this.state); return r; }
     }

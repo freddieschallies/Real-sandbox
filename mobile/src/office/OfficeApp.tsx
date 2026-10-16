@@ -3,7 +3,8 @@
 import { jobOutcome, NO_CHARGE_REASONS, type NoChargeReason } from '../../../server/src/core/jobOutcome.ts';
 import { JobCrew } from '../jobs/JobCrew.tsx';
 import { ExportBar } from '../exportDoc.tsx';
-import { CasualPay, CrewPeople } from './Crew.tsx';
+import { CasualPay, CrewPeople, CrewWeeks } from './Crew.tsx';
+import { BackupSettings } from './Backups.tsx';
 import { JobDocuments } from '../jobs/JobDocuments.tsx';
 import { HistoryPage } from './History.tsx';
 import { PriceList } from '../prices/PriceList.tsx';
@@ -189,14 +190,14 @@ export function OfficeApp() {
       {tab === 'accounts' ? <><Accounts b={books} canPrices={does('prices')} canBooks={does('books')} />{does('books') ? <CasualPay /> : null}</> : null}
       {tab === 'flags' ? <FlagList o={o} open={id => setSel({ kind: 'flag', id })} selected={sel?.kind === 'flag' ? sel.id : null} /> : null}
       {tab === 'map' ? <TeamMap openPerson={canPeople ? id => go('people', { kind: 'person', id }) : undefined} /> : null}
-      {tab === 'timesheets' ? <><TimesheetsExport /><CasualPay /></> : null}
+      {tab === 'timesheets' ? <><TimesheetsExport /><CrewWeeks /><CasualPay /></> : null}
       {tab === 'departments' ? <DepartmentsBoard openPerson={canPeople ? id => go('people', { kind: 'person', id }) : undefined} /> : null}
       {tab === 'vans' ? <VanLists openTech={id => setSel({ kind: 'van', id })} /> : null}
       {tab === 'people' ? <PeopleList key={`people-${sel?.kind === 'leaver' ? sel.id : ''}`} o={o} open={id => setSel({ kind: 'person', id })} openLeaver={id => setSel({ kind: 'leaver', id })} add={() => setSel({ kind: 'newperson' })} /> : null}
       {tab === 'repairs' ? <WorkshopBoard o={o} openJob={id => go('jobs', { kind: 'job', id })} /> : null}
       {tab === 'barcodes' ? <PrintBarcodes /> : null}
       {tab === 'stores' ? <StoreList o={o} canEdit={does('stores')} add={does('stores') ? () => setSel({ kind: 'newstore' }) : undefined} importIt={does('stores') ? () => setSel({ kind: 'importcustomers' }) : undefined} open={id => setSel({ kind: 'store', id })} /> : null}
-      {tab === 'settings' ? <>{has('setup') ? <Button label={`Start-up checklist${setup.d ? ` (${setup.d.done} of ${setup.d.total} done)` : ''}`} kind="secondary" onPress={() => go('setup')} /> : null}{does('access') && !s.session?.support ? <SupportSettings /> : null}{does('access') ? <BreakdownSettings /> : null}<ThemeSettings /><LetterheadSettings /><StorageSettings />{does('access') || level === 'admin' ? <MyPasswordSettings /> : null}{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
+      {tab === 'settings' ? <>{has('setup') ? <Button label={`Start-up checklist${setup.d ? ` (${setup.d.done} of ${setup.d.total} done)` : ''}`} kind="secondary" onPress={() => go('setup')} /> : null}{does('access') && !s.session?.support ? <SupportSettings /> : null}{['creator', 'director'].includes(level) ? <BackupSettings /> : null}{does('access') ? <BreakdownSettings /> : null}<ThemeSettings /><LetterheadSettings /><StorageSettings />{does('access') || level === 'admin' ? <MyPasswordSettings /> : null}{menu.canEdit ? <PhoneMenus key={menuStart ?? 'menus'} start={menuStart ?? level} /> : null}</> : null}
       {!wide ? <HelpLink onPress={() => setHelping(true)} /> : null}
       {!wide ? <Button label="Sign out" kind="quiet" onPress={s.signOut} /> : null}
       <Text style={st.small}>{o.d.loadedAt ? `Updated ${when(o.d.loadedAt)}` : o.loading ? 'Loading…' : 'Needs signal to load.'}</Text>

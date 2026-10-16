@@ -3466,6 +3466,29 @@ test('assistants and casual labour: the technician ticks who is with him, the of
   assert.deepEqual((await call('books', 'POST', '/crew/pay', { memberId: joe.body.id, from: today, to: today })).body, { days: 1, amountCents: 35000 });
   assert.equal((await call('books', 'POST', '/crew/pay', { memberId: joe.body.id, from: today, to: today })).status, 409, 'paid once');
   assert.equal((await call('books', 'GET', `/crew/pay?from=${today}&to=${today}`)).body.casuals.find((x: { name: string }) => x.name === 'Joe Casual').paid.length, 1);
+
+  // The weekly timesheet: the jobs they were on, other work the office adds, checked before paying.
+  assert.equal((await call('tech', 'GET', '/crew/week')).status, 403);
+  assert.equal((await call('admin', 'POST', `/crew-members/${sam.body.id}/time`, { workDate: today, hours: 6, what: 'Workshop: cleaning condensers' })).status, 201);
+  assert.equal((await call('admin', 'POST', `/crew-members/${sam.body.id}/time`, { workDate: '2099-01-01', hours: 6, what: 'Later' })).status, 400, 'not a day still to come');
+  const week = (await call('admin', 'GET', `/crew/week?start=${today}`)).body;
+  const samWeek = week.people.find((x: { name: string }) => x.name === 'Sam Assistant');
+  assert.equal(samWeek.totals.minutes, 120 + 360);
+  assert.equal(samWeek.pay, undefined, 'Admin sees hours, not money');
+  assert.equal((await call('books', 'PATCH', `/crew-members/${sam.body.id}`, { hourRateCents: 6000 })).status, 200);
+  const sheet = (await call('books', 'GET', `/crew-members/${sam.body.id}/week?start=${today}`)).body;
+  assert.equal(sheet.week.totals.minutes, 480);
+  assert.equal(sheet.week.pay.basis, 'hour');
+  assert.ok(sheet.week.pay.cents > 0);
+  const day = sheet.week.days.find((d: { date: string }) => d.date === today);
+  assert.deepEqual(day.items.map((i: { kind: string }) => i.kind).sort(), ['job', 'other']);
+  assert.equal((await call('admin', 'POST', `/crew-members/${sam.body.id}/week/check`, { start: today })).status, 200);
+  assert.equal((await call('admin', 'GET', `/crew/week?start=${today}`)).body.people.find((x: { name: string }) => x.name === 'Sam Assistant').checked.changedSince, false);
+  const other = day.items.find((i: { kind: string }) => i.kind === 'other');
+  assert.equal((await call('admin', 'POST', `/crew-time/${other.id}/remove`)).status, 200);
+  assert.equal((await call('admin', 'GET', `/crew/week?start=${today}`)).body.people.find((x: { name: string }) => x.name === 'Sam Assistant').checked.changedSince, true, 'changed after it was checked');
+  const joeWeek = (await call('books', 'GET', `/crew/week?start=${today}`)).body.people.find((x: { name: string }) => x.name === 'Joe Casual');
+  assert.deepEqual([joeWeek.pay.basis, joeWeek.pay.cents], ['day', 35000]);
 });
 
 test('export any document: kept as it went out, a PDF to download, a link for WhatsApp that needs no sign-in, and email with the PDF', async () => {
@@ -3475,6 +3498,7 @@ test('export any document: kept as it went out, a PDF to download, a link for Wh
   const made = await call('admin', 'POST', '/exports', { kind: 'quote', title: 'Quote 9 for Spar', ref: 'quote 9', html: page });
   assert.equal(made.status, 201, JSON.stringify(made.body));
   assert.equal((await call('admin', 'POST', '/exports', { kind: 'nonsense', title: 'x', html: page })).status, 400);
+  if (made.body.pdf) assert.ok((await db.query('SELECT pdf_path FROM doc_exports WHERE id = $1', [made.body.id])).rows[0].pdf_path, 'the PDF is filed on the office server straight away');
   // Download: the PDF (Chromium on the server), or the page made safe.
   const file = await app.inject({ method: 'GET', url: `/exports/${made.body.id}/file`, headers: { authorization: `Bearer ${tokens.admin}` } });
   assert.equal(file.statusCode, 200);
@@ -3524,4 +3548,40 @@ test('export the job card: the client\'s copy made from the job (work done, part
   assert.equal(link.status, 200);
   const pubr = await app.inject({ method: 'GET', url: new URL(link.body.url).pathname });
   assert.equal(pubr.statusCode, 200, pubr.payload.slice(0, 300));
+});
+
+test('storage and backups: the space each company takes (records, photos, documents, PDFs) and its share of the cloud; the CEO sees the last backup', async () => {
+  const { writeFileSync } = await import('node:fs');
+  const statusFile = join(mkdtempSync(join(tmpdir(), 'rs-backup-')), 'status.json');
+  process.env.BACKUP_STATUS = statusFile;
+  // No backup yet.
+  let dash = await call('platform', 'GET', '/platform/dashboard?fresh=1');
+  assert.equal(dash.status, 200);
+  assert.equal(dash.body.backup.state, 'none');
+  const mine = dash.body.companies.find((c: { id: string }) => c.id === ids.company) ?? dash.body.companies[0];
+  assert.ok(mine.storage.dbBytes > 0, 'its records take space');
+  assert.equal(mine.storage.totalBytes, mine.storage.dbBytes + mine.storage.photoBytes + mine.storage.documentBytes + mine.storage.pdfBytes);
+  assert.equal(mine.storage.cloudBytes, 0, 'no cloud yet');
+  // A backup ran, with the cloud: each company gets its share of the cloud copy.
+  const at = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  writeFileSync(statusFile, JSON.stringify({ startedAt: at, finishedAt: at, ok: true, database: { ok: true, bytes: 900000, file: 'db.dump' }, local: { dumps: 3, bytes: 5e6, freeBytes: 9e10 },
+    cloud: { configured: true, ok: true, bytes: 4_000_000, lastOkAt: at, photos: true }, companies: {}, errors: [] }));
+  dash = await call('platform', 'GET', '/platform/dashboard');
+  assert.equal(dash.body.backup.state, 'ok');
+  const shares = dash.body.companies.reduce((n: number, c: { storage: { cloudBytes: number } }) => n + c.storage.cloudBytes, 0);
+  assert.ok(Math.abs(shares - 4_000_000) <= dash.body.companies.length, 'the shares add up to the cloud copy');
+  // The CEO's settings.
+  const ceo = await call('creator', 'GET', '/company/backup');
+  assert.equal(ceo.status, 200);
+  assert.equal(ceo.body.backup.state, 'ok');
+  assert.equal(ceo.body.backup.cloud.configured, true);
+  assert.ok(ceo.body.storage.dbBytes > 0);
+  assert.equal((await call('admin', 'GET', '/company/backup')).status, 403);
+  // A backup that failed, or did not run for a day and more, shows.
+  writeFileSync(statusFile, JSON.stringify({ finishedAt: new Date(Date.now() - 40 * 3_600_000).toISOString(), ok: true, cloud: {} }));
+  assert.equal((await call('platform', 'GET', '/platform/dashboard')).body.backup.state, 'late');
+  writeFileSync(statusFile, JSON.stringify({ finishedAt: new Date().toISOString(), ok: false, errors: ['the database dump failed'] }));
+  const failed = (await call('platform', 'GET', '/platform/dashboard')).body.backup;
+  assert.deepEqual([failed.state, failed.errors], ['failed', ['the database dump failed']]);
+  delete process.env.BACKUP_STATUS;
 });

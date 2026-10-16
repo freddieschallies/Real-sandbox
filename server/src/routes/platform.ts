@@ -14,6 +14,7 @@ import { notify } from './field.ts';
 import { issueCode } from './logins.ts';
 import { setupOf } from './setup.ts';
 import { openGrant, supportLogin } from './support.ts';
+import { backupStatus, cloudShare, storageOf } from '../storage.ts';
 
 /** Work inside one company (its rows only), for the few things the owner does there; committed only if it all works. */
 async function inCompany<T>(db: Db, companyId: string, fn: (c: Q) => Promise<T>): Promise<T> {
@@ -129,8 +130,13 @@ export function registerPlatformRoutes(app: FastifyInstance, db: Db) {
   app.get('/platform/dashboard', { preHandler: guard }, async req => {
     const { rows } = await db.query('SELECT id, name, active, created_at, suspended_at, suspended_reason FROM companies ORDER BY name');
     const companies = [];
-    for (const r of rows) companies.push({ ...r, ...(await inCompany(db, r.id, c => healthOf(c, r.id))) });
-    return { owner: ownerOf(req).name, companies };
+    const fresh = (req.query as { fresh?: string }).fresh === '1';
+    for (const r of rows) companies.push({ ...r, ...(await inCompany(db, r.id, async c => ({ ...(await healthOf(c, r.id)), storage: await storageOf(c, r.id, fresh) }))) });
+    // Space each company takes on the office server and in the cloud, and how the daily backup went.
+    const backup = await backupStatus();
+    const all = companies.map(c => c.storage);
+    for (const c of companies) c.storage = { ...c.storage, cloudBytes: cloudShare(c.storage, all, backup) };
+    return { owner: ownerOf(req).name, companies, backup };
   });
 
   // A CEO who is locked out or forgot their password: a new setup code (their old password stops working once they use it).

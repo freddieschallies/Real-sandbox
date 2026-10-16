@@ -46,3 +46,48 @@ export function crewCostForJob(jobId: string, entries: { jobId: string; memberId
   }
   return cost;
 }
+
+// ---- The weekly timesheet of someone without the app -------------------------------------------------
+import { payOf, publicHoliday, type Pay, type PayRules } from './timesheet.ts';
+
+export interface CrewTimeIn { id: string; date: string; minutes: number; what: string; kind: 'job' | 'other'; jobNumber?: number | null; running?: boolean; addedBy?: string }
+export interface CrewDay { date: string; items: CrewTimeIn[]; minutes: number; pay: Pay }
+export interface CrewWeek {
+  start: string; end: string; days: CrewDay[];
+  totals: { minutes: number; normalMin: number; overtimeMin: number; doubleMin: number; daysWorked: number };
+  pay: { basis: 'day' | 'hour' | null; cents: number | null; text: string | null };
+}
+
+/** The Monday of the week a day is in. */
+export function weekStart(date: string): string {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
+const plus = (date: string, n: number) => { const d = new Date(`${date}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+
+/** A person's week, Monday to Sunday: each day's jobs and other work, normal time, overtime and double time
+ *  (the company's timesheet rules, Sundays and public holidays), and what that comes to: a casual worker's
+ *  day rate for each day worked, or the hour rate (overtime at 1.5, Sundays and public holidays at 2). */
+export function crewWeek(start: string, items: CrewTimeIn[], rules: PayRules, rate: { kind: CrewKind; dayRateCents: number | null; hourRateCents: number | null } | null): CrewWeek {
+  const s = weekStart(start);
+  const days: CrewDay[] = [0, 1, 2, 3, 4, 5, 6].map(n => {
+    const date = plus(s, n);
+    const list = items.filter(i => i.date === date).sort((a, b) => a.kind.localeCompare(b.kind) || (a.jobNumber ?? 0) - (b.jobNumber ?? 0));
+    const minutes = list.reduce((m, i) => m + i.minutes, 0);
+    return { date, items: list, minutes, pay: payOf({ travelMin: 0, workMin: minutes, officeMin: 0 } as never, date, rules) };
+  });
+  const sum = (f: (d: CrewDay) => number) => days.reduce((m, d) => m + f(d), 0);
+  const totals = { minutes: sum(d => d.minutes), normalMin: sum(d => d.pay.normalMin), overtimeMin: sum(d => d.pay.overtimeMin), doubleMin: sum(d => d.pay.doubleMin), daysWorked: days.filter(d => d.minutes > 0).length };
+  let pay: CrewWeek['pay'] = { basis: null, cents: null, text: null };
+  const r = (c: number) => `R ${(c / 100).toFixed(2)}`;
+  if (rate?.kind === 'casual' && rate.dayRateCents != null) {
+    pay = { basis: 'day', cents: totals.daysWorked * rate.dayRateCents, text: `${totals.daysWorked} day${totals.daysWorked === 1 ? '' : 's'} × ${r(rate.dayRateCents)}` };
+  } else if (rate?.hourRateCents != null) {
+    const h = rate.hourRateCents;
+    const cents = Math.round((totals.normalMin / 60) * h + (totals.overtimeMin / 60) * h * 1.5 + (totals.doubleMin / 60) * h * 2);
+    pay = { basis: 'hour', cents, text: `${r(h)} an hour; overtime × 1.5, Sundays and public holidays × 2` };
+  }
+  return { start: s, end: plus(s, 6), days, totals, pay };
+}
+export { publicHoliday };

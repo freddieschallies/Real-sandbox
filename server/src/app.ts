@@ -42,6 +42,7 @@ import { registerJobDocumentRoutes } from './routes/jobDocuments.ts';
 import { registerHelpVideoRoutes } from './routes/helpVideos.ts';
 import { registerCrewRoutes } from './routes/crew.ts';
 import { registerExportRoutes } from './routes/exports.ts';
+import { registerBackupRoutes } from './routes/backup.ts';
 import { registerStockRoutes } from './routes/stock.ts';
 import { registerFleetRoutes } from './routes/fleet.ts';
 import { registerVehicleRoutes } from './routes/vehicles.ts';
@@ -106,6 +107,7 @@ export async function buildApp(db: Db, opts: { jwtSecret: string; logger?: boole
   registerSupportRoutes(app);
   registerPriceListRoutes(app);
   registerCrewRoutes(app);
+  registerBackupRoutes(app);
   registerHistoryRoutes(app);
   registerHelpVideoRoutes(app);
   registerJobDocumentRoutes(app, db, opts.mailer === undefined ? mailerFromEnv() : opts.mailer);

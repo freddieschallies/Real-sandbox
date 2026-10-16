@@ -310,6 +310,8 @@ export const GUIDES: Guide[] = [
     'Forgotten or wrong? Jobs → the job → Assistants and casual labour: "Take off", or add someone with the day and the hours.',
     'Their hours go on the invoice as "Assistant labour" at the assistant rate (Accounts → company rates; a client can have its own).',
     'Accounts and the CEO: set a casual worker\'s day rate on his name; Timesheets → "Casual labour to pay" shows each week what to pay. Tap "Mark … paid" when paid.',
+    'Their weekly timesheet: Timesheets → "Assistants and casual labour: weekly timesheets". Each day shows the jobs they were on; add other work (yard, workshop) with "+ Other work".',
+    'Check the week with him, tap "The week is right: checked", and export it as a PDF for him to sign. Overtime and Sundays or public holidays are worked out like the technicians\'.',
   ] },
   { id: 'office-docs', title: 'Add a client\'s form or papers to a job card', roles: ['admin', 'management', 'director', 'creator'], steps: [
     'Jobs → the job → Documents for this job → "+ Add a document": a PDF, Word, Excel or a picture (up to 4 MB).',

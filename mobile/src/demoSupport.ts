@@ -71,8 +71,13 @@ export class DemoSupport {
     const g = this.open();
     const me = { id: 'demo', name: this.d.companyName(), active: this.s.demoActive, created_at: ago(24 * 30), suspended_at: this.s.demoActive ? null : now, suspended_reason: this.s.demoReason,
       ...this.d.health(), support: g ? { until: g.until, grantedBy: g.grantedBy, reason: g.reason, enteredAt: g.enteredAt } : null };
-    const companies = [me, ...this.s.others.map(o => ({ ...o, support: null }))].sort((a, b) => a.name.localeCompare(b.name));
-    return { owner: OWNER_NAME, companies, demo: true };
+    const companies = [me, ...this.s.others.map(o => ({ ...o, support: null }))].sort((a, b) => a.name.localeCompare(b.name))
+      .map(c => ({ ...c, storage: demoStorage(c.people, c.jobsMonth) }));
+    const backup = demoBackup(companies.map(c => c.storage));
+    const sent = (x: ReturnType<typeof demoStorage>) => x.dbBytes + x.documentBytes + x.photoBytes;
+    const total = companies.reduce((n, c) => n + sent(c.storage), 0);
+    for (const c of companies) c.storage.cloudBytes = Math.round(backup.cloud.bytes * (sent(c.storage) / total));
+    return { owner: OWNER_NAME, companies, backup, demo: true };
   }
   enter(id: string): Res {
     if (id !== 'demo') {
@@ -122,4 +127,24 @@ export class DemoSupport {
     o.active = active; o.suspended_at = active ? null : new Date().toISOString(); o.suspended_reason = active ? null : reason!.trim();
     return good({ id, name: o.name, active });
   }
+}
+
+/** Made-up space for the test drive's dashboard: in line with how many people and jobs a company has. */
+export function demoStorage(people: number, jobsMonth: number) {
+  const dbBytes = 2_000_000 + people * 350_000 + jobsMonth * 90_000;
+  const photoBytes = jobsMonth * 6 * 240_000 + people * 150_000;
+  const documentBytes = jobsMonth * 120_000;
+  const pdfBytes = jobsMonth * 2 * 110_000;
+  return { dbBytes, photoBytes, documentBytes, pdfBytes, files: jobsMonth * 9 + people, totalBytes: dbBytes + photoBytes + documentBytes + pdfBytes, measuredAt: new Date().toISOString(), cloudBytes: 0 };
+}
+/** The test drive's last backup: this morning at 01:30, with the cloud copy. */
+export function demoBackup(all: ReturnType<typeof demoStorage>[] = [demoStorage(12, 60)]) {
+  const at = new Date(); at.setHours(1, 34, 0, 0);
+  if (at.getTime() > Date.now()) at.setDate(at.getDate() - 1);
+  const iso = at.toISOString();
+  const sum = (f: (x: ReturnType<typeof demoStorage>) => number) => all.reduce((n, x) => n + f(x), 0);
+  const dump = Math.round(sum(x => x.dbBytes) * 0.35);           // a dump is compressed
+  const cloud = dump * 30 + sum(x => x.documentBytes + x.photoBytes);
+  return { state: 'ok', at: iso, ageHours: Math.round((Date.now() - at.getTime()) / 360_000) / 10, dbBytes: dump, localBytes: cloud + sum(x => x.pdfBytes), freeBytes: 410_000_000_000, dumps: 30,
+    cloud: { configured: true, ok: true, bytes: cloud, lastOkAt: iso, photos: true }, errors: [] as string[], demo: true };
 }

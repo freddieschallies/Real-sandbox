@@ -33,7 +33,109 @@ export async function jobCrew(c: Q, jobId: string) {
   });
 }
 
+async function rulesOf(c: Q) {
+  const r = (await c.query('SELECT weekday_normal_min, saturday_normal_min FROM timesheet_settings')).rows[0];
+  return r ? { weekdayNormalMin: r.weekday_normal_min, saturdayNormalMin: r.saturday_normal_min } : { weekdayNormalMin: 480, saturdayNormalMin: 0 };
+}
+
+/** Everything a person without the app did in a week: the jobs they were on and other work the office added. */
+async function weekItems(c: Q, memberIds: string[], from: string, to: string) {
+  const jobs = (await c.query(
+    `SELECT jc.id, jc.member_id, to_char(jc.work_date, 'YYYY-MM-DD') AS d, jc.minutes, j.job_number, s.name AS store, u.full_name AS added_by,
+            coalesce(v.arrived_at, v.started_at) AS from_at, v.ended_at AS to_at
+       FROM job_crew jc JOIN jobs j ON j.id = jc.job_id JOIN stores s ON s.id = j.store_id JOIN users u ON u.id = jc.added_by LEFT JOIN job_visits v ON v.id = jc.visit_id
+      WHERE jc.member_id = ANY($1::uuid[]) AND jc.removed_at IS NULL AND jc.work_date BETWEEN $2 AND $3`, [memberIds, from, to])).rows;
+  const other = (await c.query(
+    `SELECT t.id, t.member_id, to_char(t.work_date, 'YYYY-MM-DD') AS d, t.minutes, t.what, u.full_name AS added_by
+       FROM crew_time t JOIN users u ON u.id = t.added_by WHERE t.member_id = ANY($1::uuid[]) AND t.removed_at IS NULL AND t.work_date BETWEEN $2 AND $3`, [memberIds, from, to])).rows;
+  const iso = (x: Date | null) => (x ? new Date(x).toISOString() : null);
+  const by = new Map<string, CR.CrewTimeIn[]>();
+  for (const r of jobs) {
+    const minutes = CR.crewMinutes({ memberId: r.member_id, workDate: r.d, minutes: r.minutes, visit: { from: iso(r.from_at), to: iso(r.to_at) } });
+    (by.get(r.member_id) ?? by.set(r.member_id, []).get(r.member_id)!).push({ id: r.id, date: r.d, minutes, what: `Job ${r.job_number}, ${r.store}`, kind: 'job', jobNumber: r.job_number,
+      running: r.minutes === null && !!r.from_at && !r.to_at, addedBy: r.added_by });
+  }
+  for (const r of other) (by.get(r.member_id) ?? by.set(r.member_id, []).get(r.member_id)!).push({ id: r.id, date: r.d, minutes: r.minutes, what: r.what, kind: 'other', addedBy: r.added_by });
+  return by;
+}
+
 export function registerCrewRoutes(app: FastifyInstance) {
+  // The weekly timesheets of the people without the app: everyone's week, then one person's days.
+  app.get('/crew/week', async (req: FastifyRequest<{ Querystring: { start?: string } }>) => {
+    if (!keepsList(req)) throw new Refused(403, ['the office keeps the timesheets of assistants and casual labour']);
+    const start = CR.weekStart(parse(DateOnly.optional(), req.query.start) ?? today());
+    const end = CR.crewWeek(start, [], { weekdayNormalMin: 480, saturdayNormalMin: 0 }, null).end;
+    const members = (await req.db.query('SELECT id, full_name, kind, day_rate_cents, hour_rate_cents, active FROM crew_members ORDER BY kind, full_name')).rows;
+    const items = await weekItems(req.db, members.map(m => m.id), start, end);
+    const checks = (await req.db.query(
+      `SELECT DISTINCT ON (w.member_id) w.member_id, w.minutes, w.checked_at, u.full_name AS by FROM crew_weeks w JOIN users u ON u.id = w.checked_by
+        WHERE w.week_start = $1 ORDER BY w.member_id, w.checked_at DESC`, [start])).rows;
+    const rules = await rulesOf(req.db);
+    return {
+      start, end, canPay: money(req),
+      people: members.filter(m => m.active || items.has(m.id)).map(m => {
+        const w = CR.crewWeek(start, items.get(m.id) ?? [], rules, { kind: m.kind, dayRateCents: m.day_rate_cents, hourRateCents: m.hour_rate_cents });
+        const ck = checks.find(x => x.member_id === m.id);
+        return { id: m.id, name: m.full_name, kind: m.kind, totals: w.totals, ...(money(req) ? { pay: w.pay } : {}),
+          checked: ck ? { by: ck.by, at: ck.checked_at, changedSince: ck.minutes !== w.totals.minutes } : null };
+      }),
+    };
+  });
+
+  app.get('/crew-members/:id/week', async (req: FastifyRequest<{ Params: { id: string }; Querystring: { start?: string } }>) => {
+    if (!keepsList(req)) throw new Refused(403, ['the office keeps the timesheets of assistants and casual labour']);
+    const id = parse(Uuid, req.params.id);
+    const start = CR.weekStart(parse(DateOnly.optional(), req.query.start) ?? today());
+    const m = (await req.db.query('SELECT id, full_name, kind, phone, day_rate_cents, hour_rate_cents FROM crew_members WHERE id = $1', [id])).rows[0];
+    if (!m) throw new Refused(404, ['no such person']);
+    const end = CR.crewWeek(start, [], { weekdayNormalMin: 480, saturdayNormalMin: 0 }, null).end;
+    const w = CR.crewWeek(start, (await weekItems(req.db, [id], start, end)).get(id) ?? [], await rulesOf(req.db), { kind: m.kind, dayRateCents: m.day_rate_cents, hourRateCents: m.hour_rate_cents });
+    const checks = (await req.db.query(
+      `SELECT w.minutes, w.checked_at AS at, w.note, u.full_name AS by FROM crew_weeks w JOIN users u ON u.id = w.checked_by WHERE w.member_id = $1 AND w.week_start = $2 ORDER BY w.checked_at DESC`, [id, start])).rows;
+    return {
+      member: { id: m.id, name: m.full_name, kind: m.kind, phone: m.phone }, canPay: money(req),
+      week: money(req) ? w : { ...w, pay: { basis: null, cents: null, text: null } },
+      holidays: w.days.map(d => CR.publicHoliday(d.date)),
+      checked: checks.map(x => ({ ...x, changedSince: x.minutes !== w.totals.minutes })),
+    };
+  });
+
+  // Work not on a job (the yard, the workshop, loading the van): the office adds it to the person's day.
+  app.post('/crew-members/:id/time', async (req: FastifyRequest<{ Params: { id: string } }>, reply) => {
+    if (!keepsList(req)) throw new Refused(403, ['the office keeps the timesheets of assistants and casual labour']);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ workDate: DateOnly, hours: z.number().positive().max(24), what: z.string().trim().min(2, 'what the work was').max(200) }), req.body);
+    if (b.workDate > today()) throw new Refused(400, ['not a day still to come']);
+    if (!(await req.db.query('SELECT 1 FROM crew_members WHERE id = $1', [id])).rowCount) throw new Refused(404, ['no such person']);
+    const t = (await req.db.query('INSERT INTO crew_time (member_id, work_date, minutes, what, added_by) VALUES ($1, $2, $3, $4, $5) RETURNING id', [id, b.workDate, Math.round(b.hours * 60), b.what, req.actor.id])).rows[0];
+    await audit(req.db, req.actor.id, 'crew_time_added', 'crew_member', id, { day: b.workDate, hours: b.hours });
+    return reply.code(201).send({ id: t.id });
+  });
+
+  app.post('/crew-time/:id/remove', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    if (!keepsList(req)) throw new Refused(403, ['the office keeps the timesheets of assistants and casual labour']);
+    const id = parse(Uuid, req.params.id);
+    const t = (await req.db.query('UPDATE crew_time SET removed_at = now(), removed_by = $2 WHERE id = $1 AND removed_at IS NULL RETURNING member_id', [id, req.actor.id])).rows[0];
+    if (!t) throw new Refused(404, ['not there']);
+    await audit(req.db, req.actor.id, 'crew_time_removed', 'crew_member', t.member_id);
+    return { id };
+  });
+
+  // The office checked the week (with the person, or against the job cards): ready to pay.
+  app.post('/crew-members/:id/week/check', async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    if (!keepsList(req)) throw new Refused(403, ['the office keeps the timesheets of assistants and casual labour']);
+    const id = parse(Uuid, req.params.id);
+    const b = parse(z.object({ start: DateOnly, note: z.string().trim().max(300).optional() }), req.body);
+    const start = CR.weekStart(b.start);
+    const end = CR.crewWeek(start, [], { weekdayNormalMin: 480, saturdayNormalMin: 0 }, null).end;
+    const items = (await weekItems(req.db, [id], start, end)).get(id) ?? [];
+    if (items.some(i => i.running)) throw new Refused(409, ['a job that week is still going on: check the week once it is done']);
+    const minutes = items.reduce((n, i) => n + i.minutes, 0);
+    await req.db.query('INSERT INTO crew_weeks (member_id, week_start, minutes, checked_by, note) VALUES ($1, $2, $3, $4, $5)', [id, start, minutes, req.actor.id, b.note || null]);
+    await audit(req.db, req.actor.id, 'crew_week_checked', 'crew_member', id, { week: start, minutes });
+    return { start, minutes };
+  });
+
   app.get('/crew-members', async (req: FastifyRequest<{ Querystring: { all?: string } }>) => {
     const all = req.query.all === '1' && keepsList(req);
     const { rows } = await req.db.query(

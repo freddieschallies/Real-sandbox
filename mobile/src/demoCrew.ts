@@ -3,7 +3,9 @@ import * as CR from '../../server/src/core/crew.ts';
 
 export interface CrewMemberRow { id: string; full_name: string; phone: string | null; kind: CR.CrewKind; day_rate_cents: number | null; hour_rate_cents: number | null; note: string | null; active: boolean; added_by: string; added_at: string }
 export interface CrewEntryRow { id: string; job_id: string; member_id: string; work_date: string; minutes: number | null; source: 'site' | 'office'; note: string | null; added_by: string; added_by_id: string; added_at: string; removed_at?: string | null }
-export interface CrewState { members: CrewMemberRow[]; entries: CrewEntryRow[]; payments: { member_id: string; from: string; to: string; days: number; amount_cents: number; by: string; at: string }[] }
+export interface CrewState { members: CrewMemberRow[]; entries: CrewEntryRow[]; payments: { member_id: string; from: string; to: string; days: number; amount_cents: number; by: string; at: string }[];
+  time?: { id: string; member_id: string; work_date: string; minutes: number; what: string; added_by: string; removed_at?: string | null }[];
+  weeks?: { member_id: string; week_start: string; minutes: number; by: string; at: string; note: string | null }[] }
 
 type Res = { status: number; body: unknown };
 const ok = (body: unknown, status = 200): Res => ({ status, body });
@@ -57,9 +59,59 @@ export class DemoCrew {
     });
   }
 
+  private weekItems(memberId: string, from: string, to: string): CR.CrewTimeIn[] {
+    const jobs = this.live().filter(e => e.member_id === memberId && e.work_date >= from && e.work_date <= to).map(e => {
+      const j = this.src.job(e.job_id);
+      const en = this.entry(e);
+      return { id: e.id, date: e.work_date, minutes: CR.crewMinutes(en), what: `Job ${j?.number ?? ''}`, kind: 'job' as const, jobNumber: j?.number ?? null, running: e.minutes === null && !!en.visit?.from && !en.visit?.to, addedBy: e.added_by };
+    });
+    const other = (this.s.time ?? []).filter(t => t.member_id === memberId && !t.removed_at && t.work_date >= from && t.work_date <= to)
+      .map(t => ({ id: t.id, date: t.work_date, minutes: t.minutes, what: t.what, kind: 'other' as const, addedBy: t.added_by }));
+    return [...jobs, ...other];
+  }
+  private static RULES = { weekdayNormalMin: 480, saturdayNormalMin: 0 };
+
   route(method: string, p: string, q: URLSearchParams, b: any): Res | null {
     const { office, keepsList, money, who } = this.src;
     let m: RegExpMatchArray | null;
+    if (p === '/crew/week' || /^\/crew-members\/[^/]+\/(week|time|week\/check)$/.test(p) || p.startsWith('/crew-time/')) {
+      if (!keepsList) return no(403, 'the office keeps the timesheets of assistants and casual labour');
+      const start = CR.weekStart(q.get('start') ?? b.start ?? today());
+      const end = CR.crewWeek(start, [], DemoCrew.RULES, null).end;
+      const rate = (x: CrewMemberRow) => ({ kind: x.kind, dayRateCents: x.day_rate_cents, hourRateCents: x.hour_rate_cents });
+      const checks = (id: string) => (this.s.weeks ?? []).filter(w => w.member_id === id && w.week_start === start).sort((a, c) => c.at.localeCompare(a.at));
+      if (p === '/crew/week') {
+        return ok({ start, end, canPay: money, people: this.s.members.filter(x => x.active || this.weekItems(x.id, start, end).length).map(x => {
+          const w = CR.crewWeek(start, this.weekItems(x.id, start, end), DemoCrew.RULES, rate(x));
+          const ck = checks(x.id)[0];
+          return { id: x.id, name: x.full_name, kind: x.kind, totals: w.totals, ...(money ? { pay: w.pay } : {}), checked: ck ? { by: ck.by, at: ck.at, changedSince: ck.minutes !== w.totals.minutes } : null };
+        }) });
+      }
+      if ((m = p.match(/^\/crew-time\/([^/]+)\/remove$/))) {
+        const t = (this.s.time ?? []).find(x => x.id === m![1] && !x.removed_at);
+        if (!t) return no(404, 'not there');
+        t.removed_at = new Date().toISOString(); return ok({ id: t.id });
+      }
+      const id = p.split('/')[2];
+      const x = this.s.members.find(y => y.id === id);
+      if (!x) return no(404, 'no such person');
+      if (p.endsWith('/time')) {
+        if (!(Number(b.hours) > 0) || String(b.what ?? '').trim().length < 2) return no(400, 'the hours and what the work was');
+        if (String(b.workDate) > today()) return no(400, 'not a day still to come');
+        const t = { id: nid('ct'), member_id: id, work_date: String(b.workDate), minutes: Math.round(Number(b.hours) * 60), what: String(b.what).trim(), added_by: who.name };
+        (this.s.time ??= []).push(t); return ok({ id: t.id }, 201);
+      }
+      const items = this.weekItems(id, start, end);
+      if (p.endsWith('/check')) {
+        if (items.some(i => i.running)) return no(409, 'a job that week is still going on: check the week once it is done');
+        const minutes = items.reduce((n, i) => n + i.minutes, 0);
+        (this.s.weeks ??= []).push({ member_id: id, week_start: start, minutes, by: who.name, at: new Date().toISOString(), note: b.note ?? null });
+        return ok({ start, minutes });
+      }
+      const w = CR.crewWeek(start, items, DemoCrew.RULES, rate(x));
+      return ok({ member: { id, name: x.full_name, kind: x.kind, phone: x.phone }, canPay: money, week: money ? w : { ...w, pay: { basis: null, cents: null, text: null } },
+        holidays: w.days.map(d => CR.publicHoliday(d.date)), checked: checks(id).map(c => ({ minutes: c.minutes, at: c.at, note: c.note, by: c.by, changedSince: c.minutes !== w.totals.minutes })) });
+    }
     if (p === '/crew-members') {
       if (method === 'GET') {
         const all = q.get('all') === '1' && keepsList;

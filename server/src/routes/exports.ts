@@ -119,8 +119,11 @@ export function registerExportRoutes(app: FastifyInstance, db: Db, mailer: Maile
 
   app.post('/exports', { bodyLimit: MAX_HTML + 100_000 }, async (req, reply) => {
     const b = parse(z.object({ kind: z.enum(EXPORT_KINDS), title: z.string().trim().min(1).max(200), ref: z.string().trim().max(120).optional(), html: z.string().min(20).max(MAX_HTML) }), req.body);
-    const id = (await req.db.query('INSERT INTO doc_exports (kind, title, ref, html, made_by) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      [b.kind, b.title, b.ref || null, b.html, req.actor.id])).rows[0].id;
+    const row = (await req.db.query('INSERT INTO doc_exports (kind, title, ref, html, made_by) VALUES ($1, $2, $3, $4, $5) RETURNING id, made_at',
+      [b.kind, b.title, b.ref || null, b.html, req.actor.id])).rows[0];
+    const id = row.id;
+    // The PDF is made now and filed on the office server with the document.
+    await pdfOf(req.db, req.companyId, { id, html: b.html, pdf_path: null, made_at: row.made_at });
     await audit(req.db, req.actor.id, 'document_exported', 'doc_export', id, { kind: b.kind, title: b.title });
     return reply.code(201).send({ id, fileName: `${fileBase(b.title)}.${chromium() ? 'pdf' : 'html'}`, pdf: !!chromium(), email: !!mailer, linkDays: EXPORT_LINK_DAYS });
   });
@@ -137,7 +140,9 @@ export function registerExportRoutes(app: FastifyInstance, db: Db, mailer: Maile
     if (!d) throw new Refused(404, ['no such job']);
     const html = jobReportHtml(d, lh.top.replace('JOB CARD', `JOB CARD ${d.job.number}`), lh.bottom);
     const title = `Job card ${d.job.number} – ${d.client}, ${d.store}`;
-    const id = (await req.db.query("INSERT INTO doc_exports (kind, title, ref, html, made_by) VALUES ('job_card', $1, $2, $3, $4) RETURNING id", [title, `job ${d.job.number}`, html, req.actor.id])).rows[0].id;
+    const row = (await req.db.query("INSERT INTO doc_exports (kind, title, ref, html, made_by) VALUES ('job_card', $1, $2, $3, $4) RETURNING id, made_at", [title, `job ${d.job.number}`, html, req.actor.id])).rows[0];
+    const id = row.id;
+    await pdfOf(req.db, req.companyId, { id, html, pdf_path: null, made_at: row.made_at });
     await audit(req.db, req.actor.id, 'document_exported', 'doc_export', id, { kind: 'job_card', job: d.job.number });
     const store = (await req.db.query('SELECT s.email, cl.email AS client_email, cl.phone FROM jobs j JOIN stores s ON s.id = j.store_id JOIN clients cl ON cl.id = s.client_id WHERE j.id = $1', [jobId])).rows[0];
     return reply.code(201).send({ id, title, fileName: `${fileBase(title)}.${chromium() ? 'pdf' : 'html'}`, pdf: !!chromium(), email: !!mailer, linkDays: EXPORT_LINK_DAYS,

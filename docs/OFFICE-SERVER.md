@@ -83,9 +83,80 @@ No ports are opened on the office router; the server makes the connection outwar
 
 ## 7. Backups
 
-- Every night at 01:30 the `backup` service writes the database and all photos to `deploy/backups/`, keeping 30 days.
-- Copy that folder off-site every day (a cloud folder sync, or rsync to another machine). A backup that stays in the office is lost with the office.
-- Test a restore once a month: `pg_restore` the latest dump into a spare database and check it opens.
+Every day at 01:30 (or as soon as the server is back on, if it was off) the `backup` service:
+
+1. Dumps the database: every company's records, every document exactly as it went out, and the history. It checks that the dump can be read.
+2. Copies the files (photos, scanned slips, job documents, the PDFs the app made) into the backup folder. Only new files are copied, and nothing is ever deleted from the backup.
+3. Keeps 30 daily dumps, plus the dump from the 1st of each month for a year.
+4. Sends a copy to the cloud. Everything is **encrypted on this server first** with `BACKUP_PASSPHRASE`, so the cloud company cannot read your clients' data. The cloud gets:
+   - the database
+   - the documents
+   - the photos (they are compressed; `CLOUD_PHOTOS=0` leaves them out)
+
+   PDFs the app made are not sent: they are made again from the database.
+5. Writes how it went (and the space each company uses) for the owner's dashboard. The CEO sees "last backup" under Settings.
+
+**Set it up once**
+
+- `BACKUP_DIR` in `.env`: a folder on a **second disk** if the PC has one (e.g. `/mnt/backup-disk/realsandbox`). A backup on the same disk as the database is lost with the disk.
+- The cloud: Cloudflare R2 is recommended, because the tunnel already uses Cloudflare. It has 10 GB free, then about R0.30 per GB a month.
+  1. In Cloudflare, go to R2 → Create bucket (e.g. `zsp-backup`).
+  2. Go to R2 → Manage API tokens → Create API token, with Object Read & Write for that bucket only.
+  3. In `.env`, fill in:
+     - `CLOUD_BUCKET`
+     - `CLOUD_ENDPOINT` (shown on the token page)
+     - `CLOUD_ACCESS_KEY_ID`
+     - `CLOUD_SECRET_ACCESS_KEY`
+  4. Choose `BACKUP_PASSPHRASE`: a long sentence. **Write it on paper and keep it at home or in the safe.** Without it the cloud copy cannot be read, by anyone.
+  5. Start it with `docker compose --env-file .env up -d --build backup`.
+- Run one now to check it:
+
+  ```bash
+  docker compose exec backup backup.sh
+  ```
+
+  It must end with "backup done". The owner's dashboard then shows the backup in green.
+
+**Restore** (test this once a month)
+
+- To see what there is (on this server and in the cloud):
+
+  ```bash
+  docker compose exec backup restore.sh list
+  ```
+
+- If this server's disk is gone, bring a dump down from the cloud:
+
+  ```bash
+  docker compose exec backup restore.sh fetch db-2026-10-17.dump
+  ```
+
+- To bring all the files down from the cloud (into `BACKUP_DIR/restored-files`):
+
+  ```bash
+  docker compose exec backup restore.sh files
+  ```
+
+- To put a dump back into the database (this replaces what is there; do it with the app stopped):
+
+  ```bash
+  docker compose stop api
+  docker compose exec -T db pg_restore -U realsandbox -d realsandbox --clean --if-exists < backups/db/db-2026-10-17.dump
+  docker compose start api
+  ```
+
+- To test without touching the real data, restore into a spare database instead:
+
+  ```bash
+  docker compose exec db createdb -U realsandbox restore_test
+  docker compose exec -T db pg_restore -U realsandbox -d restore_test < backups/db/db-2026-10-17.dump
+  ```
+
+  Check that it opens, then drop it:
+
+  ```bash
+  docker compose exec db dropdb -U realsandbox restore_test
+  ```
 
 ## Updating
 
@@ -110,11 +181,11 @@ checklist every time.
 
    ```bash
    cd ~/real-sandbox/deploy
-   docker compose exec backup bash -c 'stamp=$(date +%Y-%m-%d-%H%M); pg_dump -h db -U realsandbox -Fc realsandbox > /backups/db-before-update-$stamp.dump && tar -czf /backups/photos-before-update-$stamp.tar.gz -C /data uploads'
-   ls -lh backups | tail -3
+   docker compose exec backup bash -c 'stamp=$(date +%Y-%m-%d-%H%M); pg_dump -h db -U realsandbox -Fc realsandbox > /backups/db/db-before-update-$stamp.dump' && docker compose exec backup backup.sh
+   ls -lh backups/db | tail -3
    ```
 
-   The two new files must be there and not 0 bytes. If they are not, stop: do not update.
+   The new dump must be there and not 0 bytes, and the backup must end with "backup done". If not, stop: do not update.
 
 ### Update
 
@@ -150,7 +221,7 @@ anything entered after it (jobs, timesheets, invoices) is lost. Use it only if t
 ```bash
 cd ~/real-sandbox/deploy
 docker compose stop api
-docker compose exec -T db pg_restore -U realsandbox -d realsandbox --clean --if-exists < backups/db-before-update-YYYY-MM-DD-HHMM.dump
+docker compose exec -T db pg_restore -U realsandbox -d realsandbox --clean --if-exists < backups/db/db-before-update-YYYY-MM-DD-HHMM.dump
 docker compose start api
 ```
 
