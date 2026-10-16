@@ -66,7 +66,7 @@ export const GUIDES: Guide[] = [
     'Technician: Price list (under Other on your day). Office: the Price list tab. Or search for the part and tap it.',
     'Type the code or part of the name ("valve", "25A", "R404"); small spelling mistakes are fine.',
     'Tap the part: the price excl. VAT and with VAT. A client with its own mark-up may pay a little differently on the invoice.',
-    'No picture yet? Tap "Take a picture" of the part, its box or label: everyone sees it from then on.',
+    'Stock controller, Admin and the CEO: no picture yet? Tap "Take a picture" of the part, its box or label: everyone sees it from then on.',
   ] },
   { id: 'tech-docs', title: 'Print a client\'s form on site, and bring it back filled in', roles: ['technician'], steps: [
     'Open the job: under "Documents for this job" is what the office added (e.g. the client\'s own service report).',
@@ -285,6 +285,12 @@ export const GUIDES: Guide[] = [
     'Search a name, job or invoice number, part or amount; or choose who, what and the time.',
     'Tap an entry for every field before and after, and everything else that happened to that job, invoice or part.',
     'Nobody can change or delete the History, not even you. "Check the history" shows whether anything was ever taken out or changed.',
+  ] },
+  { id: 'office-crew', title: 'Put more than one technician (or an assistant) on a job', roles: ['admin', 'management', 'director', 'creator'], steps: [
+    'Jobs → the job → "Technicians".',
+    'The lead technician does the sign-off. Tick everyone working with him: other technicians and assistants.',
+    'Everyone ticked sees the job on their phone and works on the same job card. Each one is told when added or taken off.',
+    'Giving the job to another lead needs a reason; if the lead is busy on it, he taps Continue later first.',
   ] },
   { id: 'office-docs', title: 'Add a client\'s form or papers to a job card', roles: ['admin', 'management', 'director', 'creator'], steps: [
     'Jobs → the job → Documents for this job → "+ Add a document": a PDF, Word, Excel or a picture (up to 4 MB).',

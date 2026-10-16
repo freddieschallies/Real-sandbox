@@ -161,34 +161,38 @@ export function registerControlRoutes(app: FastifyInstance) {
     return rows;
   });
 
-  // ---- Moving a job to another technician ------------------------------------------------------
+  // ---- The technicians on a job: the lead, and other technicians and assistants working with him ----
 
   app.post('/jobs/:id/assign', async (req: FastifyRequest<{ Params: { id: string } }>) => {
     if (!can(req.actor, 'assign_jobs')) throw new Refused(403, ['you cannot assign jobs']);
     const jobId = parse(Uuid, req.params.id);
     const b = parse(z.object({
       leadTechnicianId: Uuid, helperIds: z.array(Uuid).max(10).default([]), scheduledDate: DateOnly.optional(),
-      reason: z.string().trim().min(5, 'say why it moves').max(500),
+      reason: z.string().trim().max(500).optional(),
     }), req.body);
     return tx(req.db, async c => {
       const j = (await c.query('SELECT job_number, status, lead_technician_id FROM jobs WHERE id = $1 FOR UPDATE', [jobId])).rows[0];
       if (!j) throw new Refused(404, ['no such job']);
       if (j.status === 'closed' || j.status === 'cancelled') throw new Refused(409, [`the job is ${j.status}`]);
+      // Giving the job to another lead technician needs a reason; adding people to work with him does not.
+      if (b.leadTechnicianId !== j.lead_technician_id && (b.reason ?? '').length < 5) throw new Refused(400, ['say why it goes to another technician']);
       if (j.status === 'in_progress' && b.leadTechnicianId !== j.lead_technician_id) {
         throw new Refused(409, ['the technician is busy on this job: he must Continue later before it can move']);
       }
       const ids = [b.leadTechnicianId, ...b.helperIds];
       const ok = new Set((await c.query("SELECT id FROM users WHERE id = ANY($1) AND login_level = 'technician' AND status = 'active'", [ids])).rows.map(r => r.id));
       if (!ok.has(b.leadTechnicianId)) throw new Refused(400, ['lead technician must be an active technician']);
-      if (b.helperIds.some(h => !ok.has(h) || h === b.leadTechnicianId)) throw new Refused(400, ['every helper must be another active technician']);
+      if (b.helperIds.some(h => !ok.has(h) || h === b.leadTechnicianId)) throw new Refused(400, ['everyone working with the lead must be another active technician or assistant']);
       const before = (await c.query('SELECT user_id FROM job_helpers WHERE job_id = $1', [jobId])).rows.map(r => r.user_id);
       await c.query('UPDATE jobs SET lead_technician_id = $2, scheduled_date = COALESCE($3, scheduled_date) WHERE id = $1', [jobId, b.leadTechnicianId, b.scheduledDate ?? null]);
       await c.query('DELETE FROM job_helpers WHERE job_id = $1', [jobId]);
       for (const h of b.helperIds) await c.query('INSERT INTO job_helpers (job_id, user_id) VALUES ($1, $2)', [jobId, h]);
       const was = new Set([j.lead_technician_id, ...before]);
       const now = new Set(ids);
-      for (const u of now) if (!was.has(u)) await notify(c, u, 'job_assigned', `Job ${j.job_number} is now yours${b.scheduledDate ? ` for ${b.scheduledDate}` : ''}: ${b.reason}`, { jobId });
-      for (const u of was) if (!now.has(u)) await notify(c, u, 'job_unassigned', `Job ${j.job_number} was moved off you: ${b.reason}`, { jobId });
+      const why = b.reason ? `: ${b.reason}` : '';
+      const leadName = (await c.query('SELECT full_name FROM users WHERE id = $1', [b.leadTechnicianId])).rows[0]?.full_name ?? '';
+      for (const u of now) if (!was.has(u)) await notify(c, u, 'job_assigned', u === b.leadTechnicianId ? `Job ${j.job_number} is now yours${b.scheduledDate ? ` for ${b.scheduledDate}` : ''}${why}` : `You are working on job ${j.job_number} with ${leadName}${b.scheduledDate ? ` on ${b.scheduledDate}` : ''}`, { jobId });
+      for (const u of was) if (!now.has(u)) await notify(c, u, 'job_unassigned', `Job ${j.job_number} was taken off you${why}`, { jobId });
       await audit(c, req.actor.id, 'job_assigned', 'job', jobId, b);
       return { jobId, leadTechnicianId: b.leadTechnicianId, helperIds: b.helperIds };
     });

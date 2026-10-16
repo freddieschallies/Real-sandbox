@@ -1288,7 +1288,7 @@ export class DemoTransport implements Transport {
     if ((m = p.match(/^\/jobs\/([^/]+)\/assign$/))) {
       const j = this.findJob(m[1]);
       if (!j) return refuse(404, 'no such job');
-      if (!b.reason || b.reason.trim().length < 5) return refuse(400, 'say why it moves');
+      if (b.leadTechnicianId !== (j.meta.lead_id ?? 'me') && (!b.reason || b.reason.trim().length < 5)) return refuse(400, 'say why it goes to another technician');
       if (j.card.status === 'closed') return refuse(409, 'the job is closed');
       if (j.card.status === 'in_progress' && b.leadTechnicianId !== (j.meta.lead_id ?? 'me')) return refuse(409, 'the technician is busy on this job: he must Continue later before it can move');
       if ((b.helperIds ?? []).includes(b.leadTechnicianId)) return refuse(400, 'every helper must be another active technician');
@@ -1932,11 +1932,14 @@ export class DemoTransport implements Transport {
         .map(i => ({ id: i.id, code: i.code, description: i.description, unit: i.unit, priceCents: i.sellingPriceCents ?? null, supplierCode: i.supplierCode ?? null,
           photoId: i.photoId ?? null, photoBy: meta[i.id]?.by ?? null, photoAt: meta[i.id]?.at ?? null }))
         .sort((x, y) => x.description.localeCompare(y.description));
-      return ok({ vatPct: Number((this.state.docs?.profile as { vat_pct?: number } | null)?.vat_pct ?? 15), items });
+      const lvlP = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
+      return ok({ vatPct: Number((this.state.docs?.profile as { vat_pct?: number } | null)?.vat_pct ?? 15), items, canPicture: ['stockroom', 'admin', 'director', 'creator'].includes(lvlP) || this.does('stockroom') });
     }
     if ((m = p.match(/^\/price-list\/([^/]+)\/photo$/)) && req.method === 'PUT') {
       const it = this.stock().s.items.find(i => i.id === m![1] && (i.category ?? 'stock') === 'stock');
       if (!it) return refuse(404, 'no such part on the price list');
+      const lvlQ = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
+      if (!(['stockroom', 'admin', 'director', 'creator'].includes(lvlQ) || this.does('stockroom'))) return refuse(403, 'the stock controller, Admin or the CEO puts up the pictures of parts');
       if (!b.photoId) return refuse(400, 'send the picture first');
       it.photoId = b.photoId;
       ((this.state as { priceMeta?: Record<string, { by: string; at: string }> }).priceMeta ??= {})[it.id] = { by: this.who.name, at: new Date().toISOString() };

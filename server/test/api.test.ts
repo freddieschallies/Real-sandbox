@@ -914,6 +914,15 @@ test('the office screen: what needs attention, stores, technicians, and moving a
   assert.equal((await call('tech2', 'GET', `/jobs/${J}`)).status, 200, 'the new technician can open it');
   assert.equal((await call('admin', 'POST', `/jobs/${J}/assign`, { leadTechnicianId: ids.tech2, helperIds: [ids.tech2], reason: 'Same person twice' })).status, 400);
   assert.equal((await call('tech', 'POST', `/jobs/${J}/assign`, { leadTechnicianId: ids.tech, reason: 'I want it back' })).status, 403);
+  // More than one technician (and assistants) on a job: adding people needs no reason; each is told and sees it.
+  assert.equal((await call('admin', 'POST', `/jobs/${J}/assign`, { leadTechnicianId: ids.tech2, helperIds: [] })).status, 200, 'taken off: no reason needed');
+  const crew = await call('admin', 'POST', `/jobs/${J}/assign`, { leadTechnicianId: ids.tech2, helperIds: [ids.tech] });
+  assert.equal(crew.status, 200, JSON.stringify(crew.body));
+  const row = (await call('admin', 'GET', '/jobs')).body.find((x: { id: string }) => x.id === J);
+  assert.deepEqual(row.helper_ids, [ids.tech]);
+  assert.equal(row.lead_id, ids.tech2);
+  assert.ok((await call('tech', 'GET', '/me/notifications')).body.some((n: { message: string }) => /You are working on job \d+ with/.test(n.message)));
+  assert.equal((await call('tech', 'GET', `/jobs/${J}`)).status, 200, 'a helper opens the job card');
 });
 
 test('the office edits jobs (every change on the job), cancels them, and makes quotes and invoices', async () => {
@@ -3266,7 +3275,7 @@ test('owner dashboard: every company as counts only; support goes in only while 
   assert.equal((await call('', 'POST', '/auth/login', { email: 'ian@inland.test', password: PW })).status, 401, 'no password until he uses the code');
 });
 
-test('price list: every part with its selling price only, for everyone; anyone puts up a picture of the part', async () => {
+test('price list: every part with its selling price only, for everyone; the stockroom, Admin or the CEO puts up a picture of the part', async () => {
   const tl = await call('tech', 'GET', '/price-list');
   assert.equal(tl.status, 200, JSON.stringify(tl.body));
   const valve = tl.body.items.find((i: { id: string }) => i.id === ids.seal);
@@ -3274,10 +3283,13 @@ test('price list: every part with its selling price only, for everyone; anyone p
   assert.ok(!JSON.stringify(tl.body).includes('cost'), 'never what it cost');
   assert.ok(tl.body.vatPct > 0);
   assert.equal((await call('admin', 'GET', '/price-list')).status, 200);
-  const pic = await upload('tech', '/photos', { kind: 'stock_item', takenAt: '2026-10-16T18:00:00+02:00' });
+  assert.equal(tl.body.canPicture, false, 'technicians do not put up pictures');
+  const own = await upload('tech', '/photos', { kind: 'stock_item', takenAt: '2026-10-16T18:00:00+02:00' });
+  assert.equal((await call('tech', 'PUT', `/price-list/${ids.seal}/photo`, { photoId: own.body.id })).status, 403, 'the stock controller, Admin or the CEO');
+  const pic = await upload('admin', '/photos', { kind: 'stock_item', takenAt: '2026-10-16T18:00:00+02:00' });
   assert.equal(pic.status, 201, JSON.stringify(pic.body));
-  assert.equal((await call('admin', 'PUT', `/price-list/${ids.seal}/photo`, { photoId: pic.body.id })).status, 409, "someone else's picture");
-  const put = await call('tech', 'PUT', `/price-list/${ids.seal}/photo`, { photoId: pic.body.id });
+  assert.equal((await call('creator', 'PUT', `/price-list/${ids.seal}/photo`, { photoId: pic.body.id })).status, 409, "someone else's picture");
+  const put = await call('admin', 'PUT', `/price-list/${ids.seal}/photo`, { photoId: pic.body.id });
   assert.equal(put.status, 200, JSON.stringify(put.body));
   const after = (await call('admin', 'GET', '/price-list')).body.items.find((i: { id: string }) => i.id === ids.seal);
   assert.equal(after.photoId, pic.body.id);

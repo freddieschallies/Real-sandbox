@@ -102,7 +102,8 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
     const { rows } = await req.db.query(
       `SELECT j.id, j.job_number, j.job_type, j.priority, j.status, j.scheduled_date, j.fault_reported, nc.reason AS no_charge_reason, nc.note AS no_charge_note, j.cancelled_by_party, j.cancel_note,
               (SELECT cl.on_hold FROM clients cl WHERE cl.id = s.client_id) AS client_on_hold,
-              s.name AS store, u.full_name AS lead_technician, j.lead_technician_id,
+              s.name AS store, u.full_name AS lead_technician, j.lead_technician_id, j.lead_technician_id AS lead_id,
+              (SELECT coalesce(array_agg(h.user_id ORDER BY h.added_at), '{}') FROM job_helpers h WHERE h.job_id = j.id) AS helper_ids,
               -- Billing, for the office's filters: its invoice (not cancelled) and anything credited.
               inv.invoice_number, inv.status::text AS invoice_status,
               (SELECT coalesce(sum(cn.amount_cents), 0)::bigint FROM credit_notes cn WHERE cn.job_id = j.id) AS credited_cents,

@@ -1,6 +1,7 @@
 // The price list: every part the company sells and its selling price (never what it cost), for when
 // a client asks what a part costs. Search it the way you would the stock (codes, part of a name,
-// typos); tap a part for its picture and price. Anyone can put up a picture of the part. The last
+// typos); tap a part for its picture and price. The stock controller, Admin and the CEO put up the
+// pictures of parts. The last
 // list is kept on the phone, so it works without signal too.
 import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
@@ -16,7 +17,7 @@ export interface PriceItem {
   id: string; code: string; description: string; unit: string; priceCents: number | null;
   supplierCode?: string | null; pastelCode?: string | null; photoId: string | null; photoBy?: string | null; photoAt?: string | null;
 }
-export interface PriceListData { vatPct: number; items: PriceItem[]; at?: string }
+export interface PriceListData { vatPct: number; items: PriceItem[]; at?: string; canPicture?: boolean }
 
 const incl = (cents: number, vat: number) => Math.round(cents * (1 + vat / 100));
 const day = (iso: string) => new Date(iso).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Africa/Johannesburg' });
@@ -95,7 +96,7 @@ export function PriceList({ itemId, back }: { itemId?: string; back?: () => void
       {back ? <Button label="Back" kind="quiet" onPress={back} /> : null}
     </ScrollView>
   );
-  const detail = chosen ? <PartPrice key={chosen.id} it={chosen} vat={d.vatPct} changed={load} close={() => setSel(null)} showClose={!wide} /> : null;
+  const detail = chosen ? <PartPrice key={chosen.id} it={chosen} vat={d.vatPct} canPicture={!!d.canPicture} changed={load} close={() => setSel(null)} showClose={!wide} /> : null;
   if (wide) {
     return (
       <View style={{ flex: 1, flexDirection: 'row' }} onLayout={measure}>
@@ -107,7 +108,7 @@ export function PriceList({ itemId, back }: { itemId?: string; back?: () => void
   return <View style={{ flex: 1 }} onLayout={measure}>{detail ?? list}</View>;
 }
 
-function PartPrice({ it, vat, changed, close, showClose }: { it: PriceItem; vat: number; changed: () => void; close: () => void; showClose: boolean }) {
+function PartPrice({ it, vat, canPicture, changed, close, showClose }: { it: PriceItem; vat: number; canPicture: boolean; changed: () => void; close: () => void; showClose: boolean }) {
   const s = useStore();
   const [photo, setPhoto] = useState(it.photoId);
   const [saved, setSaved] = useState(false);
@@ -126,7 +127,7 @@ function PartPrice({ it, vat, changed, close, showClose }: { it: PriceItem; vat:
         ) : <Text style={[st.body, { color: C.warn, fontWeight: '700' }]}>No price set yet: ask the office.</Text>}
       </View>
       <Text style={[st.small, { fontWeight: '800', letterSpacing: 0.5 }]}>PICTURE FOR REFERENCE</Text>
-      <ItemPicture photoId={photo} kind="stock_item" label={it.description} canEdit
+      <ItemPicture photoId={photo} kind="stock_item" label={it.description} canEdit={canPicture}
         save={async id => {
           const r = await s.ask({ method: 'PUT', path: `/price-list/${it.id}/photo`, json: { photoId: id } });
           if (!r || r.status >= 300) return (r?.body as { reasons?: string[] })?.reasons?.[0] ?? 'Not saved: try again with signal.';
@@ -135,7 +136,7 @@ function PartPrice({ it, vat, changed, close, showClose }: { it: PriceItem; vat:
         }} />
       {saved ? <Text style={[st.small, { color: C.good }]}>Picture saved: everyone sees it now.</Text>
         : it.photoBy && it.photoAt ? <Text style={st.small}>Picture by {it.photoBy}, {day(it.photoAt)}.</Text>
-        : <Text style={st.small}>No picture yet? Take one of the part (or its box or label) so the next person knows it by sight.</Text>}
+        : <Text style={st.small}>{canPicture ? 'No picture yet? Take one of the part (or its box or label) so the next person knows it by sight.' : 'No picture yet: the stock controller, Admin or the CEO adds one.'}</Text>}
     </ScrollView>
   );
 }

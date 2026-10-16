@@ -605,15 +605,16 @@ function JobDetail({ id, o, canEdit, canDocs, openReport }: { id: string; o: Off
         {c?.store_address ? <Text style={st.small}>{c.store_address}</Text> : null}
         <Body>{j.fault_reported}</Body>
         <Text style={st.small}>{TYPE[j.job_type]} · {day(j.scheduled_date)} · lead {j.lead_technician}{c?.client_order_ref ? ` · order ${c.client_order_ref}` : ''}</Text>
+        {(j.helper_ids ?? []).length ? <Text style={st.small}>Working with {j.lead_technician.split(' ')[0]}: {(j.helper_ids ?? []).map(h => o.d.techs.find(t => t.id === h)?.full_name ?? 'someone').join(', ')}</Text> : null}
       </Card>
       {canEdit && j.status !== 'cancelled' ? (
         <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
           <Button label="Edit job" kind="secondary" onPress={() => { setPanel(panel === 'edit' ? 'none' : 'edit'); setMoving(false); }} style={{ flexGrow: 1, flexBasis: 150 }} />
-          {j.status !== 'closed' ? <Button label="Move" kind="secondary" onPress={() => { setMoving(!moving); setPanel('none'); }} style={{ flexGrow: 1, flexBasis: 150 }} /> : null}
+          {j.status !== 'closed' ? <Button label="Technicians" kind="secondary" onPress={() => { setMoving(!moving); setPanel('none'); }} style={{ flexGrow: 1, flexBasis: 150 }} /> : null}
           {j.status !== 'closed' ? <Button label="Cancel job" kind="secondary" onPress={() => { setPanel(panel === 'cancel' ? 'none' : 'cancel'); setMoving(false); }} style={{ flexGrow: 1, flexBasis: 150 }} /> : null}
         </View>
       ) : null}
-      {moving ? <MoveJob j={j} o={o} done={() => setMoving(false)} /> : null}
+      {moving ? <AssignJob j={j} o={o} done={() => setMoving(false)} /> : null}
       {panel === 'edit' && c ? <EditJob j={j} c={c} o={o} started={c.visits.length > 0} done={() => setPanel('none')} /> : null}
       {panel === 'cancel' ? <CancelJob j={j} o={o} done={() => setPanel('none')} /> : null}
       {j.status === 'cancelled' ? <Notice tone="warn" title={j.cancelled_by_party === 'client' ? 'Cancelled by the client' : j.cancelled_by_party === 'us' ? 'Cancelled by us' : 'Cancelled'}
@@ -789,27 +790,55 @@ function CancelJob({ j, o, done }: { j: OfficeJob; o: OfficeHook; done: () => vo
   );
 }
 
-function MoveJob({ j, o, done }: { j: OfficeJob; o: OfficeHook; done: () => void }) {
+const TRADE_LABEL: Record<string, string> = { foodservice: 'Foodservice tech', plumber: 'Plumber', electrician: 'Electrician', assistant: 'Assistant' };
+
+/** Who works on the job: the lead technician, and other technicians and assistants with him. */
+function AssignJob({ j, o, done }: { j: OfficeJob; o: OfficeHook; done: () => void }) {
   const [lead, setLead] = useState<string | undefined>(j.lead_id);
+  const [helpers, setHelpers] = useState<string[]>((j.helper_ids ?? []).filter(h => h !== j.lead_id));
   const [date, setDate] = useState(j.scheduled_date < ymd(new Date()) ? ymd(new Date()) : j.scheduled_date);
   const [reason, setReason] = useState('');
   const [ans, setAns] = useState<Answer | null>(null);
+  const [busy, setBusy] = useState(false);
   const days = Array.from({ length: 10 }, (_, i) => ymd(new Date(Date.now() + i * 86_400_000)));
+  const newLead = !!lead && !!j.lead_id && lead !== j.lead_id;
+  const started = j.status === 'in_progress';
+  const save = async () => {
+    if (!lead) { setAns({ ok: false, reasons: ['choose the lead technician'] }); return; }
+    if (newLead && reason.trim().length < 5) { setAns({ ok: false, reasons: ['say why it goes to another lead technician'] }); return; }
+    setBusy(true);
+    const r = await o.send('POST', `/jobs/${j.id}/assign`, { leadTechnicianId: lead, helperIds: helpers.filter(h => h !== lead), scheduledDate: date, ...(reason.trim() ? { reason: reason.trim() } : {}) });
+    setBusy(false);
+    setAns(r);
+    if (r.ok) done();
+  };
   return (
     <Card style={{ borderColor: K.stripe }}>
-      <Heading>Move job {j.job_number}</Heading>
-      <TechPicker o={o} value={lead} onChange={setLead} />
+      <Heading>Technicians on job {j.job_number}</Heading>
+      <Label>Lead technician (signs the job off)</Label>
+      <TechPicker o={o} value={lead} onChange={id => { setLead(id); setHelpers(h => h.filter(x => x !== id)); }} />
+      {started && newLead ? <Notice tone="warn" title={`${j.lead_technician.split(' ')[0]} is busy on this job`} lines={['He must tap Continue later before another lead takes it. You can add people to work with him now.']} /> : null}
+      <Label>Working with the lead (technicians and assistants)</Label>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        {o.d.techs.filter(t => t.id !== lead).map(t => {
+          const on = helpers.includes(t.id);
+          const trade = (t as { trade?: string | null }).trade;
+          return (
+            <Pressable key={t.id} onPress={() => setHelpers(h => (on ? h.filter(x => x !== t.id) : [...h, t.id]))} accessibilityRole="checkbox" accessibilityState={{ checked: on }} accessibilityLabel={`With ${t.full_name}`}
+              style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, borderWidth: 2, borderColor: on ? C.accent : C.line, backgroundColor: on ? C.panel2 : 'transparent' }}>
+              <Text style={{ color: C.text, fontWeight: '700' }}>{on ? '✓ ' : ''}{t.full_name}</Text>
+              {trade ? <Text style={st.small}>{TRADE_LABEL[trade] ?? trade}</Text> : null}
+            </Pressable>
+          );
+        })}
+      </View>
+      <Text style={st.small}>Everyone ticked sees the job on their phone and works on the same job card; their time counts on it. The lead does the sign-off.</Text>
       <Label>Day</Label>
       <Choice options={days} value={date} onChange={setDate} labels={Object.fromEntries(days.map(d => [d, day(d)]))} />
-      <Field label="Why does it move?" value={reason} onChangeText={setReason} placeholder="e.g. Thabo is on leave" />
-      <Text style={st.small}>Both technicians are told. A job that is being worked on can only move once the technician has pressed Continue later.</Text>
+      {newLead ? <Field label="Why does it go to another lead technician?" value={reason} onChangeText={setReason} placeholder="e.g. Thabo is on leave" /> : null}
+      <Text style={st.small}>Everyone added or taken off is told on their phone.</Text>
       <Reasons a={ans} />
-      <Button label="Move job" onPress={async () => {
-        if (!lead || reason.trim().length < 5) { setAns({ ok: false, reasons: [!lead ? 'the technician' : '', reason.trim().length < 5 ? 'why it moves' : ''].filter(Boolean) }); return; }
-        const r = await o.send('POST', `/jobs/${j.id}/assign`, { leadTechnicianId: lead, helperIds: (j.helper_ids ?? []).filter(h => h !== lead), scheduledDate: date, reason: reason.trim() });
-        setAns(r);
-        if (r.ok) done();
-      }} />
+      <Button label="Save the technicians" busy={busy} onPress={save} />
       <Button label="Cancel" kind="quiet" onPress={done} />
     </Card>
   );

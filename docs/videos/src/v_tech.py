@@ -84,7 +84,7 @@ async def main():
         await v.label('Find a part', 'contacter', delay=90)
         await v.say('Type the code or part of the name: small spelling mistakes are fine.')
         await v.tap(pg.locator('[aria-label^="Part "]').first, after=1.2)
-        await v.say('The price with and without VAT. No picture yet? Take one, so the next person knows it by sight.')
+        await v.say('The price with and without VAT, and a picture of the part to know it by.', 'The stock controller, Admin or the CEO adds the pictures.')
         await pg.get_by_label('Back', exact=True).first.click(); await v.wait(0.8)
         await v.scroll(-3000)
         await v.say('At the end of the day, check your timesheet: the app made it from your jobs.', 'Add any office time, then submit it.')

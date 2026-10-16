@@ -293,7 +293,7 @@ export class DemoOffice {
     const t = this.today();
     return this.techs().map(p => {
       const mine = this.src.jobs.filter(j => j.card.status !== 'closed' && j.card.status !== 'cancelled' && j.meta.scheduled_date <= t && ((j.meta.lead_id ?? 'me') === p.id || (j.meta.helper_ids ?? []).includes(p.id)));
-      return { id: p.id, full_name: p.full_name, department: p.department, open_jobs: mine.length, working_now: mine.filter(j => j.card.status === 'in_progress').length, vehicle: vehicleOf(p.id) };
+      return { id: p.id, full_name: p.full_name, trade: (p as { trade?: string | null }).trade ?? null, department: p.department, open_jobs: mine.length, working_now: mine.filter(j => j.card.status === 'in_progress').length, vehicle: vehicleOf(p.id) };
     });
   }
 

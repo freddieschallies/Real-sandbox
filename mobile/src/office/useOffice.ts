@@ -24,7 +24,7 @@ export interface Store {
   /** The map pin: ok, check (only the suburb was found, or from a technician's Arrived), looking (being found), not_found. */
   pin_status?: 'ok' | 'check' | 'looking' | 'not_found'; pin_source?: string; pin_note?: string | null; email?: string | null; phone?: string | null; geofence_m?: number;
 }
-export interface Tech { id: string; full_name: string; department: string | null; open_jobs: number; working_now: number; vehicle: string | null }
+export interface Tech { id: string; full_name: string; trade?: string | null; department: string | null; open_jobs: number; working_now: number; vehicle: string | null }
 export interface OfficeFlag { id: string; flag_type: string; severity: string; raised_at: string; question: string | null; explanation: string | null; status: string; technician: string | null; job_number: number | null }
 export interface Inspection {
   id: string; registration: string; driver: string; previous_driver: string | null; inspected_at: string; odometer_km: number; fuel_level: string;
