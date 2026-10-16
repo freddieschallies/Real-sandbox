@@ -1,6 +1,7 @@
 // Staff records (issues, warnings, commendations: CEO and HR only) and each person's tools and PPE
 // (kept by the stockroom, visible to the office and to the person).
 import React, { useEffect, useState } from 'react';
+import { findStock } from '../../../server/src/core/stockSearch.ts';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, Stepper, st } from '../ui.tsx';
@@ -193,8 +194,7 @@ function IssueKit({ userId, done }: { userId: string; done: () => void }) {
   const [err, setErr] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => { s.ask({ method: 'GET', path: '/stock/stockroom' }).then(r => { if (r?.status === 200) setItems(r.body); }); }, []);
-  const words = find.toLowerCase().split(/\s+/).filter(Boolean);
-  const list = items.filter(i => (i.category ?? 'stock') === kind && words.every(w => `${i.code} ${i.description}`.toLowerCase().includes(w))).slice(0, 12);
+  const list = findStock(items.filter(i => (i.category ?? 'stock') === kind), find, { limit: 12 });
   return (
     <View style={{ gap: 10, borderTopWidth: 1, borderTopColor: C.line, paddingTop: 10 }}>
       <Heading>Issue</Heading>

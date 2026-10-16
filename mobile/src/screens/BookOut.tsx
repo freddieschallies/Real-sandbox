@@ -1,5 +1,6 @@
 // Book out from the stockroom for a job: goes on the technician's name at once, against that job.
 import React, { useState } from 'react';
+import { findStock } from '../../../server/src/core/stockSearch.ts';
 import { Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { useNav } from '../nav.tsx';
@@ -17,8 +18,8 @@ export function BookOut({ jobId }: { jobId: string }) {
   const [basket, setBasket] = useState<Record<string, number>>({});
   const [reasons, setReasons] = useState<string[] | null>(null);
   const cat = s.cache.catalogue ?? [];
-  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = cat.filter(i => words.every(w => `${i.code} ${i.description}`.toLowerCase().includes(w))).slice(0, 40);
+  // Best match first: codes without dashes, the start of a word, typos, the trade's other words.
+  const shown = findStock(cat, q, { limit: 40 });
   const chosen = Object.entries(basket).filter(([, n]) => n > 0);
 
   const book = () => {

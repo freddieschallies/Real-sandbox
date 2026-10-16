@@ -2743,7 +2743,15 @@ test('search: each person finds only what he may already see; stock prices only 
   const ts = (await call('tech', 'GET', '/search?q=valve')).body;
   assert.ok(hits(ts, 'stock').length && hits(ts, 'stock').every((h: { price?: string | null }) => !h.price), 'no prices for a technician');
   // Words in any order.
-  assert.deepEqual(hits((await call('tech', 'GET', '/search?q=valve inlet')).body, 'stock').map((h: { title: string }) => h.title), hits(ts, 'stock').map((h: { title: string }) => h.title));
+  assert.ok(hits((await call('tech', 'GET', '/search?q=valve inlet')).body, 'stock').some((h: { title: string }) => h.title.startsWith('VALVE-01 ')));
+  // Stock the way people type it: the code without its dash, a typo, the start of a word; with where it is.
+  for (const q of ['valve01', 'inlet valv', 'watr inlet', 'valves']) {
+    const r = (await call('tech', 'GET', `/search?q=${encodeURIComponent(q)}`)).body;
+    assert.ok(hits(r, 'stock')[0]?.title.startsWith('VALVE-01 '), `${q}: ${JSON.stringify(hits(r, 'stock'))}`);
+  }
+  const exact = (await call('admin', 'GET', '/search?q=VALVE-01')).body;
+  assert.equal(exact.groups[0].kind, 'stock', 'an exact part code puts the stock first');
+  assert.match(exact.groups[0].hits[0].sub, /in the stockroom/);
   // Accounts: customers, invoices with their amounts, stock with prices.
   const b = (await call('books', 'GET', '/search?q=freshmart')).body;
   assert.ok(kinds(b).includes('client') && kinds(b).includes('invoice'), JSON.stringify(kinds(b)));

@@ -3,6 +3,7 @@
 // prices, quotes, invoices, purchase orders, supplier invoices, people, vehicles). Tap a result to go
 // straight to it. Without signal, the phone searches what it already has (today's jobs, the stock list).
 import React, { useEffect, useRef, useState } from 'react';
+import { findStock } from '../../../server/src/core/stockSearch.ts';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useStore } from '../state.tsx';
@@ -33,7 +34,7 @@ export function localSearch(q: string, jobs: { id: string; job_number: number; s
   const j = jobs.filter(x => S.hasAll(`${x.job_number} ${x.store} ${x.fault_reported ?? ''}`, q)).slice(0, S.PER_KIND)
     .map(x => ({ kind: 'job' as const, id: x.id, title: `Job ${x.job_number} · ${x.store}`, sub: x.fault_reported ?? '' }));
   if (j.length) out.push({ kind: 'job', label: S.KIND_LABEL.job, hits: j });
-  const s = stock.filter(x => S.hasAll(`${x.code} ${x.description}`, q)).slice(0, S.PER_KIND)
+  const s = findStock(stock, q, { limit: 8 })
     .map(x => ({ kind: 'stock' as const, id: x.id, title: `${x.code} · ${x.description}`, sub: x.unit ?? '' }));
   if (s.length) out.push({ kind: 'stock', label: S.KIND_LABEL.stock, hits: s });
   return out;
@@ -68,7 +69,7 @@ export function SearchPanel({ places, open, close, local, hint }: {
     <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 50, backgroundColor: C.bg }} accessibilityViewIsModal>
       <View style={{ paddingTop: ins.top + 8, paddingHorizontal: 12, paddingBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: 2, borderBottomColor: C.accent, backgroundColor: C.panel }}>
         <Pressable onPress={close} accessibilityRole="button" accessibilityLabel="Close search" hitSlop={10}><Text style={{ color: C.text, fontSize: 32 }}>‹</Text></Pressable>
-        <TextInput value={q} onChangeText={setQ} autoFocus placeholder="Search: a job no., store, part, screen…" placeholderTextColor={C.quiet} accessibilityLabel="Search for"
+        <TextInput value={q} onChangeText={setQ} autoFocus placeholder="Search: a job no., store, part code or name, screen…" placeholderTextColor={C.quiet} accessibilityLabel="Search for"
           autoCorrect={false} autoCapitalize="none" returnKeyType="search" style={[st.input, { flex: 1, fontSize: 17 }]} />
         {q ? <Pressable onPress={() => setQ('')} accessibilityRole="button" accessibilityLabel="Clear" hitSlop={10}><Text style={{ color: C.quiet, fontSize: 22 }}>×</Text></Pressable> : null}
       </View>
@@ -76,6 +77,7 @@ export function SearchPanel({ places, open, close, local, hint }: {
         {!q.trim() ? (
           <View style={{ padding: 16, gap: 8 }}>
             <Text style={st.body}>Type anything: a job number, a store or customer, a part code, a supplier, a person, or what you want to do.</Text>
+            <Text style={st.small}>Parts: the code with or without the dash (valve01), part of the name (inlet valv), a size or rating (25A, 2.5mm, R404), or the word you use for it (gasket finds the door seals). Small spelling mistakes are fine. You see how many are in the stockroom and on whose van.</Text>
             <Text style={st.small}>{hint ?? 'For example: 10220, Spar, valve, prices, timesheet, purchase order.'}</Text>
           </View>
         ) : null}
@@ -116,7 +118,7 @@ export function SearchPanel({ places, open, close, local, hint }: {
             })}
           </View>
         ))}
-        {nothing ? <Text style={[st.body, { padding: 16 }]}>Nothing found for “{q.trim()}”. Try fewer words, or part of a name or number.</Text> : null}
+        {nothing ? <Text style={[st.body, { padding: 16 }]}>Nothing found for “{q.trim()}”. Try fewer words, the part code, or just the start of the name.</Text> : null}
       </ScrollView>
     </View>
   );

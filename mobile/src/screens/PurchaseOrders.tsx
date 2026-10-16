@@ -3,6 +3,7 @@
 // a list, the part's label): the app reads it into the request, which he checks. Once approved, show
 // the PO number at the counter and scan the supplier's slip against it.
 import React, { useEffect, useState } from 'react';
+import { findStock } from '../../../server/src/core/stockSearch.ts';
 import { Image, Pressable, Text, TextInput, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { useNav } from '../nav.tsx';
@@ -156,7 +157,7 @@ function AskPO({ jobId, jobLabel, done }: { jobId?: string; jobLabel: string | n
       <Text style={st.small}>For: {jobLabel ?? 'sundries / van stock (a PO for a job is asked for on its job card)'}</Text>
       <Heading>Parts</Heading>
       {lines.map((l, i) => {
-        const hits = find === i && l.description.trim().length >= 2 ? catalogue.filter(c => `${c.code} ${c.description}`.toLowerCase().includes(l.description.trim().toLowerCase())).slice(0, 5) : [];
+        const hits = find === i && l.description.trim().length >= 2 ? findStock(catalogue, l.description, { limit: 5 }) : [];
         return (
           <Card key={i}>
             <TextInput value={l.description} onChangeText={t => { set(i, { description: t, stockItemId: null }); setFind(i); }} placeholder="What it is (type to find the stock item)" placeholderTextColor={C.quiet}

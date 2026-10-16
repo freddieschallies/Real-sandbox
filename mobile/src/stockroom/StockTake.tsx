@@ -3,6 +3,7 @@
 // sign off: the stockroom is corrected and Accounts and the CEO are told. A blank count sheet prints
 // for counting on paper; the results print for the file.
 import React, { useEffect, useState } from 'react';
+import { findStock } from '../../../server/src/core/stockSearch.ts';
 import { Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import * as D from '../../../server/src/core/documents.ts';
@@ -74,8 +75,7 @@ function TakeView({ id, close }: { id: string; close: () => void }) {
   if (!d) return err ? <Notice tone="bad" title="Could not load" lines={err} /> : <Body quiet>Loading…</Body>;
   const t = d.take, sm = d.summary;
   const open = !t.signed_off_at && !t.cancelled_at;
-  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = d.items.filter(i => words.every(w => `${i.code} ${i.description}`.toLowerCase().includes(w)))
+  const shown = findStock(d.items, q)
     .filter(i => !open || show === 'all' || (show === 'todo' ? i.counted === null : i.diff));
   const count = async (i: Item) => {
     const v = Number((typed[i.id] ?? '').replace(',', '.'));

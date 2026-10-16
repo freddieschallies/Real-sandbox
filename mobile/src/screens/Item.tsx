@@ -6,6 +6,7 @@ import { useNav } from '../nav.tsx';
 import { takePhoto, nowIso, type Photo } from '../device.ts';
 import { J } from '../local.ts';
 import * as St from '../../../server/src/core/stock.ts';
+import { findStock } from '../../../server/src/core/stockSearch.ts';
 import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, Screen, Toggle, st } from '../ui.tsx';
 import { SyncPill } from './SyncPill.tsx';
 import { C } from '../theme.ts';
@@ -118,6 +119,7 @@ export function Item({ jobId, itemId }: { jobId: string; itemId: string }) {
 function Materials({ jobId, itemId, editable, lines, onRefused }: { jobId: string; itemId: string; editable: boolean; lines: number; onRefused: (r: string[] | null) => void }) {
   const s = useStore();
   const [mode, setMode] = useState<'none' | 'van' | 'bought'>('none');
+  const [vanQ, setVanQ] = useState('');
   const [qty, setQty] = useState('1');
   const [desc, setDesc] = useState('');
   const [price, setPrice] = useState('');
@@ -181,7 +183,8 @@ function Materials({ jobId, itemId, editable, lines, onRefused }: { jobId: strin
           <Field label="Quantity" value={qty} onChangeText={setQty} keyboardType="decimal-pad" />
           <Label>Tap the item you used</Label>
           {s.cache.stock.length === 0 ? <Body quiet>Nothing on your name. Book it out from the stockroom on the job card.</Body> : null}
-          {s.cache.stock.map(l => (
+          {s.cache.stock.length > 6 ? <Field label="Find it" value={vanQ} onChangeText={setVanQ} placeholder="Code or name, e.g. valve, 25A, R404" autoCorrect={false} /> : null}
+          {findStock(s.cache.stock, vanQ).map(l => (
             <Card key={l.id} onPress={() => useVan(l.id, l.description, l.qty)} style={{ backgroundColor: C.panel2 }}>
               <Text style={[st.body, { fontWeight: '700' }]}>{l.description}</Text>
               <Text style={st.small}>{l.code} · {l.qty} {l.unit} on your name</Text>

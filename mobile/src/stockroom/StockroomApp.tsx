@@ -1,6 +1,7 @@
 // The stock controller's app. Phone: tabs at the bottom, list then detail. Desktop (wide screen):
 // menu, list and the open request side by side. Nothing leaves or enters the stockroom without this.
 import { PurchaseOrderList } from '../office/PurchaseOrders.tsx';
+import { findStock, matches as fits } from '../../../server/src/core/stockSearch.ts';
 import { KitPeople, StockPersonView, type StockPerson } from '../staff/Staff.tsx';
 import { ToolStore } from './ToolStore.tsx';
 import { OrderList, PartDetail, Thumb, useOrderList } from './Parts.tsx';
@@ -210,8 +211,7 @@ function IssueTab({ waiting, issued, open, selected }: { waiting: StockRequest[]
 
 function IssuedRegister({ items }: { items: StockRequest[] }) {
   const [q, setQ] = useState('');
-  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = items.filter(r => words.every(w => `${r.technician} ${r.job_number ?? ''} ${r.store ?? ''} ${r.lines.map(l => `${l.code} ${l.description}`).join(' ')}`.toLowerCase().includes(w)));
+  const shown = items.filter(r => fits(`${r.technician} ${r.job_number ?? ''} ${r.store ?? ''} ${r.lines.map(l => `${l.code} ${l.description}`).join(' ')}`, q));
   return (
     <>
       <Field label="Search" value={q} onChangeText={setQ} placeholder="technician, job number or item" autoCorrect={false} />
@@ -368,8 +368,7 @@ function RoomList({ items, holdings, onDelivery, onPart }: { items: RoomItem[]; 
   const [open, setOpen] = useState<string | null>(null);
   const catOf = (i: RoomItem): Category => i.category ?? 'stock';
   const count = (c: Category) => items.filter(i => catOf(i) === c).length;
-  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const hit = (t: string) => words.every(w => t.toLowerCase().includes(w));
+  const hit = (t: string) => fits(t, q);
   const totalOut = holdings.reduce((n, h) => n + h.qty, 0);
   const mustBack = holdings.filter(h => h.mustReturn);
   const techs = [...new Set(holdings.map(h => h.technician))];
@@ -390,7 +389,7 @@ function RoomList({ items, holdings, onDelivery, onPart }: { items: RoomItem[]; 
       {cat === 'stock' ? <Choice options={['item', 'tech'] as const} value={view} onChange={setView} labels={{ item: 'By item', tech: 'By technician' }} />
         : <Text style={st.small}>{CATEGORY_LABEL[cat]} are issued to a person by name (People tab), not booked onto jobs.</Text>}
       <Field label="Search" value={q} onChangeText={setQ} placeholder={view === 'item' ? 'code or description' : 'technician, job or item'} autoCorrect={false} />
-      {view === 'item' ? items.filter(i => catOf(i) === cat && hit(`${i.code} ${i.description}`)).map(i => {
+      {view === 'item' ? findStock(items.filter(i => catOf(i) === cat), q).map(i => {
         const out = holdings.filter(h => h.stockItemId === i.id);
         const isOpen = open === i.id;
         return (
@@ -527,9 +526,9 @@ function Delivery({ room, done }: { room: ReturnType<typeof useStockroom>; done:
   const [note, setNote] = useState<Photo | null>(null);
   const [q, setQ] = useState('');
   const [qty, setQty] = useState<Record<string, number>>({});
-  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = room.ctl.room.filter(i => !i.needsReview && ((qty[i.id] ?? 0) > 0 || words.every(w => `${i.code} ${i.description}`.toLowerCase().includes(w))))
-    .sort((a, b) => Number((qty[b.id] ?? 0) > 0) - Number((qty[a.id] ?? 0) > 0)).slice(0, 30);
+  const ok = room.ctl.room.filter(i => !i.needsReview);
+  const picked = ok.filter(i => (qty[i.id] ?? 0) > 0);
+  const shown = [...picked, ...findStock(ok.filter(i => !((qty[i.id] ?? 0) > 0)), q)].slice(0, 30);
   const lines = Object.entries(qty).filter(([, n]) => n > 0).map(([stockItemId, n]) => ({ stockItemId, qty: n }));
   return (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 60 }}>

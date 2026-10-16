@@ -29,6 +29,7 @@ import { DemoFleet, seedFleet, type DemoFleetState } from './demoFleet.ts';
 import { DemoWhatsApp, seedWhatsApp, type DemoWaState } from './demoWhatsApp.ts';
 import { DemoPastelSetup, seedPastelSetup, type DemoPastelState } from './demoPastel.ts';
 import { DemoSupport, SUPPORT_WHO, seedSupport, type DemoSupportState } from './demoSupport.ts';
+import { findStock, stockScore } from '../../server/src/core/stockSearch.ts';
 import type { PaySettings } from '../../server/src/core/pay.ts';
 import { demoFuel, demoVehiclesPage, type DemoTrip } from './demoVehicles.ts';
 import { Offline, type Request, type Response, type Transport } from './transport.ts';
@@ -667,7 +668,7 @@ export class DemoTransport implements Transport {
     const out: SR.SearchResult = { q, groups: [] };
     if (q.length < SR.MIN_CHARS || !SR.wordsOf(q).length) return out;
     const N = SR.PER_KIND;
-    const add = (kind: SR.SearchKind, hits: SR.SearchHit[]) => { if (hits.length) out.groups.push({ kind, label: SR.KIND_LABEL[kind], hits: hits.slice(0, N) }); };
+    const add = (kind: SR.SearchKind, hits: SR.SearchHit[], n = N) => { if (hits.length) out.groups.push({ kind, label: SR.KIND_LABEL[kind], hits: hits.slice(0, n) }); };
     const lvl = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
     const o = this.office();
     const d = this.docs();
@@ -687,10 +688,23 @@ export class DemoTransport implements Transport {
     const st = this.stock();
     const stockAll = this.does('stockroom') || docs || lvl === 'stockroom';
     const prices = docs || this.does('prices') || this.does('stockroom') || lvl === 'stockroom';
-    add('stock', st.s.items.filter(i => !i.needsReview && (stockAll || (i.category ?? 'stock') === 'stock') && SR.hasAll(`${i.code} ${i.description} ${i.supplierCode ?? ''} ${i.supplierName ?? ''}`, q))
-      .sort((a, c) => Number(c.code.toLowerCase() === q.toLowerCase()) - Number(a.code.toLowerCase() === q.toLowerCase()))
-      .map(i => ({ kind: 'stock' as const, id: i.id, title: `${i.code} · ${i.description}`, sub: `${st.s.stockroom[i.id] ?? 0} ${i.unit} in the stockroom`,
-        price: prices ? (i.sellingPriceCents != null ? `${R(i.sellingPriceCents)} excl. VAT` : 'No selling price set') : null })));
+    // Ranked the way people type parts, with where it is (the stockroom, the vans), as the server does.
+    const meName = this.who.id === 'me' || lvl === 'technician';
+    const seesVans = stockAll || allJobs;
+    const found = findStock(st.s.items.filter(i => !i.needsReview && (stockAll || (i.category ?? 'stock') === 'stock')), q,
+      { limit: 8, bonus: i => ((st.s.stockroom[i.id] ?? 0) > 0 ? 3 : 0) });
+    add('stock', found.map(i => {
+      const room = st.s.stockroom[i.id] ?? 0;
+      const by = new Map<string, number>();
+      for (const h of st.s.holdings.filter(h => h.stockItemId === i.id && h.qty > 0)) { const t = h.tech ?? 'me'; by.set(t, (by.get(t) ?? 0) + h.qty); }
+      const mine = meName ? by.get('me') : undefined;
+      const others = seesVans ? [...by].filter(([t]) => t !== 'me' || !meName).map(([t, n]) => [t === 'me' ? 'Thabo' : t.split(' ')[0], n] as const) : [];
+      const sub = [`${room} ${i.unit} in the stockroom`, mine ? `${mine} on your name` : '', others.length ? `on vans: ${others.slice(0, 3).map(([t, n]) => `${t} ${n}`).join(', ')}` : '',
+        i.supplierName ? `from ${i.supplierName}` : ''].filter(Boolean).join(' · ');
+      return { kind: 'stock' as const, id: i.id, title: `${i.code} · ${i.description}`, sub,
+        badge: room > 0 ? null : by.size ? { text: 'Only on vans', tone: 'warn' as const } : { text: 'Out of stock', tone: 'bad' as const },
+        price: prices ? (i.sellingPriceCents != null ? `${R(i.sellingPriceCents)} excl. VAT` : 'No selling price set') : null };
+    }), 8);
     if (docs) {
       add('quote', d.quotes(null).filter(x => SR.hasAll(`quote ${x.quote_number} ${x.title} ${x.store} ${x.client} ${x.job_number ?? ''}`, q))
         .map(x => ({ kind: 'quote' as const, id: x.id, title: `Quote ${x.quote_number} · ${x.store}`, sub: [x.title, x.job_number ? `job ${x.job_number}` : '', day(x.created_at)].filter(Boolean).join(' · '), price: R(x.total_cents), badge: { text: x.status, tone: x.status === 'accepted' ? 'good' as const : x.status === 'declined' ? 'bad' as const : 'info' as const } })));
@@ -714,6 +728,7 @@ export class DemoTransport implements Transport {
       .map(x => ({ kind: 'person' as const, id: x.id, title: x.full_name, sub: [x.login_level === 'management' ? 'department manager' : x.login_level, x.trade].filter(Boolean).join(' · ') })));
     if (this.does('fleet')) add('vehicle', (this.fleet().list() as any[]).filter(v => SR.hasAll(`${v.registration} ${String(v.registration).replace(/ /g, '')} ${v.make ?? ''} ${v.model ?? ''} ${v.description ?? ''}`, q))
       .map(v => ({ kind: 'vehicle' as const, id: v.id, title: v.registration, sub: [v.make, v.model, v.description].filter(Boolean).join(' · '), badge: v.status && v.status !== 'in_service' ? { text: String(v.status).replace(/_/g, ' '), tone: 'warn' as const } : null })));
+    if (found[0] && stockScore(found[0], q) >= 1000) { const k = out.groups.findIndex(g => g.kind === 'stock'); if (k > 0) out.groups.unshift(...out.groups.splice(k, 1)); }
     return out;
   }
 

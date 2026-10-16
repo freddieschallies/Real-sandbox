@@ -1,13 +1,17 @@
 // Search from anyone's front page. Only what that person may already see elsewhere in the app:
 // a technician his own job cards and purchase orders and the stock list (no prices); the office
 // every job card, stores, customers, quotes, invoices and stock prices as their work allows; the
-// stockroom stock with prices; the fleet vehicles. Every word must match (in any order).
+// stockroom stock with prices; the fleet vehicles. Every word must match (in any order); stock is
+// ranked by how well it fits, with typos, codes without dashes and the trade's other words.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { can, seesPeople } from '../core/permissions.ts';
 import * as D from '../core/documents.ts';
 import { jobOutcome } from '../core/jobOutcome.ts';
 import * as S from '../core/search.ts';
+import { findStock, stockScore } from '../core/stockSearch.ts';
+
+const STOCK_HITS = 8;
 import { parse } from '../http.ts';
 import { seesPOs } from './purchaseOrders.ts';
 
@@ -65,15 +69,37 @@ export function registerSearchRoutes(app: FastifyInstance) {
     const stockAll = can(a, 'manage_stockroom') || can(a, 'assign_stock') || docs;
     const prices = docs || can(a, 'set_prices') || can(a, 'manage_stockroom');
     const costs = can(a, 'set_prices') || can(a, 'process_supplier_invoices');
-    const stock = (await db.query(
-      `SELECT i.id, i.code, i.description, i.unit, i.selling_price_cents, i.cost_cents, i.category, coalesce(s.qty, 0)::float AS qty
+    // Ranked the way people type parts (core/stockSearch.ts), with where it is: the stockroom, the vans.
+    const all = (await db.query(
+      `SELECT i.id, i.code, i.description, i.unit, i.selling_price_cents, i.cost_cents, i.category, i.supplier_code, i.supplier_name, i.pastel_code,
+              coalesce(s.qty, 0)::float AS qty
          FROM stock_items i LEFT JOIN stockroom_stock s ON s.stock_item_id = i.id
-        WHERE i.active AND ($2::boolean OR i.category = 'stock') AND concat_ws(' ', i.code, i.description, i.supplier_code, i.supplier_name) ILIKE ALL ($1)
-        ORDER BY (lower(i.code) = lower($3)) DESC, i.code LIMIT $4`, [p, stockAll, q, N])).rows;
-    add('stock', stock.map(i => ({
-      kind: 'stock', id: i.id, title: `${i.code} · ${i.description}`, sub: `${i.qty} ${i.unit} in the stockroom${costs && i.cost_cents != null ? ` · cost ${D.rand(i.cost_cents)}` : ''}`,
-      price: prices ? (i.selling_price_cents != null ? `${D.rand(i.selling_price_cents)} excl. VAT` : 'No selling price set') : null,
-    })));
+        WHERE i.active AND NOT i.needs_review AND ($1::boolean OR i.category = 'stock')`, [stockAll])).rows;
+    const found = findStock(all.map(i => ({ ...i, supplierCode: i.supplier_code, supplierName: i.supplier_name, pastelCode: i.pastel_code, also: i.category === 'stock' ? null : i.category })),
+      q, { limit: STOCK_HITS, bonus: i => (i.qty > 0 ? 3 : 0) });
+    const ids = found.map(i => i.id);
+    const vans = ids.length ? (await db.query(
+      `SELECT h.stock_item_id, u.id AS tech_id, split_part(u.full_name, ' ', 1) AS tech, sum(h.qty)::float AS qty
+         FROM technician_holdings h JOIN users u ON u.id = h.technician_id
+        WHERE h.stock_item_id = ANY($1) AND h.qty > 0 AND ($2::boolean OR u.id = $3)
+        GROUP BY h.stock_item_id, u.id, u.full_name ORDER BY sum(h.qty) DESC`, [ids, stockAll || office, a.id])).rows : [];
+    const n = (x: number) => String(Math.round(x * 100) / 100);
+    add('stock', found.map(i => {
+      const on = vans.filter(v => v.stock_item_id === i.id);
+      const mine = on.find(v => v.tech_id === a.id);
+      const others = on.filter(v => v.tech_id !== a.id);
+      const where = [`${n(i.qty)} ${i.unit} in the stockroom`,
+        mine ? `${n(mine.qty)} on your name` : '',
+        others.length ? `on vans: ${others.slice(0, 3).map(v => `${v.tech} ${n(v.qty)}`).join(', ')}${others.length > 3 ? ` +${others.length - 3} more` : ''}` : '',
+        i.supplier_name ? `from ${i.supplier_name}` : '', costs && i.cost_cents != null ? `cost ${D.rand(i.cost_cents)}` : ''].filter(Boolean).join(' · ');
+      return {
+        kind: 'stock' as const, id: i.id, title: `${i.code} · ${i.description}`, sub: where,
+        badge: i.qty > 0 ? null : on.length ? { text: 'Only on vans', tone: 'warn' as const } : { text: 'Out of stock', tone: 'bad' as const },
+        price: prices ? (i.selling_price_cents != null ? `${D.rand(i.selling_price_cents)} excl. VAT` : 'No selling price set') : null,
+      };
+    }));
+    // A part code typed exactly: the stock comes first.
+    if (found[0] && stockScore(found[0], q) >= 1000) out.groups.unshift(...out.groups.splice(out.groups.findIndex(g => g.kind === 'stock'), 1));
 
     // Quotes and invoices: whoever sees them.
     if (docs) {

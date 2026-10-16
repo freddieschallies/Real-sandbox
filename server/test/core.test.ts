@@ -706,3 +706,33 @@ test('pastel set-up: reads Pastel\'s lists with or without headings, matches nam
   assert.equal(s.credit?.code, '1050000');
   assert.equal(s.purchases?.code, '2000000');
 });
+
+test('stock search: codes with or without dashes, word starts, plurals, typos, sizes and trade words; best first', async () => {
+  const { findStock, stockScore } = await import('../src/core/stockSearch.ts');
+  const items = [
+    { code: 'VALVE-01', description: 'Water inlet valve 24V', supplierCode: 'WV-24', supplierName: 'Scotsman Parts SA' },
+    { code: 'CONT-25A', description: 'Contactor 25A 230V coil', supplierName: 'Voltex Richards Bay' },
+    { code: 'FUSE-10A', description: 'Fuse 10A' },
+    { code: 'GAS-R404', description: 'Refrigerant R404A', supplierName: 'Refrigeration Supplies' },
+    { code: 'SEAL-04', description: 'Oven door seal 1/1' },
+    { code: 'CAB-25', description: 'Cable 2.5mm twin and earth' },
+    { code: 'TIE-300', description: 'Cable ties 300 mm (pack of 100)' },
+    { code: 'VALVE-02', description: 'Drain valve 230V' },
+  ];
+  const first = (q: string) => findStock(items, q)[0]?.code;
+  assert.equal(first('valve01'), 'VALVE-01', 'code without the dash');
+  assert.equal(first('VALVE-02'), 'VALVE-02', 'exact code first');
+  assert.equal(first('WV-24'), 'VALVE-01', 'supplier code');
+  assert.equal(first('inlet valv'), 'VALVE-01', 'start of a word');
+  assert.equal(first('valves 24v'), 'VALVE-01', 'plural and rating');
+  assert.equal(first('contacter 25'), 'CONT-25A', 'a typo');
+  assert.equal(first('r404'), 'GAS-R404', 'refrigerant by its number');
+  assert.equal(first('gasket oven'), 'SEAL-04', 'the trade\'s other word');
+  assert.equal(first('2.5 mm cable'), 'CAB-25', 'a size');
+  assert.equal(first('2,5mm'), 'CAB-25', 'a comma decimal');
+  assert.equal(first('300mm cable ties'), 'TIE-300');
+  assert.deepEqual(findStock(items, 'valve').map(i => i.code).sort(), ['VALVE-01', 'VALVE-02']);
+  assert.equal(findStock(items, 'banana').length, 0, 'nothing when a word is not there');
+  assert.equal(stockScore(items[2], 'fuse 99'), 0);
+  assert.equal(findStock(items, '').length, items.length);
+});

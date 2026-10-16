@@ -7,6 +7,7 @@ import { useNav } from '../nav.tsx';
 import { useStore } from '../state.tsx';
 import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, Screen, Select, Stepper, rand, st } from '../ui.tsx';
 import { C } from '../theme.ts';
+import { findStock } from '../../../server/src/core/stockSearch.ts';
 
 type Opts = { stores: { id: string; name: string; address: string | null; client: string }[]; jobs: { id: string; job_number: number; status: string; store: string; open: boolean }[] };
 type Mine = { id: string; quote_number: number; status: string; title: string; created_at: string; job_number: number | null; reference_job_number: number | null; store: string; ex_vat_cents: number };
@@ -58,6 +59,7 @@ export function TechQuoteScreen({ jobId }: { jobId?: string }) {
   const [parts, setParts] = useState<{ stockItemId: string; qty: number }[]>([]);
   const [pick, setPick] = useState<string | undefined>();
   const [pickQty, setPickQty] = useState(1);
+  const [partQ, setPartQ] = useState('');
   const [buy, setBuy] = useState<{ description: string; qty: number; estimatedPriceCents: number }[]>([]);
   const [bDesc, setBDesc] = useState('');
   const [bQty, setBQty] = useState(1);
@@ -123,7 +125,9 @@ export function TechQuoteScreen({ jobId }: { jobId?: string }) {
                 <Pressable onPress={() => setParts(x => x.filter((_, j) => j !== i))} accessibilityRole="button" accessibilityLabel={`Remove ${partName(p.stockItemId)}`} hitSlop={8}><Text style={{ color: C.bad, fontWeight: '700' }}>Remove</Text></Pressable>
               </View>
             ))}
-            <Select label="Part" value={pick} onChange={setPick} placeholder="Choose a part" options={catalogue.map(c => ({ value: c.id, label: `${c.code} · ${c.description}` }))} />
+            {catalogue.length > 8 ? <Field label="Find a part" value={partQ} onChangeText={t => { setPartQ(t); setPick(undefined); }} placeholder="Code or name, e.g. valve, 25A, R404" autoCorrect={false} /> : null}
+            <Select label="Part" value={pick} onChange={setPick} placeholder={partQ.trim() ? 'Choose from what fits' : 'Choose a part'}
+              options={findStock(catalogue, partQ, { limit: partQ.trim() ? 25 : undefined }).map(c => ({ value: c.id, label: `${c.code} · ${c.description}` }))} />
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
               <Stepper value={pickQty} onChange={setPickQty} label="quantity" />
               <Button label="Add part" kind="secondary" disabled={!pick || pickQty <= 0} onPress={() => { setParts(x => [...x, { stockItemId: pick!, qty: pickQty }]); setPick(undefined); setPickQty(1); }} />

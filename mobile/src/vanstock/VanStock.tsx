@@ -1,6 +1,7 @@
 // Van stock: the department manager's list (bill of quantities) of spares every technician in his
 // department must carry, each technician's van against it, and the stockroom topping vans up.
 import React, { useEffect, useState } from 'react';
+import { findStock } from '../../../server/src/core/stockSearch.ts';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { Body, Button, Card, Heading, Label, Notice, Pill, Select, Stepper, st } from '../ui.tsx';
@@ -165,8 +166,7 @@ function AddLine({ have, done }: { have: string[]; done: (id: string | null, qty
   const [pick, setPick] = useState<string | null>(null);
   const [qty, setQty] = useState(1);
   useEffect(() => { s.ask({ method: 'GET', path: '/stock/catalogue' }).then(r => { if (r?.status === 200) setItems(r.body); }); }, []);
-  const words = find.toLowerCase().split(/\s+/).filter(Boolean);
-  const list = items.filter(i => !have.includes(i.id) && words.every(w => `${i.code} ${i.description}`.toLowerCase().includes(w))).slice(0, 15);
+  const list = findStock(items.filter(i => !have.includes(i.id)), find, { limit: 15 });
   return (
     <View style={{ gap: 8, borderTopWidth: 1, borderTopColor: C.line, paddingTop: 8 }}>
       <Heading>Add to the list</Heading>
