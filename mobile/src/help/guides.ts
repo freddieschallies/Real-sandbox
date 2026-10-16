@@ -62,6 +62,12 @@ export const GUIDES: Guide[] = [
     'Check what was read: supplier, invoice number, each line and the total. Fix anything wrong.',
     'Tap "Confirm – put it on my name". The parts are on the job or your van; Accounts checks the slip.',
   ] },
+  { id: 'price-list', title: 'Tell a client what a part costs (price list)', roles: ['technician', 'admin', 'accounts', 'management', 'director', 'creator', 'stockroom'], steps: [
+    'Technician: Price list (under Other on your day). Office: the Price list tab. Or search for the part and tap it.',
+    'Type the code or part of the name ("valve", "25A", "R404"); small spelling mistakes are fine.',
+    'Tap the part: the price excl. VAT and with VAT. A client with its own mark-up may pay a little differently on the invoice.',
+    'No picture yet? Tap "Take a picture" of the part, its box or label: everyone sees it from then on.',
+  ] },
   { id: 'tech-po', title: 'Ask for a purchase order', roles: ['technician'], steps: [
     'For a job: open the job card → Purchase orders for this job → Ask for a PO. For sundries or van stock: on your main page → Purchase orders: sundries.',
     'Tap "Take a photo of the list or quote": the app reads it and fills in the supplier and the parts.',

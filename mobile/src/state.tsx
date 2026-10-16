@@ -35,6 +35,8 @@ interface Cache {
   ctl?: unknown;
   /** The mechanic app's own data. */
   fleet?: unknown;
+  /** The price list, kept for when there is no signal. */
+  prices?: unknown;
   /** Photos taken on this device, by id, so they show without downloading. */
   photoUris?: Record<string, string>;
 }

@@ -200,6 +200,10 @@ export function Day() {
           </View>
           <Text style={st.small}>Everything on your name, supplier invoices, returns</Text>
         </Card>
+        <Card onPress={() => nav.push({ name: 'prices' })} accessibilityLabel="Price list">
+          <Text style={[st.body, { fontWeight: '700' }]}>Price list</Text>
+          <Text style={st.small}>Every part and its price, for when a client asks. Add a picture of a part.</Text>
+        </Card>
         <View style={{ flexDirection: 'row', gap: 10 }}>
           <Button label="Fuel" kind="secondary" onPress={() => nav.push({ name: 'fuel' })} style={{ flex: 1 }} />
           <Button label="Questions" kind="secondary" onPress={() => nav.push({ name: 'flags' })} style={{ flex: 1 }} />
@@ -221,10 +225,10 @@ export function Day() {
           places={([
             ['timesheets', 'Timesheet'], ['pos', 'Purchase orders'], ['stock', 'My stock'], ['invoice', 'Scan a supplier slip'], ['return', 'Return stock'],
             ['fuel', 'Fuel'], ['queries', 'Queries'], ['quotes', 'Quotes'], ['kit', 'My tools and PPE'], ['scan', 'Vehicle: scan in'], ['fault', 'Report a vehicle fault'],
-            ['flags', 'Flags and questions'], ['sync', 'Waiting to send'],
+            ['flags', 'Flags and questions'], ['sync', 'Waiting to send'], ['prices', 'Price list'],
           ] as const).map(([name, label]): SearchPlace => ({ key: name === 'timesheets' ? 'timesheet' : name === 'quotes' ? 'techquotes' : name, label, open: () => nav.push({ name } as never) }))
             .concat([{ key: 'help', label: 'How to use the app', open: () => setHelping(true) }])}
-          open={{ job: id => nav.push({ name: 'job', jobId: id }), po: () => nav.push({ name: 'pos' }) }}
+          open={{ job: id => nav.push({ name: 'job', jobId: id }), po: () => nav.push({ name: 'pos' }), stock: id => nav.push({ name: 'prices', itemId: id }) }}
           local={q => localSearch(q, (t?.jobs ?? []) as never, (s.cache.catalogue ?? []) as never)} />
       ) : null}
       {helping ? <HelpPanel close={() => setHelping(false)} /> : null}

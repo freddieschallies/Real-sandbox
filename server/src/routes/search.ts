@@ -67,7 +67,8 @@ export function registerSearchRoutes(app: FastifyInstance) {
 
     // Stock: everyone may find an item (a technician sees no prices, as on his stock list).
     const stockAll = can(a, 'manage_stockroom') || can(a, 'assign_stock') || docs;
-    const prices = docs || can(a, 'set_prices') || can(a, 'manage_stockroom');
+    // The selling price is on everyone's price list (for when a client asks); what it cost is not.
+    const prices = true;
     const costs = can(a, 'set_prices') || can(a, 'process_supplier_invoices');
     // Ranked the way people type parts (core/stockSearch.ts), with where it is: the stockroom, the vans.
     const all = (await db.query(

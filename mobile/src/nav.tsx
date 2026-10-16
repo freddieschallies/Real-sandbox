@@ -28,7 +28,8 @@ export type Route =
   | { name: 'uplift'; jobId: string }
   | { name: 'loan'; jobId: string; mode: 'out' | 'back' }
   | { name: 'deliver'; jobId: string }
-  | { name: 'report'; id: string };
+  | { name: 'report'; id: string }
+  | { name: 'prices'; itemId?: string };
 
 interface Nav { route: Route; push(r: Route): void; back(): void; reset(): void; replace(r: Route): void }
 const Ctx = createContext<Nav | null>(null);

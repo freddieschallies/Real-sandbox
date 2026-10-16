@@ -485,8 +485,9 @@ export function registerStockRoutes(app: FastifyInstance, db: Db, reader: Invoic
       if (!(await c.query('SELECT 1 FROM stock_items WHERE id = $1', [id])).rowCount) throw new Refused(404, ['no such item']);
       if (b.photoId && !(await c.query("SELECT 1 FROM photos WHERE id = $1 AND kind = 'stock_item'", [b.photoId])).rowCount) throw new Refused(409, ['upload the photo first']);
       await c.query(
-        `UPDATE stock_items SET min_qty = $2, reorder_qty = $3, supplier_name = $4, photo_id = COALESCE($5, photo_id) WHERE id = $1`,
-        [id, b.minQty, b.reorderQty ?? null, b.supplierName || null, b.photoId ?? null]);
+        `UPDATE stock_items SET min_qty = $2, reorder_qty = $3, supplier_name = $4, photo_id = COALESCE($5, photo_id),
+                photo_set_by = CASE WHEN $5::uuid IS NULL THEN photo_set_by ELSE $6 END, photo_set_at = CASE WHEN $5::uuid IS NULL THEN photo_set_at ELSE now() END WHERE id = $1`,
+        [id, b.minQty, b.reorderQty ?? null, b.supplierName || null, b.photoId ?? null, req.actor.id]);
       await audit(c, req.actor.id, 'stock_item_settings', 'stock_item', id, b);
       return { id };
     });

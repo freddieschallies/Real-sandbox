@@ -38,6 +38,7 @@ import { Release } from './src/screens/Release.tsx';
 import { TesterBar } from './src/screens/TesterBar.tsx';
 import { C } from './src/theme.ts';
 import { useOwnerOpen } from './src/owner/OwnerApp.tsx';
+import { PriceListScreen } from './src/prices/PriceList.tsx';
 
 function Current() {
   const { route } = useNav();
@@ -67,6 +68,7 @@ function Current() {
     case 'loan': return <LoanScreen key={route.mode} jobId={route.jobId} mode={route.mode} />;
     case 'deliver': return <DeliverScreen jobId={route.jobId} />;
     case 'report': return <ReportScreen id={route.id} />;
+    case 'prices': return <PriceListScreen key={route.itemId ?? 'list'} itemId={route.itemId} />;
     case 'quote': return <TechQuoteScreen key={route.jobId ?? 'new'} jobId={route.jobId} />;
   }
 }

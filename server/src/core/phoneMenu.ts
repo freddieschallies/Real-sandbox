@@ -12,7 +12,7 @@ export const MENU_TABS: Record<MenuApp, { key: string; label: string }[]> = {
     { key: 'setup', label: 'Start-up' }, { key: 'today', label: 'Today' }, { key: 'breakdowns', label: 'Breakdowns' }, { key: 'whatsapp', label: 'WhatsApp' }, { key: 'jobs', label: 'Jobs' }, { key: 'departments', label: 'Departments' },
     { key: 'timesheets', label: 'Timesheets' }, { key: 'flags', label: 'Flags' }, { key: 'people', label: 'People' },
     { key: 'map', label: 'Team map' }, { key: 'vans', label: 'Van stock' }, { key: 'queries', label: 'Queries' },
-    { key: 'quotes', label: 'Quotes' }, { key: 'invoices', label: 'Invoices' }, { key: 'supplier', label: 'Supplier invoices' }, { key: 'pos', label: 'Purchase orders' }, { key: 'customers', label: 'Customers' }, { key: 'debtors', label: 'Debtors' }, { key: 'profit', label: 'Profit' }, { key: 'accounts', label: 'Accounts' },
+    { key: 'quotes', label: 'Quotes' }, { key: 'invoices', label: 'Invoices' }, { key: 'supplier', label: 'Supplier invoices' }, { key: 'pos', label: 'Purchase orders' }, { key: 'prices', label: 'Price list' }, { key: 'customers', label: 'Customers' }, { key: 'debtors', label: 'Debtors' }, { key: 'profit', label: 'Profit' }, { key: 'accounts', label: 'Accounts' },
     { key: 'vehicles', label: 'Vehicles' }, { key: 'repairs', label: 'Workshop' }, { key: 'stores', label: 'Stores' }, { key: 'barcodes', label: 'QR codes' }, { key: 'settings', label: 'Settings' },
   ],
   stockroom: [
@@ -46,6 +46,8 @@ export function officeTabKeys(level: string, work: Partial<Record<WorkArea, bool
     timesheets: does('hr') || ['management', 'hr', 'director', 'creator', 'accounts'].includes(level),
     // The CEO's start-up checklist for a new company.
     setup: does('access'),
+    // Every part and its selling price (for when a client asks): everyone in the office but HR.
+    prices: level !== 'hr' || jobsSide,
     people: opts.people, repairs: jobsSide, stores: jobsSide, barcodes: jobsSide, settings: opts.settings,
   };
   return MENU_TABS.office.map(t => t.key).filter(k => on[k]);

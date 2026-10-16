@@ -1,6 +1,7 @@
 // The office screen (control base), for Admin, Management, Directors and the CEO. Made for a desktop
 // browser: menu, list and detail side by side. Works on a phone too, one screen at a time.
 import { jobOutcome, NO_CHARGE_REASONS, type NoChargeReason } from '../../../server/src/core/jobOutcome.ts';
+import { PriceList } from '../prices/PriceList.tsx';
 import { SupportBanner, SupportSettings } from './Support.tsx';
 import { BottomTabs } from '../BottomTabs.tsx';
 import { BrandLogo } from '../brand.tsx';
@@ -51,7 +52,7 @@ import { WhatsAppTab, useWhatsAppUnread } from '../whatsapp/WhatsAppTab.tsx';
 import { BreakdownAlert, BreakdownById, BreakdownList, BreakdownSettings, type Bd } from './Breakdowns.tsx';
 
 const K = { band: '#121212', bandText: '#F7F3EC', get stripe() { return C.accent; } };
-type Tab = 'setup' | 'today' | 'breakdowns' | 'whatsapp' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'pos' | 'customers' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'vehicles' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
+type Tab = 'prices' | 'setup' | 'today' | 'breakdowns' | 'whatsapp' | 'jobs' | 'queries' | 'quotes' | 'invoices' | 'supplier' | 'pos' | 'customers' | 'debtors' | 'profit' | 'accounts' | 'flags' | 'vehicles' | 'map' | 'vans' | 'departments' | 'timesheets' | 'people' | 'repairs' | 'stores' | 'barcodes' | 'settings';
 type Sel = { kind: 'job'; id: string } | { kind: 'newjob' } | { kind: 'flag'; id: string } | { kind: 'person'; id: string } | { kind: 'newstore' } | { kind: 'query'; id: string } | { kind: 'newquery'; toId?: string } | { kind: 'quote'; id: string } | { kind: 'newquote' } | { kind: 'invoice'; id: string } | { kind: 'van'; id: string } | { kind: 'leaver'; id: string } | { kind: 'report'; id: string } | { kind: 'newperson' } | { kind: 'breakdown'; id: string; b?: Bd } | { kind: 'bdlog'; b: Bd } | { kind: 'store'; id: string } | { kind: 'importcustomers' } | { kind: 'supplierinv'; id: string } | { kind: 'debtor'; id: string } | { kind: 'customer'; id: string; show?: 'statement' } | null;
 
 const STATUS: Record<string, { text: string; tone: 'info' | 'good' | 'warn' | 'bad' | 'quiet' }> = {
@@ -70,7 +71,7 @@ const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { weekday: '
 /** On the phone, unless the CEO or an admin pinned others: the first four show and the rest go under More, most used first. */
 const PHONE_ORDER: string[] = MENU_TABS.office.map(t => t.key);
 /** Screens that use the whole width on a computer (no list and detail). */
-const FULL: Tab[] = ['setup', 'today', 'profit', 'pos', 'accounts', 'map', 'departments', 'timesheets', 'vehicles', 'whatsapp', 'settings'];
+const FULL: Tab[] = ['prices', 'setup', 'today', 'profit', 'pos', 'accounts', 'map', 'departments', 'timesheets', 'vehicles', 'whatsapp', 'settings'];
 const OFFICE_LEVELS = ['admin', 'accounts', 'management', 'hr', 'director', 'creator'];
 export const isOffice = (level?: string) => OFFICE_LEVELS.includes(level ?? '');
 
@@ -130,6 +131,7 @@ export function OfficeApp() {
     { key: 'invoices', label: 'Invoices', count: books.toInvoice.length || undefined },
     { key: 'supplier', label: 'Supplier invoices', short: 'Suppliers' },
     { key: 'pos', label: 'Purchase orders', short: 'POs' },
+    { key: 'prices', label: 'Price list', short: 'Prices' },
     { key: 'customers', label: 'Customers' },
     { key: 'debtors', label: 'Debtors' },
     { key: 'profit', label: 'Profit' },
@@ -194,7 +196,9 @@ export function OfficeApp() {
     </ScrollView>
   );
 
-  const body = tab === 'vehicles' ? <VehiclesPage key={veh.n} o={o} start={veh.start} />
+  const [part, setPart] = useState<{ n: number; id?: string }>({ n: 0 });
+  const body = tab === 'prices' ? <PriceList key={part.n} itemId={part.id} />
+    : tab === 'vehicles' ? <VehiclesPage key={veh.n} o={o} start={veh.start} />
     : tab === 'whatsapp' ? <WhatsAppTab openBreakdown={id => go('breakdowns', { kind: 'breakdown', id })} /> : list;
   const close = () => setSel(null);
   const detail = (() => {
@@ -263,6 +267,7 @@ export function OfficeApp() {
     ...(has('quotes') ? { quote: id => go('quotes', { kind: 'quote', id }) } : {}),
     ...(has('invoices') ? { invoice: id => go('invoices', { kind: 'invoice', id }) } : {}),
     ...(has('pos') ? { po: () => go('pos') } : {}),
+    ...(has('prices') ? { stock: (id: string) => { setPart(x => ({ n: x.n + 1, id })); go('prices'); } } : {}),
     ...(has('supplier') ? { supplier_invoice: id => go('supplier', { kind: 'supplierinv', id }) } : {}),
     ...(has('people') ? { person: id => go('people', { kind: 'person', id }) } : {}),
     ...(has('vehicles') ? { vehicle: id => goVeh({ vehicleId: id }) } : {}),

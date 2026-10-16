@@ -687,7 +687,7 @@ export class DemoTransport implements Transport {
       .map(c => ({ kind: 'client' as const, id: c.id, title: c.name, sub: [c.pastel_code ? `Pastel ${c.pastel_code}` : '', `${c.stores} store${c.stores === 1 ? '' : 's'}`].filter(Boolean).join(' · '), badge: c.on_hold ? { text: 'Account on hold', tone: 'bad' as const } : null })));
     const st = this.stock();
     const stockAll = this.does('stockroom') || docs || lvl === 'stockroom';
-    const prices = docs || this.does('prices') || this.does('stockroom') || lvl === 'stockroom';
+    const prices = true; // the selling price is on everyone's price list
     // Ranked the way people type parts, with where it is (the stockroom, the vans), as the server does.
     const meName = this.who.id === 'me' || lvl === 'technician';
     const seesVans = stockAll || allJobs;
@@ -1866,6 +1866,24 @@ export class DemoTransport implements Transport {
     }
     if (p === '/me/stock') return ok(this.stock().totals());
     if (p === '/me/inventory') { const r = this.stock().inventory(); this.persist(this.state); return ok(r); }
+    // The price list: every part and its selling price, for everyone; anyone puts up a picture of the part.
+    if (p === '/price-list') {
+      const meta = ((this.state as { priceMeta?: Record<string, { by: string; at: string }> }).priceMeta ??= {});
+      const items = this.stock().s.items.filter(i => !i.needsReview && (i.category ?? 'stock') === 'stock')
+        .map(i => ({ id: i.id, code: i.code, description: i.description, unit: i.unit, priceCents: i.sellingPriceCents ?? null, supplierCode: i.supplierCode ?? null,
+          photoId: i.photoId ?? null, photoBy: meta[i.id]?.by ?? null, photoAt: meta[i.id]?.at ?? null }))
+        .sort((x, y) => x.description.localeCompare(y.description));
+      return ok({ vatPct: Number((this.state.docs?.profile as { vat_pct?: number } | null)?.vat_pct ?? 15), items });
+    }
+    if ((m = p.match(/^\/price-list\/([^/]+)\/photo$/)) && req.method === 'PUT') {
+      const it = this.stock().s.items.find(i => i.id === m![1] && (i.category ?? 'stock') === 'stock');
+      if (!it) return refuse(404, 'no such part on the price list');
+      if (!b.photoId) return refuse(400, 'send the picture first');
+      it.photoId = b.photoId;
+      ((this.state as { priceMeta?: Record<string, { by: string; at: string }> }).priceMeta ??= {})[it.id] = { by: this.who.name, at: new Date().toISOString() };
+      this.persist(this.state);
+      return ok({ id: it.id, photoId: b.photoId });
+    }
     if (p === '/stock/catalogue') return ok(this.stock().catalogue());
     {
       const kitWrite = this.does('stockroom') || this.covers();

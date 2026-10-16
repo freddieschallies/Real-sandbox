@@ -17,7 +17,7 @@ export function Thumb({ photoId, label, size = 48 }: { photoId: string | null | 
 }
 
 /** The big picture with "Take a picture" / "Change". save() stores the new photo's id on the item. */
-export function ItemPicture({ photoId, kind, label, canEdit, save }: { photoId: string | null | undefined; kind: 'vehicle_profile' | 'tool'; label: string; canEdit: boolean; save: (photoId: string) => Promise<string | null> }) {
+export function ItemPicture({ photoId, kind, label, canEdit, save }: { photoId: string | null | undefined; kind: 'vehicle_profile' | 'tool' | 'stock_item'; label: string; canEdit: boolean; save: (photoId: string) => Promise<string | null> }) {
   const s = useStore();
   const uri = usePhotoUri(photoId ?? null);
   const [busy, setBusy] = useState(false);

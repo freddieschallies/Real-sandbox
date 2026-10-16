@@ -2727,7 +2727,7 @@ test('timesheets: office time added by the technician, hours invoiced, unauthori
   assert.equal((await call('tech3', 'DELETE', `/me/timesheets/extra/${meet.body.id}`)).status, 409, 'submitted');
 });
 
-test('search: each person finds only what he may already see; stock prices only for who sees prices', async () => {
+test('search: each person finds only what he may already see; stock with its selling price, never its cost', async () => {
   for (const who of ['books', 'tech', 'tech2', 'admin', 'stock', 'mech', 'director']) {
     if ((await call(who, 'GET', '/me')).status === 401) tokens[who] = (await call('', 'POST', '/auth/login', { email: `${who}@zsp.test`, password: PW })).body.token;
   }
@@ -2741,7 +2741,7 @@ test('search: each person finds only what he may already see; stock prices only 
   const own = (await db.query('SELECT count(*)::int AS n FROM jobs j JOIN stores s ON s.id = j.store_id WHERE s.name ILIKE $1 AND (j.lead_technician_id = $2 OR EXISTS (SELECT 1 FROM job_helpers h WHERE h.job_id = j.id AND h.user_id = $2))', ['%freshmart%', ids.tech])).rows[0].n;
   assert.equal(hits(t, 'job').length, Math.min(own, 6), 'only his own');
   const ts = (await call('tech', 'GET', '/search?q=valve')).body;
-  assert.ok(hits(ts, 'stock').length && hits(ts, 'stock').every((h: { price?: string | null }) => !h.price), 'no prices for a technician');
+  assert.ok(hits(ts, 'stock').length && hits(ts, 'stock').every((h: { price?: string | null; sub: string }) => !!h.price && !/cost/.test(h.sub)), 'the selling price (the price list), never the cost');
   // Words in any order.
   assert.ok(hits((await call('tech', 'GET', '/search?q=valve inlet')).body, 'stock').some((h: { title: string }) => h.title.startsWith('VALVE-01 ')));
   // Stock the way people type it: the code without its dash, a typo, the start of a word; with where it is.
@@ -3264,4 +3264,23 @@ test('owner dashboard: every company as counts only; support goes in only while 
   assert.equal(made.status, 201, JSON.stringify(made.body));
   assert.match(made.body.code.code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
   assert.equal((await call('', 'POST', '/auth/login', { email: 'ian@inland.test', password: PW })).status, 401, 'no password until he uses the code');
+});
+
+test('price list: every part with its selling price only, for everyone; anyone puts up a picture of the part', async () => {
+  const tl = await call('tech', 'GET', '/price-list');
+  assert.equal(tl.status, 200, JSON.stringify(tl.body));
+  const valve = tl.body.items.find((i: { id: string }) => i.id === ids.seal);
+  assert.ok(valve, 'the technician sees the part');
+  assert.ok(!JSON.stringify(tl.body).includes('cost'), 'never what it cost');
+  assert.ok(tl.body.vatPct > 0);
+  assert.equal((await call('admin', 'GET', '/price-list')).status, 200);
+  const pic = await upload('tech', '/photos', { kind: 'stock_item', takenAt: '2026-10-16T18:00:00+02:00' });
+  assert.equal(pic.status, 201, JSON.stringify(pic.body));
+  assert.equal((await call('admin', 'PUT', `/price-list/${ids.seal}/photo`, { photoId: pic.body.id })).status, 409, "someone else's picture");
+  const put = await call('tech', 'PUT', `/price-list/${ids.seal}/photo`, { photoId: pic.body.id });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+  const after = (await call('admin', 'GET', '/price-list')).body.items.find((i: { id: string }) => i.id === ids.seal);
+  assert.equal(after.photoId, pic.body.id);
+  assert.ok(after.photoBy);
+  assert.equal((await app.inject({ method: 'GET', url: `/photos/${pic.body.id}`, headers: { authorization: `Bearer ${tokens.admin}` } })).statusCode, 200, 'everyone sees the picture');
 });
