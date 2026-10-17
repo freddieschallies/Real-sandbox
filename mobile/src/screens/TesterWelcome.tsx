@@ -1,7 +1,7 @@
 // Shown instead of the sign-in screen in the test build that is shared for people to try.
 import React, { useState } from 'react';
 import { OwnerApp, ownerView, useOwnerOpen } from '../owner/OwnerApp.tsx';
-import { Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { Body, Button, Card, Heading, Label, Notice, Screen, st } from '../ui.tsx';
 import { C } from '../theme.ts';
@@ -12,6 +12,8 @@ import { Login } from './Login.tsx';
 let switchError: string[] | null = null;
 const switchListeners = new Set<(e: string[] | null) => void>();
 export const setSwitchError = (e: string[] | null) => { switchError = e; switchListeners.forEach(f => f(e)); };
+
+let openStepsKept: string[] = [];
 
 const STEPS: [string, string[]][] = [
   ['As technician (Thabo)', [
@@ -30,6 +32,10 @@ const STEPS: [string, string[]][] = [
     'Workshop repairs: on a job you started on site, tap "Uplift to the workshop": photos of the machine, which machine and why, a loan machine if the store needs one, and the store manager signs. Next time, "Start at the workshop" (checked against the workshop, no store manager). When it is fixed, Done says it is ready to go back: Go, deliver it back (photo, who received it), collect the loan machine, sign off. The microwave on My day was brought in by the client: it starts in the workshop.',
     'Quotes (on My day): a new quote for a store, with an older job card linked for reference; or open a job that is not finished and tap "Submit a quote for this job". Add hours, parts and things to buy; it goes to the office to price and send.',
     'Purchase orders: going to a supplier for parts? My day → Purchase orders → "Ask for a purchase order": the supplier, the parts and the job. Once approved (switch to Stock controller → Purchase orders → Approve) the PO number is on your phone to show at the counter. Then "Scan the supplier\'s slip for this PO": the parts go on that job, where you use them or send what is left back to the stockroom.',
+    'Price list (on My day): every part and its price, with and without VAT, for when a client asks. Type part of a name or code; spelling mistakes are fine.',
+    'On a job you started, "Who is with you": tap an assistant, or "+ Casual worker not on the list" for someone new. Their time follows yours on site.',
+    'Job card for the client (on the job): Download PDF, WhatsApp (a link the store taps to print), or Email. No prices on it.',
+    'Documents for this job: a form the office added (open it, send it to the store to print), and "Add the filled-in form" when it is signed.',
   ]],
   ['As stock controller (Lindiwe)', [
     'Stock take: choose Stock (parts) and "Start a stock take". Type how many of each item are on the shelf and tap ✓ (what the app expected shows only after you count). Count fuses as 45: a difference. "Sign off the stock take" with the reason: the stockroom is corrected and Accounts is told. An earlier one is under "Earlier stock takes".',
@@ -47,6 +53,8 @@ const STEPS: [string, string[]][] = [
     'Tool store: the stockroom\'s step ladders and tools, each with a serial number and a QR code sticker. Scan or type a code (try LAD-1801), book it out to a person for one of their jobs (they sign on the screen), and sign it back in with its condition. The extension ladder is late: its job is done and it was not signed back. Print the stickers for all of them.',
     'Workshop: what the mechanic keeps and the minimums. Issue oil from the stockroom to the workshop, set which oil the daily checks use, take stock back.',
     'Small company with no mechanic? Turn on the switch under the top bar: the CEO gives Lindiwe the mechanic\'s work too, and she switches between "My work" and "Fleet".',
+    'Price list: open a part and put up a picture of it, so everyone knows it by sight. Technicians cannot change pictures.',
+    'Stock take and purchase orders: every one has an Export box (PDF, WhatsApp to the supplier, email).',
   ]],
   ['As mechanic (Bongani)', [
     'Vehicles: five vans; one in the workshop, one off the road, one with an expired licence disc.',
@@ -67,6 +75,7 @@ const STEPS: [string, string[]][] = [
     'Van stock: his department\'s list of spares every technician must carry. Thabo and Nomvula are short (flagged); Sipho is complete. Add an item or raise a quantity and see who goes short; every change is kept.',
     'Timesheets: his own technicians\' daily timesheets, for a day, a week or a month.',
     'Flags: a van that is short of the list stays flagged until the stockroom tops it up, then closes by itself.',
+    'A job → "Technicians": choose the lead and tick who works with him (other technicians and assistants). Each is told on his phone.',
   ]],
   ['As HR (Precious)', [
     'Timesheets: daily, weekly or monthly, for one person, a department or everyone, with every job and flag on each sheet, and normal time, overtime (1.5×) and double time (Sundays and public holidays). She sets the normal day (8 hours to start). Ayanda has not submitted his last days. Print or save as PDF (one page per sheet, on the letterhead), or download for Excel. In this test drive the browser may block the print window and the download; the real app saves them.',
@@ -82,6 +91,7 @@ const STEPS: [string, string[]][] = [
     'Own logins: People → "Add a person" (name, email, position). Then switch to Admin (or the CEO): People → the person → "Login" → "Give a setup code": a one-time code to send by WhatsApp. Then tap "Back to the test guide", "Sign in with your own login", "I have a setup code": the email, the code, and a password only that person knows. Every person signs in as themselves; the CEO can also do this for the positions that are the CEO\'s.',
     'Passwords are not HR\'s: only Admin and the CEO give setup codes and reset passwords.',
     'She does not see jobs, quotes or the stockroom.',
+    'People → "Assistants and casual labour – no app": the people who help without the app. Timesheets → their weekly timesheets, made from the job cards.',
   ]],
   ['As the office admin (Zanele)', [
     'She only sees the work the CEO switched on for her. By default: jobs, quotes and invoices, and stores.',
@@ -101,6 +111,11 @@ const STEPS: [string, string[]][] = [
     'QR codes: print every QR sticker: the vehicles, and the tool store\'s tools and ladders (all, ladders only, or only the ones you tick). On a phone, Tech → Vehicle scans a sticker with the camera, also in the phone\'s browser.',
     'Lindiwe is not in? Zanele stands in: the Stockroom tab at the top has To issue, Tool store and People. Issue Thabo\'s stock request or book out a ladder; it is under Zanele\'s name ("Admin, standing in") and Lindiwe sees it on her Live screen and To issue when she is back. Receiving deliveries and stock counts stay with Lindiwe.',
     'Ask the CEO to give her the stockroom: a Stockroom tab appears at the top and she has the stock controller\'s full screens.',
+    'Jobs → a job → "Technicians": the lead and everyone working with him. A reason is asked only when the lead changes.',
+    "Jobs → a job → Documents for this job: add a client's own service form (PDF, Word, Excel or a picture); the technician gets it to the store to print.",
+    'Jobs → a job → Assistants and casual labour: add someone with the day and hours, or take off who was ticked by mistake.',
+    'Price list (in the menu): every part and its price; Admin can put up pictures of parts.',
+    'Every document has an Export box: the job card, quotes, invoices, purchase orders and reports, as a PDF, a WhatsApp link or an email.',
   ]],
   ['As Accounts (Nandi)', [
     'Accounts → Numbering: the next job card, invoice, quote, credit note and purchase order numbers carry on from the old system (e.g. type 48001 if the last invoice was 48000). A number at or below one already used is refused.',
@@ -120,6 +135,9 @@ const STEPS: [string, string[]][] = [
     'Accounts → Who did what: which technician\'s jobs brought in the most invoices, who made each invoice, and who handed in each supplier invoice (just for reference).',
     'Purchase orders: what the technicians asked for on their stock runs, approved or not; a supplier invoice scanned against a PO shows what was ordered beside it.',
     'Accounts → Pastel batch: Invoices, Credit notes, Quotations and Supplier invoices, each once. Set the Pastel codes first (Line codes and VAT: also the credit notes and purchases accounts; Supplier codes).',
+    "Invoices: assistants' and casual workers' hours come on the invoice as \"Assistant labour\" at the assistant rate (Accounts → company rates, or a client's own rates).",
+    "People → Assistants and casual labour: set a casual worker's day rate. Timesheets → their weekly timesheets (check the week, export it to sign) and \"Casual labour to pay\" (mark paid).",
+    'Every quote, invoice, credit note and statement: Download PDF, WhatsApp or Email in its Export box.',
   ]],
   ['As the CEO (Lilanie)', [
     'Start-up (first in the menu): the checklist a new company goes through. Open "Employees and their roles": type several people at once, each with a role (Accounts, Stock controller, Admin…), then "Add these people". Then "Logins": "Make setup codes" and copy each person\'s message to send by WhatsApp.',
@@ -137,6 +155,9 @@ const STEPS: [string, string[]][] = [
     'Departments: the same screen HR has. Ayanda is in Plumbing, which has no manager yet.',
     'Today: jobs, flags, handovers to approve, daily checks, safety faults and stock on one screen. Flags: resolve them.',
     'Vehicles: everything about the vehicles. Tiles on top (tap one), then who drives what, handovers to approve, faults, service and licence discs due, fuel and trips not allowed for the month, and the map. Tap a vehicle for its job cards, bookings, daily checks, who drove it, fuel and trips; book it in or put a tech in.',
+    'History (in the menu, CEO only): every change anyone made, with who and when. Nobody can change or delete it; "Check the history" shows if anything was tampered with.',
+    'Settings → Backups: when everything was last backed up on the office server and in the cloud, and the space the company takes.',
+    'Settings → Real Sandbox support: let support in for a while when you need help; everything they do is in the history.',
   ]],
 ];
 
@@ -145,6 +166,9 @@ export function TesterWelcome() {
   const [own, setOwn] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [reset, setReset] = useState(false);
+  // The steps for each position, closed until tapped (remembered while the page is open).
+  const [openSteps, setOpenSteps] = useState<Set<string>>(() => new Set(openStepsKept));
+  React.useEffect(() => { openStepsKept = [...openSteps]; }, [openSteps]);
   const [why, setWhy] = useState<string[] | null>(() => switchError);
   React.useEffect(() => { const f = (e: string[] | null) => setWhy(e); switchListeners.add(f); return () => { switchListeners.delete(f); }; }, []);
   const go = async (who: 'demo' | 'stock' | 'mech' | 'office' | 'admin' | 'manager' | 'hr' | 'accounts') => { setBusy(who); setWhy(null); const r = await s.signIn('demo', '', who, 'demo'); setBusy(null); if (!r.ok) setWhy(r.reasons); };
@@ -174,12 +198,25 @@ export function TesterWelcome() {
       <Button label={R('Open as CEO (Lilanie)')} kind="secondary" onPress={() => go('office')} busy={busy === 'office'} />
       <Button label="Sign in with your own login" kind="quiet" onPress={() => setOwn(true)} />
       <Text style={st.small}>For someone added under People who was given a setup code by Admin or the CEO: the email and the password they chose (first time: "I have a setup code").</Text>
-      {STEPS.map(([title, lines]) => (
-        <Card key={title}>
-          <Heading>{R(title)}</Heading>
-          {lines.map((l, i) => <Text key={i} style={[st.body, { color: C.text }]}>{i + 1}. {R(l)}</Text>)}
-        </Card>
-      ))}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
+        <Text style={{ color: C.text, fontSize: 20, fontWeight: '800', flex: 1 }}>What to try, per position</Text>
+        <Button label={openSteps.size === STEPS.length ? 'Close all' : 'Open all'} kind="quiet" onPress={() => setOpenSteps(openSteps.size === STEPS.length ? new Set() : new Set(STEPS.map(([t]) => t)))} />
+      </View>
+      {STEPS.map(([title, lines]) => {
+        const on = openSteps.has(title);
+        return (
+          <Card key={title} style={on ? { borderColor: C.accent, borderWidth: 2 } : undefined}>
+            <Pressable onPress={() => setOpenSteps(o => { const n = new Set(o); if (n.has(title)) n.delete(title); else n.add(title); return n; })}
+              accessibilityRole="button" accessibilityState={{ expanded: on }} accessibilityLabel={`${R(title)}: ${on ? 'close' : 'open'} the steps`}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 36 }}>
+              <Text style={{ color: C.accent, fontSize: 18, fontWeight: '800', width: 18 }}>{on ? '▾' : '▸'}</Text>
+              <Text style={{ color: C.text, fontSize: 18, fontWeight: '800', flex: 1 }}>{R(title)}</Text>
+              <Text style={st.small}>{lines.length} things to try</Text>
+            </Pressable>
+            {on ? lines.map((l, i) => <Text key={i} style={[st.body, { color: C.text }]}>{i + 1}. {R(l)}</Text>) : null}
+          </Card>
+        );
+      })}
       <Card>
         <Label>Good to know</Label>
         <Text style={st.small}>The real app runs on the technicians' phones and works without signal. Photos here come from a file picker; on a phone they use the camera. The tracker, the office dashboard and supplier invoice reading by AI are not part of this test.</Text>
