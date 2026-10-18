@@ -772,3 +772,18 @@ test('the weekly timesheet of someone without the app: Monday to Sunday, normal,
   assert.equal(CR.crewWeek('2026-12-14', [{ id: 'h', date: '2026-12-16', minutes: 300, what: 'Job', kind: 'job' }], rules, null).totals.doubleMin, 300, 'a public holiday is double time');
   assert.equal(CR.crewWeek('2026-10-12', items, rules, { kind: 'assistant', dayRateCents: null, hourRateCents: null }).pay.cents, null, 'no rate: no amount');
 });
+
+test('colour themes: every ready-made colour and any own colour keep text on buttons readable, on dark and on light screens', async () => {
+  const T = await import('../src/core/themes.ts');
+  for (const k of T.ACCENT_KEYS) {
+    const c = T.accentColours(k);
+    assert.ok(T.contrast(c.dark, T.DARK_TEXT) >= 4.5, `${k} on dark screens`);
+    assert.ok(T.contrast(c.light, '#FFFFFF') >= 4.5, `${k} on light screens`);
+  }
+  for (const own of ['#FFFF00', '#000080', '#E8701A', '#777777', '#00FF00', '#111111', '#FFFFFF']) {
+    const c = T.accentColours(own as `#${string}`);
+    assert.ok(T.contrast(c.dark, T.DARK_TEXT) >= 4.5 && T.contrast(c.light, '#FFFFFF') >= 4.5, own);
+  }
+  assert.equal(T.isAccent('teal'), true); assert.equal(T.isAccent('#12ab9F'), true);
+  assert.equal(T.isAccent('nope'), false); assert.equal(T.isAccent('#12ab9'), false); assert.equal(T.isAccent('red; drop'), false);
+});

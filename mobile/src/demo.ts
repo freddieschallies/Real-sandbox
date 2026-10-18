@@ -10,6 +10,7 @@ import { DEMO_LOGO } from './demoLogo.ts';
 import { DemoCrew, seedCrew, type CrewState } from './demoCrew.ts';
 import { demoBackup, demoStorage } from './demoSupport.ts';
 import { jobReportHtml } from '../../server/src/core/jobReport.ts';
+import { isAccent, type Accent } from '../../server/src/core/themes.ts';
 import { EXAMPLE_TECH, REAL, realDeep, unrealDeep, unrealText } from './demoReal.ts';
 import { APP_OF, MAX_PINNED, MENU_LABEL, MENU_LEVELS, MENU_TABS, cleanPinned, usualTabs } from '../../server/src/core/phoneMenu.ts';
 import { LEVELS, TRADES, type LoginLevel } from '../../server/src/core/permissions.ts';
@@ -77,7 +78,7 @@ export interface DemoState {
   reportEmails?: { report_id: string; sent_to: string[]; sent_at: string; ok: boolean; error: string | null; sent_by: string }[];
   letterhead?: { headerPhotoId: string | null; footerPhotoId: string | null };
   /** The company's colour theme (the director's choice). */
-  themeAccent?: 'orange' | 'blue' | 'green';
+  themeAccent?: Accent;
   fleet?: DemoFleetState;
   who?: { id: string; name: string; level: string };
   fuel: { litres: number; at: string }[];
@@ -1852,7 +1853,7 @@ export class DemoTransport implements Transport {
       accent: this.state.themeAccent ?? 'orange', canTheme: ceoLevel });
     if (p === '/company/theme' && req.method === 'PUT') {
       if (!ceoLevel) return refuse(403, 'only the director chooses the colour theme');
-      if (!['orange', 'blue', 'green'].includes(b.accent)) return refuse(400, 'one of the three colour themes');
+      if (!isAccent(b.accent)) return refuse(400, 'one of the colours, or a colour as #rrggbb');
       this.state.themeAccent = b.accent; this.persist(this.state);
       return ok({ accent: b.accent });
     }

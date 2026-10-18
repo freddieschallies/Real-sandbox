@@ -1,7 +1,8 @@
 // High contrast for sunlight, large targets for gloved hands. Dark or light is each person's choice on
-// their device; the colour theme (one of three) is the company's, chosen by the director.
+// their device; the colour theme (a ready-made colour or the company's own) is the company's, chosen by the director.
+import { accentColours, isAccent, type Accent } from '../../server/src/core/themes.ts';
 export type Mode = 'dark' | 'light';
-export type Accent = 'orange' | 'blue' | 'green';
+export type { Accent };
 
 const DARK = {
   bg: '#17191C', panel: '#22252A', panel2: '#2C3036', line: '#3A3F46', text: '#F3F1EC', quiet: '#B9B4AA',
@@ -11,16 +12,12 @@ const LIGHT: typeof DARK = {
   bg: '#F3F1EC', panel: '#FFFFFF', panel2: '#E9E5DD', line: '#CFC9BE', text: '#1B1D20', quiet: '#5B574F',
   good: '#1D7F4E', goodBg: '#DCF0E4', warn: '#8A5A00', warnBg: '#FBEBC8', bad: '#C2362C', badBg: '#FADDDA', info: '#245FA8', infoBg: '#DCE8F7',
 };
-/** The three colour themes: the accent colour on buttons, tabs and highlights. */
-export const ACCENTS: Record<Accent, { label: string; dark: string; light: string }> = {
-  orange: { label: 'ZSP orange', dark: '#E8701A', light: '#C2570B' },
-  blue: { label: 'Ocean blue', dark: '#4C9BEA', light: '#1D63B3' },
-  green: { label: 'Forest green', dark: '#4CB874', light: '#22764A' },
-};
+/** The colour themes (the accent colour on buttons, tabs and highlights): server/src/core/themes.ts. */
+export { ACCENT_KEYS, ACCENT_PRESETS, accentColours } from '../../server/src/core/themes.ts';
 
 let mode: Mode = 'dark';
 let accent: Accent = 'orange';
-const accentOf = (m: Mode, a: Accent) => ({ accent: ACCENTS[a][m], accentText: m === 'dark' ? '#14161A' : '#FFFFFF' });
+const accentOf = (m: Mode, a: Accent) => ({ accent: accentColours(a)[m], accentText: m === 'dark' ? '#14161A' : '#FFFFFF' });
 
 /** The colours in use now. Read them while drawing (not once at start), so a change shows at once. */
 export const C = { ...DARK, ...accentOf(mode, accent) };
@@ -29,7 +26,7 @@ const listeners = new Set<() => void>();
 export const onThemeChange = (f: () => void) => { listeners.add(f); return () => { listeners.delete(f); }; };
 export const themeNow = () => ({ mode, accent });
 export function setTheme(next: { mode?: Mode; accent?: Accent }) {
-  const m = next.mode ?? mode, a = next.accent && ACCENTS[next.accent] ? next.accent : accent;
+  const m = next.mode ?? mode, a = next.accent && isAccent(next.accent) ? next.accent : accent;
   if (m === mode && a === accent) return;
   mode = m; accent = a;
   Object.assign(C, mode === 'light' ? LIGHT : DARK, accentOf(mode, accent));

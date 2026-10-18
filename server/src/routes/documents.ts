@@ -1,6 +1,7 @@
 // Quotes and invoices, the company's details for its letterhead, and the rates. Prepared by the
 // office (whoever the CEO gave quotes and invoices), priced from the CEO's rates and the price list.
 // A draft can be changed freely; once sent it is locked and only its status moves on.
+import { isAccent } from '../core/themes.ts';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Q } from '../db.ts';
@@ -149,7 +150,7 @@ export function registerDocumentRoutes(app: FastifyInstance) {
   // The director (CEO) picks the company's colour theme; everyone's app shows it.
   app.put('/company/theme', async req => {
     if (!['director', 'creator'].includes(req.actor.level)) throw new Refused(403, ['only the director chooses the colour theme']);
-    const b = parse(z.object({ accent: z.enum(['orange', 'blue', 'green']) }), req.body);
+    const b = parse(z.object({ accent: z.string().trim().refine(isAccent, 'one of the colours, or a colour as #rrggbb') }), req.body);
     return tx(req.db, async c => {
       await c.query(`INSERT INTO company_theme (accent, updated_by) VALUES ($1, $2)
                      ON CONFLICT (company_id) DO UPDATE SET accent = EXCLUDED.accent, updated_by = EXCLUDED.updated_by, updated_at = now()`, [b.accent, req.actor.id]);

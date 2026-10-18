@@ -1867,7 +1867,9 @@ test('colour theme: the director chooses one of three for the whole company', as
   assert.equal((await call('tech', 'GET', '/company/brand')).body.canTheme, false);
   assert.equal((await call('admin', 'PUT' as 'POST', '/company/theme', { accent: 'blue' })).status, 403, 'not the admin');
   assert.equal((await call('hr', 'PUT' as 'POST', '/company/theme', { accent: 'blue' })).status, 403, 'not HR');
-  assert.equal((await call('director', 'PUT' as 'POST', '/company/theme', { accent: 'pink' })).status, 400, 'one of the three');
+  assert.equal((await call('director', 'PUT' as 'POST', '/company/theme', { accent: 'not-a-colour' })).status, 400, 'a colour of the list, or #rrggbb');
+  assert.equal((await call('director', 'PUT' as 'POST', '/company/theme', { accent: '#7A1FA2' })).status, 200, 'its own colour');
+  assert.equal((await call('director', 'PUT' as 'POST', '/company/theme', { accent: 'teal' })).status, 200);
   assert.equal((await call('director', 'PUT' as 'POST', '/company/theme', { accent: 'green' })).status, 200);
   assert.equal((await call('tech', 'GET', '/company/brand')).body.accent, 'green', 'everyone gets it');
   await call('creator', 'PUT' as 'POST', '/company/theme', { accent: 'orange' });
