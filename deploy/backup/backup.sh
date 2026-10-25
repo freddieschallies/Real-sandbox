@@ -38,8 +38,8 @@ find "$B" -maxdepth 1 \( -name 'photos-*.tar.gz' -o -name 'db-*.dump' \) -mtime 
 cloud_set=false; cloud_ok=false; cloud_bytes=0; cloud_at=""
 if [ -n "${RCLONE_CONFIG_CLOUD_TYPE:-}" ] && [ -n "${CLOUD_BUCKET:-}" ]; then
   cloud_set=true
-  if [ -z "${BACKUP_PASSPHRASE:-}" ]; then
-    errors+=("BACKUP_PASSPHRASE is not set: nothing goes to the cloud unencrypted"); log "cloud: no passphrase"
+  if [ -z "${BACKUP_PASSPHRASE:-}" ] || [[ "${BACKUP_PASSPHRASE}" == CHANGE_ME* ]] || [ ${#BACKUP_PASSPHRASE} -lt 16 ]; then
+    errors+=("BACKUP_PASSPHRASE is not set (a sentence of 16+ characters of your own): nothing goes to the cloud"); log "cloud: no passphrase"
   else
     export RCLONE_CONFIG_SAFE_TYPE=crypt
     export RCLONE_CONFIG_SAFE_REMOTE="cloud:${CLOUD_BUCKET}/${CLOUD_FOLDER:-realsandbox}"

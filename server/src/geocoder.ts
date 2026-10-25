@@ -5,7 +5,7 @@
 import type { PinPrecision } from './core/customerSheet.ts';
 
 export interface GeoHit { lat: number; lng: number; precision: PinPrecision; label: string }
-export type Geocoder = ((query: string) => Promise<GeoHit | null>) & { minGapMs?: number; name?: string };
+export type Geocoder = ((query: string) => Promise<GeoHit | null>) & { minGapMs?: number; source?: string };
 
 const inSA = (lat: number, lng: number) => lat >= -35 && lat <= -22 && lng >= 16 && lng <= 33;
 
@@ -24,7 +24,7 @@ export function googleGeocoder(key: string): Geocoder {
     const street = r.types.includes('route');
     return { lat, lng, precision: exact ? 'exact' : street ? 'street' : 'area', label: r.formatted_address };
   };
-  g.minGapMs = 100; g.name = 'Google Maps';
+  g.minGapMs = 100; g.source = 'Google Maps';
   return g;
 }
 
@@ -43,7 +43,7 @@ export function nominatimGeocoder(contact = process.env.NOMINATIM_EMAIL ?? ''): 
     const street = ['road', 'street', 'residential', 'primary', 'secondary', 'tertiary', 'trunk'].includes(kind);
     return { lat, lng, precision: exact ? 'exact' : street ? 'street' : 'area', label: r.display_name };
   };
-  g.minGapMs = 1100; g.name = 'OpenStreetMap';
+  g.minGapMs = 1100; g.source = 'OpenStreetMap';
   return g;
 }
 

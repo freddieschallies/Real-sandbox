@@ -35,7 +35,7 @@ async function locateOne(c: Q, geocoder: Geocoder, s: { id: string; name: string
     const how = l.townOnly ? 'only the town or suburb was found' : l.byName ? 'found by the store\'s name, not its address' : hit.precision === 'street' ? 'only the street was found' : hit.precision === 'area' ? 'only the suburb or town was found' : '';
     await c.query(
       `UPDATE stores SET lat = $2, lng = $3, pin_source = 'lookup', pin_status = $4, pin_note = $5, pin_at = now(), lookup_tries = lookup_tries + 1 WHERE id = $1`,
-      [s.id, hit.lat, hit.lng, sure ? 'ok' : 'check', `${geocoder.name ?? 'Map'}: ${hit.label}${how ? ` (${how}: check the pin)` : ''}`.slice(0, 500)]);
+      [s.id, hit.lat, hit.lng, sure ? 'ok' : 'check', `${geocoder.source ?? 'Map'}: ${hit.label}${how ? ` (${how}: check the pin)` : ''}`.slice(0, 500)]);
     return true;
   }
   await c.query(`UPDATE stores SET pin_status = 'not_found', lookup_tries = lookup_tries + 1, pin_at = now(),

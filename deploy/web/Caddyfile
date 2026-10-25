@@ -1,7 +1,5 @@
-# One web address for everything: the app's pages, and the API behind them.
-{
-	email {$ACME_EMAIL}
-}
+# One web address for everything: the app's pages, and the API behind them. The HTTPS certificate
+# (Let's Encrypt) is fetched and renewed by Caddy by itself once DOMAIN points at this server.
 
 {$DOMAIN} {
 	encode zstd gzip

@@ -8,6 +8,7 @@ COPY mobile/package.json mobile/package-lock.json ./mobile/
 RUN cd mobile && npm ci --no-audit --no-fund
 COPY mobile ./mobile
 ENV NODE_OPTIONS=--max-old-space-size=1536
+ENV EXPO_PUBLIC_SAME_ORIGIN=1
 RUN cd mobile && npx expo export --platform web --output-dir dist && node scripts/copy-zxing.mjs dist
 
 FROM caddy:2

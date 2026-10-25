@@ -10,7 +10,9 @@ import { passwordProblem } from '../password.ts';
 import { OwnerApp, ownerView, useOwnerOpen } from '../owner/OwnerApp.tsx';
 
 /** Built into the company's own app, so nobody types the server address. */
-const SERVER = (process.env.EXPO_PUBLIC_SERVER_URL ?? '').replace(/\/+$/, '');
+// The web app served by the server itself (the online server) talks to the address it was opened on.
+const SAME_ORIGIN = process.env.EXPO_PUBLIC_SAME_ORIGIN === '1' && Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : '';
+const SERVER = (process.env.EXPO_PUBLIC_SERVER_URL || SAME_ORIGIN).replace(/\/+$/, '');
 
 export { passwordProblem };
 

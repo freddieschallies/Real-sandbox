@@ -787,3 +787,10 @@ test('colour themes: every ready-made colour and any own colour keep text on but
   assert.equal(T.isAccent('teal'), true); assert.equal(T.isAccent('#12ab9F'), true);
   assert.equal(T.isAccent('nope'), false); assert.equal(T.isAccent('#12ab9'), false); assert.equal(T.isAccent('red; drop'), false);
 });
+
+test('the map lookups can be made at start-up (the server starts with or without a Google key)', async () => {
+  const G = await import('../src/geocoder.ts');
+  assert.equal(G.nominatimGeocoder().source, 'OpenStreetMap');
+  assert.equal(G.googleGeocoder('key').source, 'Google Maps');
+  assert.equal(typeof G.geocoderFromEnv(), 'function');
+});

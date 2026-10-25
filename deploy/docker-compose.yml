@@ -100,6 +100,27 @@ services:
     volumes:
       - wa-auth:/data
 
+  # On an online server (a VPS): the app in the browser and the API on one web address, with HTTPS.
+  # Start with:  docker compose --env-file .env --profile online up -d --build
+  # (The office PC uses the Cloudflare tunnel below instead.) See docs/ONLINE-SERVER.md.
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    profiles: ["online"]
+
   # Secure link so phones can reach the server from anywhere, with no open ports on the office router.
   tunnel:
     image: cloudflare/cloudflared:latest
@@ -115,3 +136,5 @@ volumes:
   db-data:
   uploads:
   wa-auth:
+  caddy-data:
+  caddy-config:
