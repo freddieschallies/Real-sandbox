@@ -108,7 +108,12 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
               inv.invoice_number, inv.status::text AS invoice_status,
               (SELECT coalesce(sum(cn.amount_cents), 0)::bigint FROM credit_notes cn WHERE cn.job_id = j.id) AS credited_cents,
               -- Workshop repairs: the machine's last move, loan machines out, and whether the repair is done.
-              (SELECT m.kind FROM machine_moves m WHERE m.job_id = j.id AND m.kind IN ('uplifted', 'delivered') ORDER BY m.at DESC, m.created_at DESC LIMIT 1) AS last_move,
+              (SELECT m.kind FROM machine_moves m WHERE m.job_id = j.id AND m.kind IN ('uplifted', 'booked_in', 'delivered') ORDER BY m.at DESC, m.created_at DESC LIMIT 1) AS last_move,
+              -- Since when the machine is in the workshop, how it came in, and which machine it is.
+              (SELECT min(m.at) FROM machine_moves m WHERE m.job_id = j.id AND m.kind IN ('uplifted', 'booked_in')) AS workshop_since,
+              (SELECT m.kind || coalesce(': ' || m.note, '') FROM machine_moves m WHERE m.job_id = j.id AND m.kind IN ('uplifted', 'booked_in') ORDER BY m.at LIMIT 1) AS came_in,
+              (SELECT concat_ws(' · ', e.description, nullif(concat_ws(' ', e.brand, e.model), ''), CASE WHEN e.serial IS NOT NULL THEN 'serial ' || e.serial END)
+                 FROM work_items w JOIN equipment e ON e.id = w.equipment_id WHERE w.job_id = j.id ORDER BY w.created_at LIMIT 1) AS machine,
               (SELECT count(*) FILTER (WHERE m.kind = 'loan_out') - count(*) FILTER (WHERE m.kind = 'loan_back') FROM machine_moves m WHERE m.job_id = j.id)::int AS loans_out,
               (SELECT v.place = 'workshop' AND v.state = 'done' FROM job_visits v WHERE v.job_id = j.id ORDER BY v.go_at DESC LIMIT 1) AS last_workshop_done
          FROM jobs j LEFT JOIN job_no_charge nc ON nc.job_id = j.id
@@ -120,8 +125,8 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
       [mine, req.actor.id, q.status ?? null],
     );
     return rows.map(({ last_move, last_workshop_done, ...r }) => ({ ...r, credited_cents: Number(r.credited_cents),
-      machine_at: last_move === 'uplifted' ? 'workshop' : last_move === 'delivered' ? 'site' : r.job_type === 'workshop_repair' ? 'workshop' : 'site',
-      ready_to_deliver: !!last_workshop_done && last_move !== 'delivered' && (last_move === 'uplifted' || r.job_type === 'workshop_repair'),
+      machine_at: last_move === 'uplifted' || last_move === 'booked_in' ? 'workshop' : last_move === 'delivered' ? 'site' : r.job_type === 'workshop_repair' ? 'workshop' : 'site',
+      ready_to_deliver: !!last_workshop_done && last_move !== 'delivered' && (last_move === 'uplifted' || last_move === 'booked_in' || r.job_type === 'workshop_repair'),
       billing: r.no_charge_reason ? 'no_charge' : Number(r.credited_cents) > 0 ? 'credited' : r.invoice_status === 'draft' ? 'draft_invoice' : r.invoice_status ? 'invoiced' : 'not_invoiced',
       outcome: jobOutcome(r) }));
   });

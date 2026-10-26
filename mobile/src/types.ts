@@ -153,7 +153,7 @@ export interface StockRequest {
 
 export interface Workshop { name: string; address: string | null; lat: number; lng: number; geofence_m: number }
 export interface MachineMove {
-  id: string; kind: 'uplifted' | 'delivered' | 'loan_out' | 'loan_back'; place: 'site' | 'workshop'; at: string; note: string | null;
+  id: string; kind: 'uplifted' | 'booked_in' | 'delivered' | 'loan_out' | 'loan_back'; place: 'site' | 'workshop'; at: string; note: string | null;
   person_name: string | null; photo_ids: string[]; signature_photo_id: string | null; loan_machine_id: string | null;
   loan_machine: string | null; loan_serial: string | null; by_name: string;
 }

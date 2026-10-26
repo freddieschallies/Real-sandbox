@@ -352,7 +352,7 @@ export function WorkshopStartForm({ v, onRefused }: { v: CardView; onRefused: (r
   );
 }
 
-const MOVE_LABEL: Record<MachineMove['kind'], string> = { uplifted: 'Uplifted to the workshop', delivered: 'Delivered back', loan_out: 'Loan machine left', loan_back: 'Loan machine collected' };
+const MOVE_LABEL: Record<MachineMove['kind'], string> = { uplifted: 'Uplifted to the workshop', booked_in: 'Booked into the workshop', delivered: 'Delivered back', loan_out: 'Loan machine left', loan_back: 'Loan machine collected' };
 const when = (iso: string) => new Date(iso).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 function MoveThumb({ id }: { id: string }) {

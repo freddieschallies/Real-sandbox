@@ -12,9 +12,11 @@ test('setup code, own password, lock after five wrong, stop and allow', () => {
   const s: DemoLoginsState = { logins: {}, codes: {}, log: [] };
   const L = new DemoLogins(s, () => people);
   assert.equal(L.state('p-1'), 'none');
-  const hr = { id: 'hr-1', level: 'hr', ceo: false, hr: true };
+  // Logins are looked after by the Admin and the CEO (not HR).
+  const hr = { id: 'ad-1', level: 'admin', ceo: false };
   assert.equal(L.manages(hr, people[0]), true);
-  assert.equal(L.manages(hr, people[1]), false, "the CEO's login is not HR's");
+  assert.equal(L.manages(hr, people[1]), false, "the CEO's login is not the Admin's");
+  assert.equal(L.manages({ id: 'hr-1', level: 'hr', ceo: false }, people[0]), false, 'HR does not give setup codes');
   const r = L.issueCode('p-1', 'Precious', 'ZSP');
   assert.ok(r.ok);
   const code = (r.body as { code: string }).code;

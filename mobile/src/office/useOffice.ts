@@ -17,7 +17,7 @@ export interface Overview {
 export interface OfficeJob { id: string; job_number: number; job_type: string; priority: string; status: string; scheduled_date: string; fault_reported: string; store: string; lead_technician: string; lead_id?: string; helper_ids?: string[];
   /** Billing: its invoice (not cancelled) and anything credited. */ invoice_number?: number | null; invoice_status?: string | null; credited_cents?: number; billing?: 'not_invoiced' | 'draft_invoice' | 'invoiced' | 'credited' | 'no_charge';
   /** Closed at no charge (with why), or who cancelled. */ no_charge_reason?: string | null; no_charge_note?: string | null; cancelled_by_party?: 'client' | 'us' | null; cancel_note?: string | null; client_on_hold?: boolean;
-  /** Workshop repairs. */ machine_at?: 'site' | 'workshop'; loans_out?: number; ready_to_deliver?: boolean }
+  /** Workshop repairs. */ machine_at?: 'site' | 'workshop'; loans_out?: number; ready_to_deliver?: boolean; workshop_since?: string | null; came_in?: string | null; machine?: string | null }
 export interface Store {
   id: string; client: string; name: string; address: string | null; lat: number | null; lng: number | null; open_jobs: number; branch_code?: string | null;
   /** The client is on hold (not paying): a job warns first. */ client_on_hold?: boolean; hold_reason?: string | null;

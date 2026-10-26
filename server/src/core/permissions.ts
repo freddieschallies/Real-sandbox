@@ -104,7 +104,8 @@ const officeWork: Permissions = {
 // The admin also arranges the phone menus (with the CEO), and stands in for the stock controller
 // when he is out: issuing stock and tools and signing tools back (receiving deliveries and stock
 // counts stay with the stockroom). The stock controller is told who did what.
-const admin: Permissions = { ...officeWork, set_phone_menu: true, assign_stock: true };
+// The admin also sees the vehicle workshop (without running it: that stays the mechanic's).
+const admin: Permissions = { ...officeWork, set_phone_menu: true, assign_stock: true, view_fleet: true };
 // Accounts (the bookkeeper): checks every job card (without changing them), prices and sends
 // quotes and invoices, credit notes, closing at no charge, supplier invoices, each client's rates
 // and mark-up, and the Pastel batches.

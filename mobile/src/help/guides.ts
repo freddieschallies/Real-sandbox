@@ -313,6 +313,13 @@ export const GUIDES: Guide[] = [
     'Their weekly timesheet: Timesheets → "Assistants and casual labour: weekly timesheets". Each day shows the jobs they were on; add other work (yard, workshop) with "+ Other work".',
     'Check the week with him, tap "The week is right: checked", and export it as a PDF for him to sign. Overtime and Sundays or public holidays are worked out like the technicians\'.',
   ] },
+  { id: 'office-machine-workshop', title: 'Book a machine into the workshop', roles: ['admin', 'management', 'director', 'creator'], steps: [
+    'Machine workshop → "+ Book a machine in" (for units that cannot be repaired on site: bakery equipment, pumps, …).',
+    'Choose the client\'s store, then the machine (or "+ A machine not on the list": what it is, brand, model, serial).',
+    'What is wrong with it, whether the client brought it or we collected it (and who handed it over), and the technician who repairs it.',
+    'It becomes a workshop repair job card on his phone. The Machine workshop shows how long each machine has been in, and when it is ready to go back.',
+    'Vehicles are separate: the Vehicle workshop shows the company\'s vehicles at the mechanic (in the workshop, booked in, off the road).',
+  ] },
   { id: 'office-docs', title: 'Add a client\'s form or papers to a job card', roles: ['admin', 'management', 'director', 'creator'], steps: [
     'Jobs → the job → Documents for this job → "+ Add a document": a PDF, Word, Excel or a picture (up to 4 MB).',
     'The technician sees it on his job card, and gets it to the client to print (WhatsApp link, email or download).',

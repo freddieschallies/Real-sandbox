@@ -4,12 +4,13 @@
 // can stand in meanwhile. The job card stays open until the machine is back and the loan machine is in.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { audit, raiseFlag, type Q } from '../db.ts';
+import { audit, raiseFlag, tx, type Q } from '../db.ts';
 import { can } from '../core/permissions.ts';
 import * as J from '../core/jobCard.ts';
 import { Iso, Point, Refused, Uuid, parse } from '../http.ts';
 import { notify } from './field.ts';
-import { actOnJob } from './jobs.ts';
+import { actOnJob, createJob } from './jobs.ts';
+
 
 type P = { Params: { id: string } };
 
@@ -117,6 +118,57 @@ export function registerRepairRoutes(app: FastifyInstance) {
         const j = await storeOf(c, row.id);
         await tellOffice(c, 'machine_uplifted', `${await nameOf(c, actorId)} uplifted the machine at ${j.name} (job ${j.job_number}) to the workshop. Signed for by ${b.managerName.trim()}.`, { jobId: row.id });
       });
+  });
+
+  // The office books a machine into the workshop: the client brought it in, or we collected it (not
+  // every unit can be repaired on site: bakery equipment, water pumps, ...). It becomes a workshop
+  // repair job card for the technician who repairs it, with the machine and who handed it over.
+  // The machines registered at a store, to choose the one being booked in.
+  app.get('/stores/:id/equipment', async (req: FastifyRequest<P>) => {
+    if (!can(req.actor, 'assign_jobs') && !can(req.actor, 'manage_stores_equipment')) throw new Refused(403, ['for the office']);
+    return (await req.db.query('SELECT id, description, brand, model, serial FROM equipment WHERE store_id = $1 ORDER BY description', [parse(Uuid, req.params.id)])).rows;
+  });
+
+  app.post('/workshop/book-in', async (req, reply) => {
+    if (!can(req.actor, 'assign_jobs')) throw new Refused(403, ['the office books machines into the workshop']);
+    const b = parse(z.object({
+      storeId: Uuid,
+      equipmentId: Uuid.optional(),
+      machine: z.object({ description: z.string().trim().min(2, 'what the machine is').max(200), brand: z.string().trim().max(100).optional(), model: z.string().trim().max(100).optional(), serial: z.string().trim().max(100).optional() }).optional(),
+      faultReported: z.string().trim().min(3, 'what is wrong with it').max(2000),
+      cameIn: z.enum(['client_brought', 'we_collected']),
+      handedOverBy: z.string().trim().max(200).optional(),
+      leadTechnicianId: Uuid,
+      clientOrderRef: z.string().trim().max(100).optional(),
+      priority: z.enum(['urgent', 'normal', 'scheduled']).default('normal'),
+      note: z.string().trim().max(1000).optional(),
+      holdOk: z.boolean().optional(),
+    }), req.body);
+    if (!b.equipmentId && !b.machine) throw new Refused(400, ['which machine: choose it, or type what it is']);
+    const out = await tx(req.db, async c => {
+      let equipmentId = b.equipmentId ?? null;
+      if (equipmentId) {
+        if (!(await c.query('SELECT 1 FROM equipment WHERE id = $1 AND store_id = $2', [equipmentId, b.storeId])).rowCount) throw new Refused(400, ['that machine is not registered at this store']);
+      } else {
+        equipmentId = (await c.query('INSERT INTO equipment (store_id, description, brand, model, serial) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+          [b.storeId, b.machine!.description, b.machine!.brand || null, b.machine!.model || null, b.machine!.serial || null])).rows[0].id;
+      }
+      const eq = (await c.query('SELECT description, brand, model, serial FROM equipment WHERE id = $1', [equipmentId])).rows[0];
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' });
+      const jobId = await createJob(c, req.actor.id, { jobType: 'workshop_repair', priority: b.priority, storeId: b.storeId, clientOrderRef: b.clientOrderRef,
+        faultReported: b.faultReported, scheduledDate: today, leadTechnicianId: b.leadTechnicianId, helperIds: [], maintenanceSteps: [], holdOk: b.holdOk });
+      await c.query('UPDATE work_items SET equipment_id = $2 WHERE job_id = $1', [jobId, equipmentId]);
+      const how = b.cameIn === 'client_brought' ? 'Brought in by the client' : 'Collected by us';
+      await c.query(
+        `INSERT INTO machine_moves (job_id, kind, place, equipment_id, note, person_name, at, by_user) VALUES ($1, 'booked_in', 'workshop', $2, $3, $4, now(), $5)`,
+        [jobId, equipmentId, [how, b.note].filter(Boolean).join(': '), b.handedOverBy || null, req.actor.id]);
+      const j = await storeOf(c, jobId);
+      const machine = [eq.description, [eq.brand, eq.model].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+      await audit(c, req.actor.id, 'machine_booked_in', 'job', jobId, { jobNumber: j.job_number, how: b.cameIn });
+      await notify(c, b.leadTechnicianId, 'workshop_booked_in', `Job ${j.job_number}: ${machine} from ${j.name} is in the workshop for you to repair. ${b.faultReported}`, { jobId });
+      return { id: jobId, jobNumber: j.job_number, equipmentId };
+    });
+    return reply.code(201).send(out);
   });
 
   app.post('/jobs/:id/loan-out', async (req: FastifyRequest<P>) => {

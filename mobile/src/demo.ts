@@ -317,6 +317,23 @@ export class DemoTransport implements Transport {
     }).sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
   }
 
+  /** The machines registered at a store (from its jobs, and those booked in). */
+  private storeEquipment(storeId: string): { id: string; description: string; brand: string | null; model: string | null; serial: string | null }[] {
+    const all = [...this.state.jobs.filter(j => (j.meta as { store_id?: string }).store_id === storeId).flatMap(j => j.meta.equipment),
+      ...(((this.state as { storeEquipment?: Record<string, never[]> }).storeEquipment ?? {})[storeId] ?? [])];
+    return [...new Map(all.map(e => [e.id, { id: e.id, description: e.description, brand: e.brand ?? null, model: e.model ?? null, serial: e.serial ?? null }])).values()].sort((a, b) => a.description.localeCompare(b.description));
+  }
+  /** For the Machine workshop: since when it is in, how it came in, and which machine. */
+  private workshopFacts(j: DemoJob) {
+    const first = (j.moves ?? []).find(m => m.kind === 'uplifted' || (m.kind as string) === 'booked_in');
+    const eq = j.meta.equipment.find(e => e.id === (j.card.items[0]?.equipmentId)) ?? (j.meta.job_type === 'workshop_repair' ? j.meta.equipment[0] : undefined);
+    return {
+      workshop_since: first?.at ?? (j.meta.job_type === 'workshop_repair' ? `${j.meta.scheduled_date}T08:00:00+02:00` : null),
+      came_in: first ? `${first.kind}${first.note ? `: ${first.note}` : ''}` : null,
+      machine: eq ? [eq.description, [eq.brand, eq.model].filter(Boolean).join(' '), eq.serial ? `serial ${eq.serial}` : ''].filter(Boolean).join(' · ') : null,
+    };
+  }
+
   private repairView(j: DemoJob) {
     const rp = this.repairs();
     const c = j.card;
@@ -1125,7 +1142,7 @@ export class DemoTransport implements Transport {
   private officeRoute(p: string, req: Request, b: any): Response | null {
     let m: RegExpMatchArray | null;
     const office = ['admin', 'accounts', 'management', 'hr', 'director', 'creator'].includes(this.who.level);
-    const isOffice = p.startsWith('/office') || p === '/jobs' || p.startsWith('/flags') && !p.endsWith('/explain') || p.startsWith('/vehicles/inspections') || p === '/access/positions'
+    const isOffice = p.startsWith('/office') || p === '/jobs' || p === '/workshop/book-in' || /^\/stores\/[^/]+\/equipment$/.test(p) || p.startsWith('/flags') && !p.endsWith('/explain') || p.startsWith('/vehicles/inspections') || p === '/access/positions'
       || p === '/people' || /^\/people\/[^/]+(\/profile|\/terminate|\/record(\/[^/]+)?|\/login(\/(code|stop|allow|sign-out))?)?$/.test(p) || /^\/access\/users\/[^/]+\/(position|work|trade)$/.test(p) || /^\/jobs\/[^/]+\/(assign|cancel|changes)$/.test(p) || (/^\/jobs\/[^/]+$/.test(p) && req.method === 'PATCH');
     if (!isOffice) return null;
     if (!office) return refuse(403, 'office only');
@@ -1289,8 +1306,36 @@ export class DemoTransport implements Transport {
       return ok(o.jobs(q.get('status')).map(j => {
         const dj = this.findJob(j.id);
         const r = dj ? this.repairView(dj) : null;
-        return { ...j, ...d.billingOf(j.id), client_on_hold: !!d.holdOf(this.state.office!.stores.find(x => x.id === (dj?.meta as { store_id?: string } | undefined)?.store_id)?.client), ...(r ? { machine_at: r.machine_at, loans_out: r.loans_out, ready_to_deliver: r.ready_to_deliver } : {}) };
+        return { ...j, ...d.billingOf(j.id), client_on_hold: !!d.holdOf(this.state.office!.stores.find(x => x.id === (dj?.meta as { store_id?: string } | undefined)?.store_id)?.client), ...(r ? { machine_at: r.machine_at, loans_out: r.loans_out, ready_to_deliver: r.ready_to_deliver } : {}), ...(dj ? this.workshopFacts(dj) : {}) };
       }));
+    }
+    const m0 = p.match(/^\/stores\/([^/]+)\/equipment$/);
+    if (m0) return ok(this.storeEquipment(m0[1]));
+    if (p === '/workshop/book-in') {
+      const n = need('jobs', 'the office books machines into the workshop'); if (n) return n;
+      const store = o.store(b.storeId);
+      if (!store) return refuse(400, 'which store');
+      let eq = b.equipmentId ? this.storeEquipment(store.id).find(e => e.id === b.equipmentId) : null;
+      if (b.equipmentId && !eq) return refuse(400, 'that machine is not registered at this store');
+      if (!eq && !(b.machine?.description?.trim()?.length >= 2)) return refuse(400, 'which machine: choose it, or type what it is');
+      if (!b.faultReported || b.faultReported.trim().length < 3) return refuse(400, 'what is wrong with it');
+      if (!b.leadTechnicianId) return refuse(400, 'who repairs it');
+      if (!eq) {
+        eq = { id: `eq-${Date.now().toString(36)}`, description: b.machine.description.trim(), brand: b.machine.brand ?? null, model: b.machine.model ?? null, serial: b.machine.serial ?? null };
+        ((this.state as { storeEquipment?: Record<string, typeof eq[]> }).storeEquipment ??= {})[store.id] = [...(((this.state as { storeEquipment?: Record<string, typeof eq[]> }).storeEquipment ?? {})[store.id] ?? []), eq];
+      }
+      const hold = this.docs().holdOf(store.client);
+      if (hold && !b.holdOk) return refuse(409, `${store.client} is on hold: ${hold.reason}. Tick to book it in anyway (Accounts is told).`);
+      const num = this.nextJobNumber();
+      const j = officeJob(num, 'workshop_repair', b.priority ?? 'normal', store, b.faultReported.trim(), { id: b.leadTechnicianId, name: o.name(b.leadTechnicianId) }, today(), [], b.clientOrderRef);
+      j.meta.equipment = [eq!];
+      j.card.items[0].equipmentId = eq!.id;
+      const how = b.cameIn === 'we_collected' ? 'Collected by us' : 'Brought in by the client';
+      j.moves = [{ id: `mv-${num}`, kind: 'booked_in', place: 'workshop', at: new Date().toISOString(), note: [how, b.note].filter(Boolean).join(': '), person_name: b.handedOverBy ?? null,
+        photo_ids: [], signature_photo_id: null, loan_machine_id: null, loan_machine: null, loan_serial: null, by_name: this.who.name } as never];
+      this.state.jobs.push(j);
+      this.persist(this.state);
+      return ok({ id: j.meta.id, jobNumber: num, equipmentId: eq!.id }, 201);
     }
     if (p === '/jobs') return this.newOfficeJob(o, b);
     if ((m = p.match(/^\/jobs\/([^/]+)\/assign$/))) {
@@ -2252,7 +2297,9 @@ export class DemoTransport implements Transport {
       if (p === '/fleet/workshop/loss') return mech ? done(ws.loss(b)) : refuse(403, 'mechanic only');
       if (p === '/fleet/workshop/count') return done(ws.count(b, this.who.name));
     }
-    if (p.startsWith('/fleet') && !this.does('fleet')) return refuse(403, 'mechanic only');
+    const fleetLvl = this.state.office ? this.office().levelOf(this.who.id) ?? this.who.level : this.who.level;
+    const fleetViewer = req.method === 'GET' && ['admin', 'management', 'director', 'creator'].includes(fleetLvl) && p !== '/fleet/technicians';
+    if (p.startsWith('/fleet') && !this.does('fleet') && !fleetViewer) return refuse(403, 'mechanic only');
     // A vehicle's profile picture.
     if ((m = p.match(/^\/fleet\/vehicles\/([^/]+)\/photo$/))) {
       const v = this.fleet().s.vehicles.find(x => x.id === m![1]) as ({ photo_id?: string | null } & object) | undefined;

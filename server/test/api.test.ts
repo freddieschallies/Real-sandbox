@@ -1083,7 +1083,8 @@ test('the CEO assigns each person a position; it takes effect at once and is log
   assert.equal((await call('director', 'PUT', `/access/users/${ids.tech2}/position`, { position: 'technician' })).status, 200);
 
   // No mechanic of their own: the Admin (and a technician) also get the mechanic's work, keeping their position.
-  assert.equal((await call('admin', 'GET', '/fleet')).status, 403);
+  assert.equal((await call('admin', 'GET', '/fleet')).status, 200, 'the Admin sees the vehicle workshop');
+  assert.equal((await call('admin', 'GET', '/fleet/technicians')).status, 403, 'but does not run the fleet');
   assert.equal((await call('manager', 'PUT', `/access/users/${ids.admin}/fleet-duty`, { on: true })).status, 403, 'only whoever manages access');
   const duty = await call('director', 'PUT', `/access/users/${ids.admin}/fleet-duty`, { on: true });
   assert.equal(duty.status, 200, JSON.stringify(duty.body));
@@ -1100,7 +1101,7 @@ test('the CEO assigns each person a position; it takes effect at once and is log
   assert.equal((await call('director', 'PUT', `/access/users/${ids.mech}/fleet-duty`, { on: false })).status, 409, 'a mechanic by position');
   assert.equal((await call('director', 'PUT', `/access/users/${ids.admin}/fleet-duty`, { on: false })).status, 200);
   assert.equal((await call('director', 'PUT', `/access/users/${ids.tech2}/fleet-duty`, { on: false })).status, 200);
-  assert.equal((await call('admin', 'GET', '/fleet')).status, 403, 'taken away at once');
+  assert.equal((await call('admin', 'GET', '/fleet/technicians')).status, 403, 'taken away at once');
 
   // A chosen Admin also runs the stockroom, with full access; other Admins only stand in to issue.
   assert.equal((await call('admin', 'GET', '/stock/stockroom')).status, 403);
@@ -3586,4 +3587,38 @@ test('storage and backups: the space each company takes (records, photos, docume
   const failed = (await call('platform', 'GET', '/platform/dashboard')).body.backup;
   assert.deepEqual([failed.state, failed.errors], ['failed', ['the database dump failed']]);
   delete process.env.BACKUP_STATUS;
+});
+
+test('machine workshop: the office books a machine in (the client brought it, or we collected it); it is a workshop repair for the technician; the vehicle workshop is separate', async () => {
+  // Who sees which workshop.
+  const P = await import('../src/core/phoneMenu.ts');
+  for (const level of ['admin', 'management', 'creator'] as const) {
+    const tabs = P.usualTabs(level);
+    assert.ok(tabs.includes('repairs') && tabs.includes('vworkshop'), `${level} sees both workshops`);
+  }
+  assert.equal(P.usualTabs('accounts').includes('vworkshop'), false);
+  assert.equal((await call('tech', 'POST', '/workshop/book-in', {})).status, 403);
+  const eq = await call('admin', 'GET', `/stores/${ids.store}/equipment`);
+  assert.equal(eq.status, 200);
+  assert.equal((await call('admin', 'POST', '/workshop/book-in', { storeId: ids.store, faultReported: 'Blades do not turn', cameIn: 'client_brought', leadTechnicianId: ids.tech })).status, 400, 'which machine');
+  const r = await call('admin', 'POST', '/workshop/book-in', {
+    storeId: ids.store, machine: { description: 'Bread slicer', brand: 'Bizerba', serial: 'BZ-1001' }, faultReported: 'Motor runs but the blades do not turn',
+    cameIn: 'client_brought', handedOverBy: 'Sipho (bakery manager)', leadTechnicianId: ids.tech, note: 'Comes with its crumb tray',
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const job = (await call('admin', 'GET', '/jobs')).body.find((j: { id: string }) => j.id === r.body.id);
+  assert.equal(job.job_type, 'workshop_repair');
+  assert.equal(job.machine_at, 'workshop');
+  assert.match(job.machine, /Bread slicer · Bizerba · serial BZ-1001/);
+  assert.match(job.came_in, /^booked_in: Brought in by the client: Comes with its crumb tray/);
+  assert.ok(job.workshop_since);
+  assert.ok((await call('admin', 'GET', `/stores/${ids.store}/equipment`)).body.some((e: { description: string }) => e.description === 'Bread slicer'), 'added to the store\'s machines');
+  assert.ok((await call('tech', 'GET', '/me/notifications')).body.some((n: { message: string }) => /Bread slicer/.test(n.message)), 'the technician is told');
+  const card = (await call('tech', 'GET', `/jobs/${r.body.id}`)).body;
+  assert.equal(card.machine_at, 'workshop');
+  assert.equal(card.items[0].equipmentId ?? card.items[0].equipment_id ?? r.body.equipmentId, r.body.equipmentId);
+  // A machine already on the store's list.
+  const again = await call('admin', 'POST', '/workshop/book-in', { storeId: ids.store, equipmentId: r.body.equipmentId, faultReported: 'Again: belt slips', cameIn: 'we_collected', leadTechnicianId: ids.tech });
+  assert.equal(again.status, 201);
+  assert.equal((await call('admin', 'POST', '/workshop/book-in', { storeId: ids.store, equipmentId: '00000000-0000-4000-8000-000000000000', faultReported: 'x y z', cameIn: 'we_collected', leadTechnicianId: ids.tech })).status, 400);
 });

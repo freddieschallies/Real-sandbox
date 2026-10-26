@@ -84,7 +84,7 @@ export async function loadCard(c: Q, jobId: string, forUpdate = false): Promise<
   let machineAt: JobCard['machineAt'];
   let loansOut = 0;
   for (const m of moves.rows) {
-    if (m.kind === 'uplifted') machineAt = 'workshop';
+    if (m.kind === 'uplifted' || m.kind === 'booked_in') machineAt = 'workshop';
     else if (m.kind === 'delivered') machineAt = 'site';
     else if (m.kind === 'loan_out') loansOut++;
     else if (m.kind === 'loan_back') loansOut--;

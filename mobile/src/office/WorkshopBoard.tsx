@@ -1,11 +1,12 @@
-// The office's Workshop tab: machines in the workshop (being repaired, or ready to go back), the
-// company's loan machines and where each one is, and where the workshop is (technicians starting a
-// workshop visit are checked against it).
+// The office's Machine workshop tab (not the vehicles: those are in the Vehicle workshop): machines
+// in the workshop (booked in by the office, or uplifted from site by a technician), being repaired or
+// ready to go back; booking one in; the company's loan machines and where each one is; and where the
+// workshop is (technicians starting a workshop visit are checked against it).
 import React, { useEffect, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import { useStore } from '../state.tsx';
 import { positionNow } from '../device.ts';
-import { Body, Button, Card, Field, Heading, Label, Notice, Pill, st } from '../ui.tsx';
+import { Body, Button, Card, Choice, Field, Heading, Label, Notice, Pill, st } from '../ui.tsx';
 import { C } from '../theme.ts';
 import type { LoanMachine, Workshop } from '../types.ts';
 import type { OfficeHook } from './useOffice.ts';
@@ -28,22 +29,37 @@ export function WorkshopBoard({ o, openJob }: { o: OfficeHook; openJob: (id: str
   const repairing = inShop.filter(j => !j.ready_to_deliver);
   const out = (loans ?? []).filter(l => l.out);
 
-  const row = (j: (typeof inShop)[number]) => (
-    <Card key={j.id} onPress={() => openJob(j.id)} accessibilityLabel={`Job ${j.job_number}`}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <Text style={[st.body, { fontWeight: '800' }]}>#{j.job_number}</Text>
-        <Text numberOfLines={1} style={[st.body, { flex: 1 }]}>{j.store}</Text>
-        <Pill text={j.ready_to_deliver ? 'Ready to deliver' : 'Being repaired'} tone={j.ready_to_deliver ? 'good' : 'warn'} />
-        {(j.loans_out ?? 0) > 0 ? <Pill text="Loan out" tone="info" /> : null}
-      </View>
-      <Body numberOfLines={2}>{j.fault_reported}</Body>
-      <Text style={st.small}>{j.job_type === 'workshop_repair' ? 'Workshop repair' : 'Uplifted from site'} · {j.lead_technician}</Text>
-    </Card>
-  );
+  const cameIn = (j: (typeof inShop)[number]) => {
+    const c = j.came_in ?? '';
+    return c.startsWith('booked_in') ? c.replace(/^booked_in:?\s*/, '') || 'Booked in by the office' : c.startsWith('uplifted') ? 'Uplifted from site' : j.job_type === 'workshop_repair' ? 'Brought in' : 'Uplifted from site';
+  };
+  const row = (j: (typeof inShop)[number]) => {
+    const days = j.workshop_since ? daysSince(j.workshop_since) : null;
+    return (
+      <Card key={j.id} onPress={() => openJob(j.id)} accessibilityLabel={`Job ${j.job_number}`}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <Text style={[st.body, { fontWeight: '800' }]}>#{j.job_number}</Text>
+          <Text numberOfLines={1} style={[st.body, { flex: 1, minWidth: 120 }]}>{j.machine ?? j.store}</Text>
+          <Pill text={j.ready_to_deliver ? 'Ready to go back' : 'Being repaired'} tone={j.ready_to_deliver ? 'good' : 'warn'} />
+          {(j.loans_out ?? 0) > 0 ? <Pill text="Loan out" tone="info" /> : null}
+        </View>
+        {j.machine ? <Text style={st.small}>{j.store}</Text> : null}
+        <Body numberOfLines={2}>{j.fault_reported}</Body>
+        <Text style={[st.small, days !== null && days >= 14 && !j.ready_to_deliver ? { color: C.bad } : null]}>{cameIn(j)}{j.workshop_since ? ` ${day(j.workshop_since)} (${days} day${days === 1 ? '' : 's'} in the workshop)` : ''} · {j.lead_technician}</Text>
+      </Card>
+    );
+  };
+  const [booking, setBooking] = useState(false);
 
   return (
     <>
-      <Heading>In the workshop</Heading>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <Text style={{ color: C.text, fontSize: 24, fontWeight: '800', flex: 1, minWidth: 180 }}>Machine workshop</Text>
+        {!booking ? <Button label="+ Book a machine in" onPress={() => setBooking(true)} /> : null}
+      </View>
+      <Text style={st.small}>Machines repaired in our workshop (bakery equipment, pumps, anything that cannot be fixed on site). Vehicles are in the Vehicle workshop.</Text>
+      {booking ? <BookIn o={o} done={id => { setBooking(false); o.load(); if (id) openJob(id); }} /> : null}
+      <Heading>In the workshop{inShop.length ? ` (${inShop.length})` : ''}</Heading>
       {!inShop.length ? <Body quiet>No machines in the workshop.</Body> : null}
       {ready.length ? <><Label>Ready to go back ({ready.length})</Label>{ready.map(row)}</> : null}
       {repairing.length ? <><Label>Being repaired ({repairing.length})</Label>{repairing.map(row)}</> : null}
@@ -157,6 +173,117 @@ function WorkshopPlace({ ws, canEdit, saved }: { ws: Workshop | null; canEdit: b
         {ws ? <Button label="Cancel" kind="quiet" onPress={() => setEdit(false)} style={{ flex: 1 }} /> : null}
         <Button label="Save" onPress={save} style={{ flex: 1 }} />
       </View>
+    </Card>
+  );
+}
+
+/** Booking a machine in: the client brought it, or we collected it. It becomes a workshop repair job card. */
+function BookIn({ o, done }: { o: OfficeHook; done: (jobId?: string) => void }) {
+  const s = useStore();
+  const [q, setQ] = useState('');
+  const [storeId, setStoreId] = useState<string | null>(null);
+  const [eq, setEq] = useState<{ id: string; description: string; brand: string | null; model: string | null; serial: string | null }[] | null>(null);
+  const [equipmentId, setEquipmentId] = useState<string | null>(null);
+  const [isNew, setIsNew] = useState(false);
+  const [desc, setDesc] = useState(''); const [brand, setBrand] = useState(''); const [model, setModel] = useState(''); const [serial, setSerial] = useState('');
+  const [fault, setFault] = useState('');
+  const [came, setCame] = useState<'client_brought' | 'we_collected'>('client_brought');
+  const [by, setBy] = useState('');
+  const [lead, setLead] = useState<string | null>(null);
+  const [ref, setRef] = useState('');
+  const [note, setNote] = useState('');
+  const [holdOk, setHoldOk] = useState(false);
+  const [err, setErr] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const store = o.d.stores.find(x => x.id === storeId);
+  const stores = o.d.stores.filter(x => !q.trim() || `${x.client} ${x.name} ${x.address ?? ''}`.toLowerCase().includes(q.trim().toLowerCase())).slice(0, 8);
+  useEffect(() => {
+    setEq(null); setEquipmentId(null); setIsNew(false);
+    if (storeId) s.ask({ method: 'GET', path: `/stores/${storeId}/equipment` }).then(r => { if (r?.status === 200) { setEq(r.body); if (!r.body.length) setIsNew(true); } }).catch(() => setEq([]));
+  }, [storeId]);
+  const save = async () => {
+    const missing = [!storeId ? 'whose machine it is (the store)' : null, !equipmentId && !(isNew && desc.trim().length >= 2) ? 'which machine' : null,
+      fault.trim().length < 3 ? 'what is wrong with it' : null, !lead ? 'who repairs it' : null].filter(Boolean) as string[];
+    if (missing.length) { setErr(missing); return; }
+    setBusy(true); setErr(null);
+    const r = await s.ask({ method: 'POST', path: '/workshop/book-in', json: {
+      storeId, ...(equipmentId ? { equipmentId } : { machine: { description: desc.trim(), ...(brand.trim() ? { brand: brand.trim() } : {}), ...(model.trim() ? { model: model.trim() } : {}), ...(serial.trim() ? { serial: serial.trim() } : {}) } }),
+      faultReported: fault.trim(), cameIn: came, ...(by.trim() ? { handedOverBy: by.trim() } : {}), leadTechnicianId: lead, ...(ref.trim() ? { clientOrderRef: ref.trim() } : {}), ...(note.trim() ? { note: note.trim() } : {}), ...(holdOk ? { holdOk: true } : {}),
+    } }).catch(() => null);
+    setBusy(false);
+    if (r && r.status < 300) done((r.body as { id: string }).id);
+    else setErr((r?.body as { reasons?: string[] })?.reasons ?? ['Not booked in: needs signal.']);
+  };
+  return (
+    <Card style={{ borderColor: C.accent, borderWidth: 2 }}>
+      <Heading>Book a machine in</Heading>
+      <Label>Whose machine (client and store)</Label>
+      {store ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={{ flex: 1 }}><Text style={[st.body, { fontWeight: '800' }]}>{store.name}</Text><Text style={st.small}>{store.client}</Text></View>
+          <Button label="Change" kind="quiet" onPress={() => setStoreId(null)} />
+        </View>
+      ) : (
+        <>
+          <TextInput value={q} onChangeText={setQ} placeholder="Search client or store" placeholderTextColor={C.quiet} style={st.input} accessibilityLabel="Search stores" />
+          {stores.map(x => (
+            <Pressable key={x.id} onPress={() => setStoreId(x.id)} accessibilityRole="button" accessibilityLabel={`Store ${x.name}`} style={{ padding: 10, borderRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.panel2 }}>
+              <Text style={[st.body, { fontWeight: '700' }]}>{x.name}</Text><Text style={st.small}>{x.client}</Text>
+            </Pressable>
+          ))}
+        </>
+      )}
+      {store?.client_on_hold ? (
+        <Pressable onPress={() => setHoldOk(!holdOk)} accessibilityRole="checkbox" accessibilityState={{ checked: holdOk }} style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+          <Text style={{ fontSize: 20, color: holdOk ? C.bad : C.quiet }}>{holdOk ? '☑' : '☐'}</Text>
+          <Text style={[st.body, { color: C.bad, flex: 1 }]}>{store.client} is on hold: book it in anyway (Accounts is told)</Text>
+        </Pressable>
+      ) : null}
+      {storeId ? (
+        <>
+          <Label>Which machine</Label>
+          {eq === null ? <Body quiet>Loading the store's machines…</Body> : null}
+          {(eq ?? []).map(e => (
+            <Pressable key={e.id} onPress={() => { setEquipmentId(e.id); setIsNew(false); }} accessibilityRole="radio" accessibilityState={{ selected: equipmentId === e.id }} accessibilityLabel={`Machine ${e.description}`}
+              style={{ padding: 10, borderRadius: 8, borderWidth: equipmentId === e.id ? 2 : 1, borderColor: equipmentId === e.id ? C.accent : C.line, backgroundColor: C.panel2 }}>
+              <Text style={[st.body, { fontWeight: '700' }]}>{e.description}</Text>
+              <Text style={st.small}>{[e.brand, e.model].filter(Boolean).join(' ') || '–'}{e.serial ? ` · serial ${e.serial}` : ''}</Text>
+            </Pressable>
+          ))}
+          {isNew ? (
+            <View style={{ gap: 8 }}>
+              <Field label="What it is" value={desc} onChangeText={setDesc} placeholder="e.g. Bread slicer, Water pump, Proofer" />
+              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                <View style={{ flexGrow: 1, flexBasis: 140 }}><Field label="Brand" value={brand} onChangeText={setBrand} /></View>
+                <View style={{ flexGrow: 1, flexBasis: 140 }}><Field label="Model" value={model} onChangeText={setModel} /></View>
+                <View style={{ flexGrow: 1, flexBasis: 140 }}><Field label="Serial number" value={serial} onChangeText={setSerial} autoCapitalize="characters" /></View>
+              </View>
+              <Text style={st.small}>It is added to the store's machines.</Text>
+            </View>
+          ) : <Button label="+ A machine not on the list" kind="quiet" onPress={() => { setIsNew(true); setEquipmentId(null); }} />}
+        </>
+      ) : null}
+      <Field label="What is wrong with it" value={fault} onChangeText={setFault} multiline placeholder="e.g. Motor runs but the blades do not turn" />
+      <Label>How it came in</Label>
+      <Choice options={['client_brought', 'we_collected'] as const} value={came} onChange={setCame} labels={{ client_brought: 'The client brought it', we_collected: 'We collected it' }} />
+      <Field label={came === 'client_brought' ? 'Who brought it (name)' : 'Who handed it over at the store (name)'} value={by} onChangeText={setBy} />
+      <Label>Who repairs it</Label>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        {o.d.techs.map(t => (
+          <Pressable key={t.id} onPress={() => setLead(t.id)} accessibilityRole="radio" accessibilityState={{ selected: lead === t.id }} accessibilityLabel={`Technician ${t.full_name}`}
+            style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, borderWidth: 2, borderColor: lead === t.id ? C.accent : C.line }}>
+            <Text style={{ color: C.text, fontWeight: '700' }}>{lead === t.id ? '✓ ' : ''}{t.full_name}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Field label="Client's order number (optional)" value={ref} onChangeText={setRef} />
+      <Field label="Note (optional): condition, parts with it, accessories" value={note} onChangeText={setNote} multiline />
+      {err ? <Notice tone="bad" title="Still needed" lines={err} /> : null}
+      <View style={{ flexDirection: 'row', gap: 10 }}>
+        <Button label="Cancel" kind="quiet" onPress={() => done()} style={{ flex: 1 }} />
+        <Button label="Book it in" busy={busy} onPress={save} style={{ flex: 2 }} />
+      </View>
+      <Text style={st.small}>The technician gets the job card on his phone; he starts it at the workshop. When it is repaired it shows here as ready to go back.</Text>
     </Card>
   );
 }
