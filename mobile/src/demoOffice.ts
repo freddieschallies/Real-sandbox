@@ -201,6 +201,8 @@ export class DemoOffice {
       handoversAwaitingApproval: this.inspections('awaiting_approval').length,
       fleet: {
         in_service: veh.filter(v => v.status === 'in_service').length, off: veh.filter(v => v.status !== 'in_service').length,
+        off_road: veh.filter(v => v.status === 'off_road').length, in_workshop: veh.filter(v => v.status === 'workshop' || !!v.open_job).length,
+        booked: this.src.fleet.bookings().filter(b => b.status === 'booked').length,
         safety_faults: this.src.fleet.openFaults().filter(f => f.severity === 'safety').length, checked_today: checks.done, due: checks.due,
         missedYesterday: y.vehicles.filter(v => v.required && !v.id).map(v => ({ id: v.vehicle_id, registration: v.registration })),
       },

@@ -3621,4 +3621,10 @@ test('machine workshop: the office books a machine in (the client brought it, or
   const again = await call('admin', 'POST', '/workshop/book-in', { storeId: ids.store, equipmentId: r.body.equipmentId, faultReported: 'Again: belt slips', cameIn: 'we_collected', leadTechnicianId: ids.tech });
   assert.equal(again.status, 201);
   assert.equal((await call('admin', 'POST', '/workshop/book-in', { storeId: ids.store, equipmentId: '00000000-0000-4000-8000-000000000000', faultReported: 'x y z', cameIn: 'we_collected', leadTechnicianId: ids.tech })).status, 400);
+  // The CEO's (and the office's) Today: both workshops at a glance.
+  const ov = (await call('creator', 'GET', '/office/overview')).body;
+  assert.equal(typeof ov.workshop.loans_out, 'number');
+  assert.equal(typeof ov.fleet.in_workshop, 'number');
+  assert.equal(typeof ov.fleet.booked, 'number');
+  assert.equal(typeof ov.fleet.off_road, 'number');
 });

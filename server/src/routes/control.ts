@@ -36,6 +36,10 @@ export function registerControlRoutes(app: FastifyInstance) {
     const handovers = (await one("SELECT count(*)::int AS n FROM vehicle_inspections WHERE status = 'awaiting_approval'")).n;
     const fleet = await one(
       `SELECT count(*) FILTER (WHERE status = 'in_service')::int AS in_service, count(*) FILTER (WHERE status <> 'in_service')::int AS off,
+              count(*) FILTER (WHERE status = 'off_road')::int AS off_road,
+              -- The vehicle workshop: in it now (or with a mechanic's job card open), and booked in.
+              count(*) FILTER (WHERE status = 'workshop' OR EXISTS (SELECT 1 FROM fleet_jobs fj WHERE fj.vehicle_id = vehicles.id AND fj.status = 'open'))::int AS in_workshop,
+              (SELECT count(*)::int FROM fleet_bookings WHERE status = 'booked') AS booked,
               (SELECT count(*)::int FROM vehicle_faults WHERE severity = 'safety' AND status IN ('open', 'in_progress')) AS safety_faults,
               (SELECT count(*)::int FROM daily_checks WHERE check_date = $1) AS checked_today
          FROM vehicles WHERE active`, [t]);
@@ -53,7 +57,11 @@ export function registerControlRoutes(app: FastifyInstance) {
       `SELECT count(*)::int AS active,
               count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM jobs j WHERE j.lead_technician_id = u.id AND j.status NOT IN ('closed', 'cancelled') AND j.scheduled_date <= $1))::int AS without_work
          FROM users u WHERE u.login_level = 'technician' AND u.status = 'active'`, [t]);
-    return { date: t, jobs, flags, handoversAwaitingApproval: handovers, fleet: { ...fleet, due: fleet.in_service, missedYesterday: missed }, stock, technicians: techs };
+    // The machine workshop's loan machines out at clients (each one's last move is a loan out).
+    const loans = (await one(
+      `SELECT count(*)::int AS n FROM loan_machines lm
+        WHERE lm.active AND (SELECT m.kind FROM machine_moves m WHERE m.loan_machine_id = lm.id ORDER BY m.at DESC, m.created_at DESC LIMIT 1) = 'loan_out'`)).n;
+    return { date: t, jobs, flags, handoversAwaitingApproval: handovers, fleet: { ...fleet, due: fleet.in_service, missedYesterday: missed }, stock, technicians: techs, workshop: { loans_out: loans } };
   });
 
   // ---- Stores (where jobs are) ------------------------------------------------------------

@@ -10,7 +10,8 @@ export interface Overview {
   jobs: { today: number; in_progress: number; continue_later: number; carried_over: number; urgent: number; closed_today: number };
   flags: { unresolved: number; explained: number } | null;
   handoversAwaitingApproval: number;
-  fleet: { in_service: number; off: number; safety_faults: number; checked_today: number; due: number; missedYesterday: { id: string; registration: string }[] };
+  fleet: { in_service: number; off: number; off_road?: number; in_workshop?: number; booked?: number; safety_faults: number; checked_today: number; due: number; missedYesterday: { id: string; registration: string }[] };
+  workshop?: { loans_out: number };
   stock: { to_issue: number; to_receive: number; workshop_below_min: number };
   technicians: { active: number; without_work: number };
 }

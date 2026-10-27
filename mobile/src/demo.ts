@@ -1152,7 +1152,7 @@ export class DemoTransport implements Transport {
     const q = new URLSearchParams(req.path.split('?')[1] ?? '');
     const need = (area: Parameters<DemoTransport['does']>[0], what: string) => (this.does(area) ? null : refuse(403, what));
     if (p === '/office/vehicles') return this.vehiclesPage(q.get('month'));
-    if (p === '/office/overview') { const v = o.overview(); return ok(this.does('flags') ? v : { ...v, flags: null, handoversAwaitingApproval: 0 }); }
+    if (p === '/office/overview') { const v = { ...o.overview(), workshop: { loans_out: this.loanStatus().filter(l => l.out).length } }; return ok(this.does('flags') ? v : { ...v, flags: null, handoversAwaitingApproval: 0 }); }
     if ((p === '/jobs' && req.method === 'POST') || /\/(assign|cancel)$/.test(p) || req.method === 'PATCH') { const n = need('jobs', 'opening and editing jobs is not part of your work'); if (n) return n; }
     if (p.startsWith('/flags') || p.startsWith('/vehicles/inspections')) { const n = need('flags', 'flags and approvals are not part of your work'); if (n) return n; }
     if (p === '/office/stores' && req.method === 'POST') { const n = need('stores', 'adding stores is not part of your work'); if (n) return n; }
@@ -1294,7 +1294,7 @@ export class DemoTransport implements Transport {
       this.persist(this.state);
       return ok({ jobId: j.meta.id, changes: ch.map(([field, old, nw]) => ({ field, old, new: nw })) });
     }
-    if (p === '/office/overview') return ok(o.overview());
+    if (p === '/office/overview') return ok({ ...o.overview(), workshop: { loans_out: this.loanStatus().filter(l => l.out).length } });
     if (p === '/office/stores' && req.method === 'GET') { const dd = this.docs(); return ok(o.stores().map(s => ({ ...s, client_on_hold: !!dd.holdOf(s.client), hold_reason: dd.holdOf(s.client)?.reason ?? null }))); }
     if (p === '/office/stores') return done(o.addStore(b));
     if ((m = p.match(/^\/office\/stores\/([^/]+)\/pin$/))) return this.does('stores') ? done(o.pin(m[1], b.action === 'confirm' ? 'confirm' : 'lookup', this.who.name)) : refuse(403, 'you cannot change stores');

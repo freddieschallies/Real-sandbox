@@ -178,7 +178,7 @@ export function OfficeApp() {
   const list = (
     <ScrollView contentContainerStyle={{ padding: S.pad, gap: S.gap, paddingBottom: 40 }}>
       {tab === 'setup' ? <StartUp setup={setup} go={w => (w === 'importcustomers' ? go('stores', { kind: 'importcustomers' }) : w === 'newstore' ? go('stores', { kind: 'newstore' }) : go(w))} /> : null}
-      {tab === 'today' ? <TodayView o={o} go={go} goVeh={has('vehicles') ? goVeh : () => undefined} flags={does('flags')} /> : null}
+      {tab === 'today' ? <TodayView o={o} go={go} goVeh={has('vehicles') ? goVeh : () => undefined} flags={does('flags')} has={has} /> : null}
       {tab === 'breakdowns' ? <BreakdownList view={bdView} setView={v => { setBdView(v); setSel(null); }} open={b => setSel({ kind: 'breakdown', id: b.id, b })} selected={sel?.kind === 'breakdown' ? sel.id : null} tick={bdTick} /> : null}
       {tab === 'jobs' ? <JobList o={o} open={id => setSel({ kind: 'job', id })} add={does('jobs') ? () => setSel({ kind: 'newjob' }) : undefined} selected={sel?.kind === 'job' ? sel.id : null} /> : null}
       {tab === 'queries' ? <QueryList q={qs} open={id => setSel({ kind: 'query', id })} ask={() => setSel({ kind: 'newquery' })} /> : null}
@@ -341,7 +341,7 @@ function Tile({ label, value, sub, tone = 'quiet', onPress }: { label: string; v
   );
 }
 
-function TodayView({ o, go, goVeh, flags }: { o: OfficeHook; go: (t: Tab, x?: Sel) => void; goVeh: (start?: { section?: VehSection; vehicleId?: string }) => void; flags: boolean }) {
+function TodayView({ o, go, goVeh, flags, has }: { o: OfficeHook; go: (t: Tab, x?: Sel) => void; goVeh: (start?: { section?: VehSection; vehicleId?: string }) => void; flags: boolean; has: (t: Tab) => boolean }) {
   const v = o.d.overview;
   if (!v) return <Body quiet>Loading…</Body>;
   const row = { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: S.gap };
@@ -361,6 +361,27 @@ function TodayView({ o, go, goVeh, flags }: { o: OfficeHook; go: (t: Tab, x?: Se
         {v.flags ? <Tile label="Flags to resolve" value={v.flags.unresolved} sub={`${v.flags.explained} already explained`} tone={v.flags.unresolved ? 'warn' : 'good'} onPress={() => go('flags')} /> : null}
         <Tile label="Handovers to approve" value={v.handoversAwaitingApproval} sub="taken with nobody to sign" tone={v.handoversAwaitingApproval ? 'warn' : 'good'} onPress={() => goVeh({ section: 'handovers' })} />
       </View> : null}
+      {has('repairs') || has('vworkshop') ? <Heading>Workshops</Heading> : null}
+      {has('repairs') ? (() => {
+        const open = o.d.jobs.filter(j => j.status !== 'closed' && j.status !== 'cancelled' && j.machine_at === 'workshop');
+        const ready = open.filter(j => j.ready_to_deliver).length;
+        const long = open.filter(j => !j.ready_to_deliver && j.workshop_since && Date.now() - Date.parse(j.workshop_since) >= 14 * 86_400_000).length;
+        return (
+          <View style={row}>
+            <Tile label="Machines in the workshop" value={open.length} sub={`${open.length - ready} being repaired`} onPress={() => go('repairs')} />
+            <Tile label="Ready to go back" value={ready} tone={ready ? 'warn' : 'quiet'} sub="deliver or let the client collect" onPress={() => go('repairs')} />
+            <Tile label="In for 2 weeks or more" value={long} tone={long ? 'bad' : 'good'} onPress={() => go('repairs')} />
+            {v.workshop ? <Tile label="Loan machines out" value={v.workshop.loans_out} sub="at clients" onPress={() => go('repairs')} /> : null}
+          </View>
+        );
+      })() : null}
+      {has('vworkshop') && v.fleet.in_workshop != null ? (
+        <View style={row}>
+          <Tile label="Vehicles in the workshop" value={v.fleet.in_workshop} tone={v.fleet.in_workshop ? 'warn' : 'quiet'} onPress={() => go('vworkshop')} />
+          <Tile label="Vehicles booked in" value={v.fleet.booked ?? 0} onPress={() => go('vworkshop')} />
+          <Tile label="Vehicles off the road" value={v.fleet.off_road ?? 0} tone={v.fleet.off_road ? 'bad' : 'good'} onPress={() => go('vworkshop')} />
+        </View>
+      ) : null}
       <Heading>Fleet</Heading>
       <View style={row}>
         <Tile label="Daily checks today" value={`${v.fleet.checked_today} of ${v.fleet.due}`} tone={v.fleet.checked_today >= v.fleet.due ? 'good' : 'warn'} onPress={() => goVeh({ section: 'vehicles' })} />
