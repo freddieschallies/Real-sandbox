@@ -1,3 +1,4 @@
+import { whoDoes } from '../who.ts';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { holdOfStore, jobOpenedOnHold } from './debtors.ts';
 import { z } from 'zod';
@@ -418,8 +419,8 @@ export function registerJobRoutes(app: FastifyInstance, db: Db) {
       const tools = await toolsOnJob(c, row.id);
       for (const t of tools) await notify(c, t.user_id, 'tool_due', `Job ${row.job_number} is done: sign ${t.name}${t.serial ? ` (${t.serial})` : ''} back in at the stockroom.`, { jobId: row.id });
       if (tools.length) {
-        for (const s of (await c.query("SELECT id FROM users WHERE login_level = 'stockroom' AND status <> 'left'")).rows) {
-          await notify(c, s.id, 'tool_due', `Job ${row.job_number} is done: ${tools.map(t => `${t.name} (${t.full_name})`).join(', ')} to be signed back.`, { jobId: row.id });
+        for (const sid of await whoDoes(c, 'stockroom', 'manage_stockroom')) {
+          await notify(c, sid, 'tool_due', `Job ${row.job_number} is done: ${tools.map(t => `${t.name} (${t.full_name})`).join(', ')} to be signed back.`, { jobId: row.id });
         }
       }
     });

@@ -9,31 +9,13 @@ import type { Db } from '../db.ts';
 import { Refused, Uuid, parse } from '../http.ts';
 import { hashPassword, loadActor } from '../auth.ts';
 import { STANDARD_DEPARTMENTS } from '../core/departments.ts';
-import { audit, type Q } from '../db.ts';
+import { audit, inCompany, type Q } from '../db.ts';
 import { notify } from './field.ts';
 import { issueCode } from './logins.ts';
 import { setupOf } from './setup.ts';
 import { openGrant, supportLogin } from './support.ts';
 import { backupStatus, cloudShare, storageOf } from '../storage.ts';
-
-/** Work inside one company (its rows only), for the few things the owner does there; committed only if it all works. */
-async function inCompany<T>(db: Db, companyId: string, fn: (c: Q) => Promise<T>): Promise<T> {
-  const c = await db.connect();
-  try {
-    await c.query("SELECT set_config('app.company_id', $1, false)", [companyId]);
-    await c.query('BEGIN');
-    const out = await fn(c);
-    await c.query('COMMIT');
-    return out;
-  } catch (e) {
-    await c.query('ROLLBACK').catch(() => {});
-    throw e;
-  } finally {
-    await c.query('RESET app.company_id').catch(() => {});
-    await c.query('RESET app.user_id').catch(() => {});
-    c.release();
-  }
-}
+import { PlanBody, registerOwnerBillingRoutes } from './billing.ts';
 
 /**
  * How a company is getting on, as counts and yes/no only: never its customers, jobs, prices or people's details.
@@ -179,8 +161,11 @@ export function registerPlatformRoutes(app: FastifyInstance, db: Db) {
     const b = parse(z.object({
       name: z.string().trim().min(2).max(200),
       creator: z.object({ name: z.string().trim().min(2), email: z.string().email(), password: z.string().min(10, 'password must be at least 10 characters').optional() }),
+      // The positions the company uses and the parts it has (left out: everything).
+      plan: PlanBody.optional(),
     }), req.body);
     const made = await createCompany(db, b.name, b.creator);
+    if (b.plan) await db.query('UPDATE companies SET positions = $2, parts = $3 WHERE id = $1', [made.companyId, b.plan.positions, b.plan.parts]);
     if (b.creator.password) return reply.code(201).send(made);
     // No password typed by the owner: the CEO gets a setup code and chooses their own.
     const code = await inCompany(db, made.companyId, async c => {
@@ -203,4 +188,6 @@ export function registerPlatformRoutes(app: FastifyInstance, db: Db) {
     if (!rows[0]) throw new Refused(404, ['no such company']);
     return rows[0];
   });
+
+  registerOwnerBillingRoutes(app, db, guard);
 }

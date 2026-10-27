@@ -7,10 +7,11 @@ import type { Db, Q } from './db.ts';
 import { audit } from './db.ts';
 import { keepIfRefused, openCompanyConnection } from './tenancy.ts';
 import { Refused, parse } from './http.ts';
+import { PARTS, partMissing, planOf, type CompanyPlan } from './core/plan.ts';
 import { CATALOGUE, can, effectivePermissions, looksAfterLogins, workOf, type Actor, type LoginLevel, type Override } from './core/permissions.ts';
 
 declare module 'fastify' {
-  interface FastifyRequest { actor: Actor }
+  interface FastifyRequest { actor: Actor; plan: CompanyPlan }
 }
 declare module '@fastify/jwt' {
   // v: the person's session number (raised to sign them out on every phone); r: kept signed in on their own phone;
@@ -24,9 +25,16 @@ declare module '@fastify/jwt' {
  * changed their password) no longer counts.
  */
 export async function loadActor(db: Q, userId: string, session?: number): Promise<Actor | null> {
+  return actorOf(db, userId, session, false);
+}
+/** What someone may do, whether or not they can sign in yet (to show and set their work). */
+export async function accessOf(db: Q, userId: string): Promise<Actor | null> {
+  return actorOf(db, userId, undefined, true);
+}
+async function actorOf(db: Q, userId: string, session: number | undefined, withoutLogin: boolean): Promise<Actor | null> {
   const { rows } = await db.query('SELECT id, login_level, department_id, login_enabled, session_epoch FROM users WHERE id = $1', [userId]);
   const r = rows[0];
-  if (!r || !r.login_enabled) return null;
+  if (!r || (!r.login_enabled && !withoutLogin)) return null;
   if (session !== undefined && r.session_epoch !== session) return null;
   const level = r.login_level as LoginLevel;
   const o = await db.query(
@@ -66,9 +74,15 @@ export async function companyActive(db: Db, companyId: string): Promise<boolean>
   const { rows } = await db.query('SELECT active FROM companies WHERE id = $1', [companyId]);
   return rows[0]?.active === true;
 }
+/** The company's plan (positions and parts), or null when it is suspended or gone. */
+async function companyPlan(db: Db, companyId: string): Promise<CompanyPlan | null> {
+  const { rows } = await db.query('SELECT active, positions, parts FROM companies WHERE id = $1', [companyId]);
+  return rows[0]?.active === true ? planOf(rows[0]) : null;
+}
 
 export function registerAuth(app: FastifyInstance, db: Db) {
   app.decorateRequest('actor', null as unknown as Actor);
+  app.decorateRequest('plan', null as unknown as CompanyPlan);
 
   app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     const path = req.routeOptions.url ?? req.url;
@@ -83,7 +97,12 @@ export function registerAuth(app: FastifyInstance, db: Db) {
     if (req.user.sub?.startsWith('doc:') || req.user.sub?.startsWith('exp:')) return reply.code(401).send({ error: 'not signed in' });
     const cid = req.user.cid;
     if (req.user.platform || !cid) return reply.code(401).send({ error: 'not signed in to a company' });
-    if (!(await companyActive(db, cid))) return reply.code(403).send({ error: 'this company account is suspended', code: 'company_suspended' });
+    const plan = await companyPlan(db, cid);
+    if (!plan) return reply.code(403).send({ error: 'this company account is suspended', reasons: ['this company account is suspended', 'The CEO can contact Real Sandbox to sort it out.'], code: 'company_suspended' });
+    req.plan = plan;
+    // A part of the app the company does not have (the owner of Real Sandbox switches parts on and off).
+    const missing = partMissing(plan, path);
+    if (missing) return reply.code(403).send({ error: `${PARTS[missing]} is not part of your company's package`, reasons: [`${PARTS[missing]} is not part of your company's package: ask Real Sandbox to switch it on`], code: 'not_in_plan' });
     await openCompanyConnection(db, req, cid);
     const actor = await loadActor(req.db, req.user.sub, req.user.v ?? 0);
     if (!actor) return reply.code(401).send({ error: 'signed out: sign in again' });
@@ -111,7 +130,7 @@ export function registerAuth(app: FastifyInstance, db: Db) {
     const wrong = () => fail(reply, 401, 'wrong email or password', 'First time? Tap "I have a setup code" and use the code the office gave you.');
     const dir = (await db.query('SELECT user_id, company_id FROM logins WHERE email = lower($1)', [body.data.email])).rows[0];
     if (!dir) return wrong();
-    if (!(await companyActive(db, dir.company_id))) return reply.code(403).send({ error: 'this company account is suspended', code: 'company_suspended' });
+    if (!(await companyActive(db, dir.company_id))) return reply.code(403).send({ error: 'this company account is suspended', reasons: ['this company account is suspended', 'The CEO can contact Real Sandbox to sort it out.'], code: 'company_suspended' });
     await openCompanyConnection(db, req, dir.company_id);
     const u = (await req.db.query(
       `SELECT id, password_hash, login_enabled, full_name, login_level, status, session_epoch, password_set_at, failed_logins,
@@ -155,7 +174,7 @@ export function registerAuth(app: FastifyInstance, db: Db) {
     if (weak) return fail(reply, 400, weak);
     const dir = (await db.query('SELECT user_id, company_id FROM logins WHERE email = lower($1)', [b.email])).rows[0];
     if (!dir) return wrong();
-    if (!(await companyActive(db, dir.company_id))) return reply.code(403).send({ error: 'this company account is suspended', code: 'company_suspended' });
+    if (!(await companyActive(db, dir.company_id))) return reply.code(403).send({ error: 'this company account is suspended', reasons: ['this company account is suspended', 'The CEO can contact Real Sandbox to sort it out.'], code: 'company_suspended' });
     await openCompanyConnection(db, req, dir.company_id);
     const u = (await req.db.query("SELECT id, full_name, login_level, status, session_epoch FROM users WHERE id = $1 FOR UPDATE", [dir.user_id])).rows[0];
     if (!u || u.status === 'left') return wrong();

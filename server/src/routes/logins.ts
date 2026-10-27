@@ -5,6 +5,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { audit, tx, type Q } from '../db.ts';
+import { hasPosition, planOf } from '../core/plan.ts';
 import { HR_POSITIONS, LEVELS, POSITION_LABEL, TRADES, can, editsProfiles, looksAfterLogins, type Actor, type LoginLevel, type Trade } from '../core/permissions.ts';
 import { Refused, Uuid, parse } from '../http.ts';
 import { hashCode, newSetupCode } from '../auth.ts';
@@ -68,6 +69,8 @@ export async function addPerson(c: Q, actor: Actor, companyId: string, b: z.infe
   const full = can(actor, 'manage_access');
   if (!full && !HR_POSITIONS.includes(b.position)) throw new Refused(403, ['HR adds technicians, admin, accounts, department managers and stock controllers; the other positions are the CEO\'s']);
   if (b.position === 'creator' && actor.level !== 'creator') throw new Refused(403, ['only the Creator adds another Creator']);
+  const plan = planOf((await c.query('SELECT positions, parts FROM companies WHERE id = $1', [companyId])).rows[0] ?? { positions: null, parts: null });
+  if (!hasPosition(plan, b.position)) throw new Refused(409, [`${POSITION_LABEL[b.position]} is not a position in this company: add them in another position and give them that work (Settings → Positions)`]);
   if (b.trade && b.position !== 'technician') throw new Refused(400, ['only technicians have a trade']);
   if ((await c.query("SELECT 1 FROM users WHERE lower(full_name) = lower($1) AND status <> 'left'", [b.fullName])).rowCount) {
     throw new Refused(409, [`${b.fullName} is already under People`]);

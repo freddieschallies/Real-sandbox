@@ -1,4 +1,5 @@
 // What a technician's phone uses outside the job card itself.
+import { whoDoes } from '../who.ts';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -38,8 +39,8 @@ export async function tellStockroom(c: Q, actorId: string, what: string, details
   const a = (await c.query('SELECT full_name, login_level FROM users WHERE id = $1', [actorId])).rows[0];
   if (!a || a.login_level === 'stockroom') return null;
   const who = `${a.full_name} (${POSITION_LABEL[a.login_level as LoginLevel] ?? a.login_level})`;
-  for (const s of (await c.query("SELECT id FROM users WHERE login_level = 'stockroom' AND status <> 'left' AND id <> $1", [actorId])).rows) {
-    await notify(c, s.id, 'stockroom_cover', `${who} ${what}`, { ...details, by: actorId });
+  for (const id of await whoDoes(c, 'stockroom', 'manage_stockroom', actorId)) {
+    await notify(c, id, 'stockroom_cover', `${who} ${what}`, { ...details, by: actorId });
   }
   return who;
 }

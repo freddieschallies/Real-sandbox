@@ -36,3 +36,22 @@ export async function raiseFlag(c: Q, f: {
     [f.type, f.severity ?? 'normal', f.technicianId ?? null, f.jobId ?? null, f.vehicleId ?? null, f.question ?? null, JSON.stringify(f.details ?? {})],
   );
 }
+
+/** Work inside one company (its rows only), for the few things the owner does there; committed only if it all works. */
+export async function inCompany<T>(db: Db, companyId: string, fn: (c: Q) => Promise<T>): Promise<T> {
+  const c = await db.connect();
+  try {
+    await c.query("SELECT set_config('app.company_id', $1, false)", [companyId]);
+    await c.query('BEGIN');
+    const out = await fn(c);
+    await c.query('COMMIT');
+    return out;
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    await c.query('RESET app.company_id').catch(() => {});
+    await c.query('RESET app.user_id').catch(() => {});
+    c.release();
+  }
+}

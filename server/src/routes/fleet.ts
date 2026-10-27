@@ -1,4 +1,5 @@
 // The mechanic's side: vehicles, km, faults and mechanic job cards linked to a vehicle.
+import { whoDoes } from '../who.ts';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -41,10 +42,8 @@ export async function faultsFromHandover(c: Q, vehicleId: string, inspectionId: 
 }
 
 export async function mechanics(c: Q): Promise<string[]> {
-  // Everyone doing the mechanic's work: by position, or given it on top of their own position.
-  return (await c.query(
-    `SELECT id FROM users u WHERE status <> 'left' AND (login_level = 'mechanic'
-       OR EXISTS (SELECT 1 FROM access_overrides o WHERE o.user_id = u.id AND o.action = 'manage_fleet' AND o.effect = 'grant'))`)).rows.map(r => r.id);
+  // Everyone doing the mechanic's work: by position, or given it on top of their own position (no mechanic: the CEO).
+  return whoDoes(c, 'mechanic', 'manage_fleet');
 }
 
 /** Every active vehicle with its driver now, km, faults, open job card, today's check and what is due. */

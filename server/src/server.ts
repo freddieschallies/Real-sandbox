@@ -10,6 +10,7 @@ import { breakdownReaderFromEnv } from './breakdownReader.ts';
 import { geocoderFromEnv } from './geocoder.ts';
 import { locateStores } from './storePins.ts';
 import { sealAll } from './routes/history.ts';
+import { runBilling } from './routes/billing.ts';
 
 // Migrations run as the database owner; the app then runs as its own restricted user.
 const appUrl = process.env.DATABASE_URL ?? '';
@@ -60,3 +61,10 @@ setInterval(purge, 6 * 3600_000);
 
 // The history: what has settled is sealed every 5 minutes, so nothing can later be taken out unseen.
 setInterval(() => { sealAll(pool).catch(e => app.log.error(e)); }, 5 * 60_000);
+
+// Billing (what companies pay Real Sandbox): invoices on each company's billing day, overdue reminders,
+// suspension past the grace days where the owner chose it. Checked at start and every hour; each step
+// happens once a day at most, so the hourly check only catches up after a restart.
+const bill = () => runBilling(pool).then(r => { if (r.invoiced.length || r.suspended.length) app.log.info(`billing: invoiced ${r.invoiced.length}, suspended ${r.suspended.length}`); }).catch(e => app.log.error(e));
+bill();
+setInterval(bill, 3600_000);

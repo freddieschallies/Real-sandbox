@@ -3,10 +3,11 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Db, Q } from '../db.ts';
 import { audit, tx } from '../db.ts';
+import { hasPosition } from '../core/plan.ts';
 import { ACTIONS, CATALOGUE, DEFAULTS, LEVELS, POSITION_LABEL, TRADES, WORK_AREAS, can, isScoped, workOf, type Action, type LoginLevel, type Trade, type WorkArea, seesPeople, HR_POSITIONS, editsProfiles, looksAfterLogins } from '../core/permissions.ts';
 import { LOGIN_STATE_SQL } from './logins.ts';
 import { Refused, Uuid, parse } from '../http.ts';
-import { loadActor } from '../auth.ts';
+import { accessOf, loadActor } from '../auth.ts';
 import { notify } from './field.ts';
 
 const Change = z.object({
@@ -123,15 +124,16 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
          FROM users u LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.status <> 'left' ORDER BY u.full_name`);
     const people = [];
     for (const r of rows) {
-      const a = await loadActor(req.db, r.id);
+      const a = await accessOf(req.db, r.id);
       people.push({ ...r, login: logins ? r.login : undefined, position: POSITION_LABEL[r.login_level as LoginLevel], tradeLabel: r.trade ? TRADES[r.trade as Trade] : null, work: workOf(a?.perms ?? {}) });
     }
     return {
       canManage: manage,
       // HR and the CEO add people; Admin and the CEO give them their logins and new passwords (setup codes).
-      canAdd: adds, canLogins: looksAfterLogins(req.actor), addPositions: adds ? (manage ? LEVELS.filter(l => l !== 'creator' || req.actor.level === 'creator') : HR_POSITIONS) : [],
+      // Only the positions this company has (the owner of Real Sandbox sets them up with the company).
+      canAdd: adds, canLogins: looksAfterLogins(req.actor), addPositions: adds ? (manage ? LEVELS.filter(l => l !== 'creator' || req.actor.level === 'creator') : HR_POSITIONS).filter(l => hasPosition(req.plan, l)) : [],
       canSetPositions: manage || can(req.actor, 'set_positions'),
-      settablePositions: manage ? LEVELS : can(req.actor, 'set_positions') ? HR_POSITIONS : [],
+      settablePositions: (manage ? LEVELS : can(req.actor, 'set_positions') ? HR_POSITIONS : []).filter(l => hasPosition(req.plan, l)),
       positions: LEVELS.map(l => ({ level: l, label: POSITION_LABEL[l] })),
       trades: Object.entries(TRADES).map(([key, label]) => ({ key, label })),
       areas: Object.entries(WORK_AREAS).map(([key, a]) => ({ key, label: a.label })),
@@ -167,7 +169,7 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
          FROM users u WHERE u.status <> 'left' ORDER BY u.full_name`);
     const people = [];
     for (const r of rows) {
-      const a = await loadActor(req.db, r.id);
+      const a = await accessOf(req.db, r.id);
       people.push({ ...r, position: POSITION_LABEL[r.login_level as LoginLevel], work: workOf(a?.perms ?? {}) });
     }
     return {
@@ -186,6 +188,7 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
       const u = (await c.query('SELECT full_name, login_level FROM users WHERE id = $1 FOR UPDATE', [userId])).rows[0];
       if (!u) throw new Refused(404, ['no such user']);
       if (u.login_level === b.position) return { userId, position: b.position, label: POSITION_LABEL[b.position] };
+      if (!hasPosition(req.plan, b.position)) throw new Refused(409, [`${POSITION_LABEL[b.position]} is not a position in this company: give the work to someone instead (Settings → Positions)`]);
       if (!full && (!HR_POSITIONS.includes(u.login_level) || !HR_POSITIONS.includes(b.position))) {
         throw new Refused(403, ['HR sets technician, admin, department manager or stock controller; the other positions are the CEO\'s']);
       }
@@ -260,7 +263,7 @@ export function registerAccessRoutes(app: FastifyInstance, db: Db) {
       await c.query('INSERT INTO access_changes (changed_by, user_id, action, change) VALUES ($1, $2, $3, $4)', [req.actor.id, userId, `work:${b.area}`, change]);
       await audit(c, req.actor.id, 'work_changed', 'user', userId, b);
       await notify(c, userId, 'access_changed', `${b.on ? 'You can now do' : 'You no longer do'}: ${area.label}. Open the app again to see the change.`, { area: b.area, on: b.on });
-      const actor = await loadActor(c, userId);
+      const actor = await accessOf(c, userId);
       return { userId, area: b.area, on: b.on, work: workOf(actor?.perms ?? {}) };
     });
   });

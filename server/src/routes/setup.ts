@@ -4,6 +4,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { audit, tx, type Q } from '../db.ts';
+import { hasPosition } from '../core/plan.ts';
 import { HR_POSITIONS, LEVELS, POSITION_LABEL, TRADES, can } from '../core/permissions.ts';
 import * as SU from '../core/setup.ts';
 import { Refused, Uuid, parse } from '../http.ts';
@@ -81,7 +82,7 @@ export function registerSetupRoutes(app: FastifyInstance) {
     ceo(req);
     const s = await setupOf(req.db, req.companyId);
     const departments = (await req.db.query('SELECT id, name FROM departments WHERE active ORDER BY name')).rows;
-    const roles = LEVELS.filter(l => l !== 'creator').map(l => ({ level: l, label: POSITION_LABEL[l], help: SU.ROLE_HELP[l] ?? '', hr: HR_POSITIONS.includes(l) }));
+    const roles = LEVELS.filter(l => l !== 'creator' && hasPosition(req.plan, l)).map(l => ({ level: l, label: POSITION_LABEL[l], help: SU.ROLE_HELP[l] ?? '', hr: HR_POSITIONS.includes(l) }));
     return { ...s, departments, roles, trades: Object.entries(TRADES).map(([key, label]) => ({ key, label })) };
   });
 

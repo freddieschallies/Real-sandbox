@@ -1,5 +1,6 @@
 // Stock control: what each technician holds, booking out for a job, supplier invoices read from a photo,
 // and returns that only count once the stock controller confirms them.
+import { whoDoes } from '../who.ts';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -23,11 +24,8 @@ const lock = (c: Q, technicianId: string) => c.query('SELECT pg_advisory_xact_lo
 
 /** People who look after the stockroom, to tell them about returns and new items. */
 async function stockControllers(c: Q): Promise<string[]> {
-  // Stock controllers, and anyone the CEO gave full stockroom access.
-  const { rows } = await c.query(
-    `SELECT id FROM users u WHERE status <> 'left' AND (login_level = 'stockroom'
-       OR EXISTS (SELECT 1 FROM access_overrides o WHERE o.user_id = u.id AND o.action = 'manage_stockroom' AND o.effect = 'grant'))`);
-  return rows.map(r => r.id);
+  // Stock controllers, and anyone the CEO gave full stockroom access (no stock controller: the CEO).
+  return whoDoes(c, 'stockroom', 'manage_stockroom');
 }
 
 export function registerStockRoutes(app: FastifyInstance, db: Db, reader: InvoiceReader | null) {

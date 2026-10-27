@@ -794,3 +794,30 @@ test('the map lookups can be made at start-up (the server starts with or without
   assert.equal(G.googleGeocoder('key').source, 'Google Maps');
   assert.equal(typeof G.geocoderFromEnv(), 'function');
 });
+
+test('company plan: positions, parts, monthly charge and invoice state', async () => {
+  const P = await import('../src/core/plan.ts');
+  const all = P.planOf({ positions: null, parts: null });
+  assert.equal(all.positions.length, P.OPTIONAL_POSITIONS.length, 'NULL: everything (companies from before plans)');
+  const small = P.planOf({ positions: ['admin', 'nonsense'], parts: ['workshop'] });
+  assert.deepEqual(small.positions, ['admin']);
+  assert.ok(P.hasPosition(small, 'technician') && P.hasPosition(small, 'creator') && !P.hasPosition(small, 'stockroom'));
+  assert.equal(P.partMissing(small, '/fleet/vehicles'), 'fleet');
+  assert.equal(P.partMissing(small, '/office/vehicles'), 'fleet');
+  assert.equal(P.partMissing(small, '/jobs'), null);
+  assert.equal(P.partMissing(small, '/workshop/book-in'), null);
+  assert.equal(P.partMissing(P.planOf({ positions: [], parts: [] }), '/jobs/abc/loan-out'), 'workshop');
+  assert.equal(P.partMissing(small, '/whatsapp/link'), 'whatsapp');
+  const b = { plan_name: 'Starter', base_cents: 50000, per_user_cents: 5000, free_users: 3, billing_day: 1, due_days: 7, grace_days: 14, auto_suspend: true };
+  assert.equal(P.monthCharge(b, 2, '2026-10').amountCents, 50000, 'inside the free people');
+  const m = P.monthCharge(b, 5, '2026-10', { pct: 15, registered: true });
+  assert.equal(m.amountCents, Math.round((50000 + 2 * 5000) * 1.15));
+  assert.match(m.lines[0].description, /October 2026/);
+  const inv = { due_on: '2026-10-09', paid_at: null, cancelled_at: null };
+  assert.equal(P.invoiceState(inv, '2026-10-09', 14), 'due');
+  assert.equal(P.invoiceState(inv, '2026-10-10', 14), 'overdue');
+  assert.equal(P.invoiceState(inv, '2026-10-23', 14), 'overdue');
+  assert.equal(P.invoiceState(inv, '2026-10-24', 14), 'suspend');
+  assert.equal(P.invoiceState({ ...inv, paid_at: 'x' }, '2026-12-01', 14), 'paid');
+  assert.equal(P.addDays('2026-12-30', 3), '2027-01-02');
+});

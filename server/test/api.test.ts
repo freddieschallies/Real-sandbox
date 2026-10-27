@@ -3628,3 +3628,101 @@ test('machine workshop: the office books a machine in (the client brought it, or
   assert.equal(typeof ov.fleet.booked, 'number');
   assert.equal(typeof ov.fleet.off_road, 'number');
 });
+
+test('company plan: the owner chooses the positions and parts; the CEO does the work of a missing position and appoints people to it; monthly invoices, overdue, suspension and reopening', async () => {
+  const B = await import('../src/routes/billing.ts');
+  const W = await import('../src/who.ts');
+  const { inCompany } = await import('../src/db.ts');
+  const made = await call('platform', 'POST', '/platform/companies', {
+    name: 'Small Fridge Co', creator: { name: 'Sam Small', email: 'sam@small.test', password: PW }, plan: { positions: ['admin'], parts: ['workshop'] },
+  });
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  const cid = made.body.companyId, sam = made.body.creatorUserId;
+  assert.equal((await call('platform', 'POST', '/platform/companies', { name: 'Bad Plan', creator: { name: 'Bo Bad', email: 'bo@bad.test', password: PW }, plan: { positions: ['ceo'], parts: [] } })).status, 400);
+  tokens.sam = (await call('', 'POST', '/auth/login', { email: 'sam@small.test', password: PW })).body.token;
+  const pc = new pg.Client({ connectionString: TEST_URL });
+  await pc.connect();
+  await pc.query("SELECT set_config('app.company_id', $1, false)", [cid]);
+  const pol = (await pc.query("INSERT INTO policy_versions (version, body) VALUES ('1.0', 'Small policy') RETURNING id")).rows[0].id;
+  await pc.end();
+  await call('sam', 'POST', '/policy/acknowledge', { policyVersionId: pol });
+
+  // Only the positions the company has.
+  const roles = (await call('sam', 'GET', '/setup')).body.roles.map((r: { level: string }) => r.level);
+  assert.deepEqual(roles.sort(), ['admin', 'technician']);
+  const no = await call('sam', 'POST', '/people', { fullName: 'Stan Stock', position: 'stockroom' });
+  assert.equal(no.status, 409);
+  assert.match(no.body.reasons[0], /not a position in this company/);
+  const ann = await call('sam', 'POST', '/people', { fullName: 'Ann Admin', position: 'admin' });
+  assert.equal(ann.status, 200, JSON.stringify(ann.body));
+  assert.equal((await call('sam', 'PUT', `/access/users/${ann.body.id}/position`, { position: 'mechanic' })).status, 409);
+  // Parts it does not have are closed.
+  const veh = await call('sam', 'GET', '/vehicles');
+  assert.equal(veh.status, 403);
+  assert.equal(veh.body.code, 'not_in_plan');
+
+  // No stock controller: the CEO gets the stockroom's work, until he gives it to someone with her own position.
+  const plan = (await call('sam', 'GET', '/company/plan')).body;
+  const st = plan.positions.find((p: { key: string }) => p.key === 'stockroom');
+  assert.equal(st.has, false);
+  assert.deepEqual(st.appointed, []);
+  assert.equal(plan.parts.find((p: { key: string }) => p.key === 'fleet').on, false);
+  assert.equal((await call('admin', 'GET', '/company/plan')).status, 403, 'for the CEO');
+  assert.deepEqual(await inCompany(appDb, cid, c => W.whoDoes(c, 'stockroom', 'manage_stockroom')), [sam]);
+  assert.equal((await call('sam', 'PUT', `/access/users/${ann.body.id}/work`, { area: 'stockroom', on: true })).status, 200);
+  const st2 = (await call('sam', 'GET', '/company/plan')).body.positions.find((p: { key: string }) => p.key === 'stockroom');
+  assert.deepEqual(st2.appointed.map((p: { name: string }) => p.name), ['Ann Admin']);
+  assert.deepEqual(await inCompany(appDb, cid, c => W.whoDoes(c, 'stockroom', 'manage_stockroom')), [sam, ann.body.id], 'the CEO and who he appointed');
+  // Company A has its stock controller: the work stays with them.
+  assert.ok((await inCompany(appDb, ids.company, c => W.whoDoes(c, 'stockroom', 'manage_stockroom'))).length >= 1);
+
+  // The owner switches Fleet on.
+  const put = await call('platform', 'PUT', `/platform/companies/${cid}/plan`, { positions: ['admin', 'mechanic'], parts: ['workshop', 'fleet'] });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+  assert.notEqual((await call('sam', 'GET', '/vehicles')).body.code, 'not_in_plan');
+  assert.equal((await call('sam', 'PUT', `/access/users/${ann.body.id}/position`, { position: 'mechanic' })).status, 200);
+  const drop = await call('platform', 'PUT', `/platform/companies/${cid}/plan`, { positions: ['admin'], parts: ['workshop', 'fleet'] });
+  assert.deepEqual(drop.body.stillIn.map((s: { position: string }) => s.position), ['mechanic'], 'the owner is told someone is still in it');
+  assert.equal((await call('sam', 'GET', '/platform/billing')).status, 403, 'not for a company login');
+
+  // Billing: R500 a month with one person included, R50 for each other one, VAT on top.
+  assert.equal((await call('platform', 'PUT', '/platform/settings', { business_name: 'Real Sandbox (Pty) Ltd', bank_details: 'FNB 123', vat_pct: 15, vat_registered: true })).status, 200);
+  const bill = await call('platform', 'PUT', `/platform/companies/${cid}/billing`, {
+    plan_name: 'Starter', base_cents: 50000, per_user_cents: 5000, free_users: 1, billing_day: 1, due_days: 7, grace_days: 14, auto_suspend: true, billing_email: 'sam@small.test',
+  });
+  assert.equal(bill.status, 200, JSON.stringify(bill.body));
+  assert.equal((await call('platform', 'PUT', `/platform/companies/${cid}/billing`, { ...bill.body, billing_day: 31 })).status, 400);
+  let run = await B.runBilling(appDb, '2026-10-02');
+  assert.deepEqual(run.invoiced, ['Small Fridge Co']);
+  assert.deepEqual((await B.runBilling(appDb, '2026-10-03')).invoiced, [], 'once a month');
+  const acct = (await call('sam', 'GET', '/company/account')).body;
+  const inv = acct.invoices[0];
+  assert.equal(inv.amount_cents, 63250, '500 + 1 × 50, plus 15% VAT');
+  assert.equal(inv.due_on, '2026-10-09');
+  assert.match(inv.label, /^RS-\d+$/);
+  assert.ok((await call('sam', 'GET', '/me/notifications')).body.some((n: { message: string }) => n.message.includes(inv.label)), 'the CEO is told');
+  assert.equal((await call('platform', 'POST', `/platform/companies/${cid}/invoices`, { period: '2026-10' })).status, 409, 'one a month');
+  const owner = (await call('platform', 'GET', '/platform/billing')).body;
+  const mine = owner.companies.find((c: { id: string }) => c.id === cid);
+  assert.equal(mine.users, 2);
+  assert.equal(mine.billing.plan_name, 'Starter');
+  assert.ok(owner.totals.monthCents >= 63250);
+
+  run = await B.runBilling(appDb, '2026-10-10');
+  assert.deepEqual(run.reminded, ['Small Fridge Co'], 'overdue: the CEO is warned');
+  assert.deepEqual((await B.runBilling(appDb, '2026-10-11')).reminded, [], 'once');
+  assert.deepEqual((await B.runBilling(appDb, '2026-10-23')).suspended, [], 'not inside the grace days');
+  assert.deepEqual((await B.runBilling(appDb, '2026-10-24')).suspended, ['Small Fridge Co']);
+  const shut = await call('', 'POST', '/auth/login', { email: 'sam@small.test', password: PW });
+  assert.equal(shut.body.code, 'company_suspended');
+  const paid = await call('platform', 'POST', `/platform/invoices/${inv.id}/paid`, { ref: 'EFT 4411' });
+  assert.equal(paid.status, 200, JSON.stringify(paid.body));
+  assert.equal(paid.body.reopened, true, 'paid: open again');
+  assert.equal((await call('', 'POST', '/auth/login', { email: 'sam@small.test', password: PW })).status, 200);
+  assert.equal((await call('platform', 'POST', `/platform/invoices/${inv.id}/cancel`, { note: 'oops' })).status, 409, 'a paid invoice stays');
+  // A month the owner lets go: cancelled, and not made again by the daily run.
+  const nov = await call('platform', 'POST', `/platform/companies/${cid}/invoices`, { period: '2026-11' });
+  assert.equal(nov.status, 201);
+  assert.equal((await call('platform', 'POST', `/platform/invoices/${nov.body.id}/cancel`, { note: 'Free month' })).status, 200);
+  assert.deepEqual((await B.runBilling(appDb, '2026-11-05')).invoiced, []);
+});

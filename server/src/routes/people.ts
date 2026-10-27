@@ -1,5 +1,6 @@
 // One person's profile: picture, where they are and what they are busy with right now, contact
 // details, and personal details (only for whoever manages access: the CEO or someone given it).
+import { whoDoes } from '../who.ts';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { audit, tx, type Q } from '../db.ts';
@@ -145,8 +146,8 @@ export function registerTerminationRoutes(app: FastifyInstance) {
       await audit(c, req.actor.id, 'employment_ended', 'user', id, { date: b.date, reason: b.reason });
       if (kit.length || stock.length) {
         const what = [...kit.map(k => `${k.name}${k.qty !== 1 ? ` ×${k.qty}` : ''}`), ...stock.map(s => `${s.description} ×${s.qty}`)].join(', ');
-        for (const s of (await c.query("SELECT id FROM users WHERE login_level = 'stockroom' AND status <> 'left'")).rows) {
-          await notify(c, s.id, 'terminated', `${u.full_name} has left the company. Collect what is still on his name: ${what}.`, { userId: id });
+        for (const sid of await whoDoes(c, 'stockroom', 'manage_stockroom')) {
+          await notify(c, sid, 'terminated', `${u.full_name} has left the company. Collect what is still on his name: ${what}.`, { userId: id });
         }
       }
       return { id, status: 'left', onName: { kit, stock } };
